@@ -5,6 +5,10 @@
   <meta name="viewport" content="width=device-width,initial-scale=1">
   <title>AI Bridge Dashboard</title>
   <link rel="stylesheet" href="dashboard.css">
+  <style>
+    .icon-btn { display: inline-flex; align-items: center; justify-content: center; gap: 6px; }
+    .btn-icon { width: 13px; height: 13px; flex: 0 0 auto; }
+  </style>
 </head>
 <body>
   <div class="app-shell">
@@ -36,10 +40,10 @@
         </div>
         <div id="status" class="status-text">Idle</div>
         <div class="control-grid four">
-          <button id="start" class="primary">Start</button>
-          <button id="pause" class="secondary" disabled>Pause</button>
-          <button id="resume" class="resume" disabled>Resume</button>
-          <button id="stop" class="danger" disabled>Stop</button>
+          <button id="start" class="primary icon-btn" type="button"><svg class="btn-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polygon points="6 3 20 12 6 21 6 3"/></svg>Start</button>
+          <button id="pause" class="secondary icon-btn" disabled type="button"><svg class="btn-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="14" y="4" width="4" height="16" rx="1"/><rect x="6" y="4" width="4" height="16" rx="1"/></svg>Pause</button>
+          <button id="resume" class="resume icon-btn" disabled type="button"><svg class="btn-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polygon points="6 3 20 12 6 21 6 3"/></svg>Resume</button>
+          <button id="stop" class="danger icon-btn" disabled type="button"><svg class="btn-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="6" y="6" width="12" height="12" rx="2"/></svg>Stop</button>
         </div>
         <div class="fresh-chat-row">
           <label class="check-line" for="freshOnStart">
