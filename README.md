@@ -1,6 +1,6 @@
 # AI Bridge
 
-**Current version: 1.12.0**
+**Current version: 1.12.1**
 
 AI Bridge is a Manifest V3 Chrome extension for coordinating three AI web apps as one team from a single dashboard. It supports sequential relay, parallel work, peer review, direct model-to-model routing, human intervention, persistent file relay, reusable history, and extension-side round timing.
 
@@ -317,3 +317,15 @@ The extension contains exactly 11 release files:
 - persistent Vault, Direct Mesh, resumable human requests, Main-AI interjections, and independent round timers retained from 1.11.x
 
 `content.js` remains on the 1.11.3 content-script protocol because 1.12.0 does not change provider DOM handling.
+
+## Current release notes — 1.12.1
+
+**This release is 1.12.1.**
+
+- **Apply to all members** updates standing team rules on a live session
+- Later A/B/C turns receive the new `TEAM RULES (ALL MEMBERS)` block without Stop/Start
+- A live apply also records a human-controller transcript note so shared updates carry the change
+- The Team rules field stays editable during a run so you can correct governance mid-session
+
+It also retains 1.12.0 standing team rules and the 1.11.4 resizable panes.
+

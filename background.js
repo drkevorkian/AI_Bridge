@@ -719,13 +719,44 @@ function recordSessionHistory(sessionState) {
     history.commands = history.commands.slice(0, MAX_COMMAND_HISTORY);
   }
 
-  const rules = String(sessionState.teamRules || "").trim();
-  if (rules) {
-    if (!Array.isArray(history.rules)) history.rules = [];
-    history.rules = history.rules.filter(item => item.text !== rules);
-    history.rules.unshift({ time: now, text: rules });
-    history.rules = history.rules.slice(0, MAX_RULES_HISTORY);
+  recordRulesHistory(sessionState.teamRules);
+}
+
+function recordRulesHistory(rulesText) {
+  const rules = String(rulesText || "").trim();
+  if (!rules) return;
+  if (!Array.isArray(history.rules)) history.rules = [];
+  history.rules = history.rules.filter(item => item.text !== rules);
+  history.rules.unshift({ time: Date.now(), text: rules.slice(0, 12000) });
+  history.rules = history.rules.slice(0, MAX_RULES_HISTORY);
+}
+
+async function applyTeamRules(raw) {
+  const rules = String(raw || "").trim();
+  if (rules.length > 12000) throw new Error("Team rules are limited to 12,000 characters.");
+  const previous = String(state.teamRules || "").trim();
+  state.teamRules = rules;
+  recordRulesHistory(rules);
+  if (state.sessionActive && rules !== previous) {
+    recordTranscript("human", {
+      side: null,
+      text: rules
+        ? `TEAM RULES UPDATED BY THE HUMAN CONTROLLER. These standing rules now bind every teammate regardless of assigned job:\n${rules}`
+        : "TEAM RULES CLEARED BY THE HUMAN CONTROLLER. No standing team rules remain; follow assigned jobs and working rules only.",
+      interjection: false,
+      kind: "team-rules"
+    });
   }
+  appendLog({
+    time: Date.now(),
+    type: "team-rules",
+    text: rules
+      ? `Team rules ${state.sessionActive ? "applied to the live session" : "saved"} (${rules.length} chars)`
+      : "Team rules cleared"
+  });
+  await saveState();
+  await saveHistory();
+  return { applied: true, live: Boolean(state.sessionActive), chars: rules.length };
 }
 
 function appendLog(entry) {
@@ -2133,6 +2164,12 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
       if (!["jobs", "commands", "rules", "all"].includes(kind)) throw new Error("Unknown history type.");
       await saveHistory();
       sendResponse({ ok: true });
+      return;
+    }
+
+    if (msg.type === "AI_BRIDGE_SET_TEAM_RULES") {
+      const result = await applyTeamRules(msg.teamRules);
+      sendResponse({ ok: true, ...result });
       return;
     }
 

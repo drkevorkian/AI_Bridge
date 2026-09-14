@@ -300,9 +300,9 @@ function renderHistory(history = latestState?.history) {
         use.type = "button";
         use.className = "tiny ghost history-use";
         use.textContent = "Use";
-        use.disabled = locked;
+        use.disabled = false;
         use.addEventListener("click", () => {
-          if (!locked) $("teamRules").value = item.text || "";
+          $("teamRules").value = item.text || "";
         });
 
         row.append(badge, copy, use);
@@ -832,7 +832,8 @@ function updateControls(s) {
   $("newAllChats").disabled = Boolean(s.sessionActive);
   $("freshOnStart").disabled = Boolean(s.sessionActive);
   $("workMode").disabled = Boolean(s.sessionActive);
-  $("teamRules").disabled = Boolean(s.sessionActive);
+  if ($("teamRules")) $("teamRules").disabled = false;
+  if ($("applyTeamRules")) $("applyTeamRules").disabled = false;
   $("sendInterject").disabled = !s.sessionActive || s.awaitingHuman;
   $("interjectText").disabled = !s.sessionActive || s.awaitingHuman;
   $("interjectNow").disabled = !s.sessionActive || s.awaitingHuman;
@@ -845,7 +846,7 @@ function updateControls(s) {
   }
   $("jobHistory").querySelectorAll(".history-use").forEach(button => { button.disabled = Boolean(s.sessionActive); });
   $("commandHistory").querySelectorAll(".history-use").forEach(button => { button.disabled = Boolean(s.sessionActive); });
-  $("rulesHistory")?.querySelectorAll(".history-use").forEach(button => { button.disabled = Boolean(s.sessionActive); });
+  $("rulesHistory")?.querySelectorAll(".history-use").forEach(button => { button.disabled = false; });
 }
 
 function updateStatus(s) {
@@ -991,6 +992,28 @@ async function clearHistory(kind) {
 $("clearJobHistory").addEventListener("click", () => clearHistory("jobs"));
 $("clearCommandHistory").addEventListener("click", () => clearHistory("commands"));
 $("clearRulesHistory").addEventListener("click", () => clearHistory("rules"));
+$("applyTeamRules")?.addEventListener("click", async () => {
+  const button = $("applyTeamRules");
+  const old = button.textContent;
+  button.disabled = true;
+  button.textContent = "Applying…";
+  try {
+    const res = await chrome.runtime.sendMessage({
+      type: "AI_BRIDGE_SET_TEAM_RULES",
+      teamRules: $("teamRules").value
+    });
+    if (!res?.ok) throw new Error(res?.error || "Could not apply team rules");
+    $("status").textContent = res.live
+      ? "Team rules applied. Every later A/B/C turn will receive them, regardless of job."
+      : "Team rules saved. They will bind every member when you Start.";
+    await refreshState();
+  } catch (err) {
+    $("status").textContent = `Team rules failed: ${err.message}`;
+  } finally {
+    button.textContent = old;
+    button.disabled = false;
+  }
+});
 
 for (const side of SIDES) {
   $(`tab${side}`).addEventListener("change", () => { refreshStartLabels(); if (latestState) updateControls(latestState); });
