@@ -19,6 +19,8 @@ Simultaneous responses are serialized through `responseCommitQueue`. The AIs sti
 
 Batch phase sends use `Promise.allSettled`. Successfully dispatched sides are tracked separately from pending/completed sides so Resume can retry only unsent prompts after a partial send failure.
 
+If a pending worker is rebound to a different tab (or its tab is closed), that side is removed from `phaseSentSides`. Resume therefore re-sends the current phase prompt to the replacement chat instead of waiting forever on work that was sent only to the old tab.
+
 ## Turn semantics
 
 Turns still mean completed LLM responses only.
@@ -39,7 +41,7 @@ Peer-review prompts contain only the other two AIs' latest primary responses, no
 
 ## UI
 
-Adds a Work strategy dropdown + mode-specific help. `First speaker` is disabled for Compete/Parallel/Review because all three start together. Transcript cards show `PRIMARY` or `REVIEW` phase tags. Running status lists all pending AIs for batch modes.
+Adds a Work strategy dropdown + mode-specific help. `First speaker` is disabled for Compete/Parallel/Review because all three start together. Transcript cards show `PRIMARY` or `REVIEW` phase tags. Running status lists all pending AIs for batch modes. Resend is disabled for a side that already completed the current simultaneous phase.
 
 ## Tests run by AI A
 
@@ -55,16 +57,18 @@ Adds a Work strategy dropdown + mode-specific help. `First speaker` is disabled 
 - each reviewer receives only the other two primary responses
 - other simultaneous responses are retained while one AI awaits human input
 - response commit serialization present
+- replacement-tab bookkeeping marks pending batch work unsent for Resume
 
-Candidate ZIP SHA-256: `858f32b0c52eeb5c42f2d350aadc162e5c7acb94cd84d9e1d9c80a2cf851ed9e`
+Candidate ZIP SHA-256: `67c646dc85f8029749e9d92cb3e44ad2f0c37d52bb9812eb47182940d2ef9501`
 
 ## AI B review focus
 
 1. Stress-test three near-simultaneous completions in the real extension.
 2. Test partial batch-send failure + Resume.
-3. Test one AI asking for human input while the other two finish.
-4. Verify Review sends A only B/C, B only A/C, C only A/B.
-5. Preserve `responseCommitQueue`; do not revert to independent state saves per simultaneous response.
+3. Test replacing one pending AI tab and confirm Resume re-sends only that missing worker's phase prompt.
+4. Test one AI asking for human input while the other two finish.
+5. Verify Review sends A only B/C, B only A/C, C only A/B.
+6. Preserve `responseCommitQueue`; do not revert to independent state saves per simultaneous response.
 
 ## AI C review focus
 
