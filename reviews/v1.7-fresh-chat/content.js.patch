@@ -1,0 +1,45 @@
+--- /mnt/data/AI_Bridge_v1.6_base_for_v17/content.js	2026-09-14 04:48:17.000000000 +0000
++++ /mnt/data/AI_Bridge_v1.7_candidate/content.js	2026-09-14 12:18:38.388474099 +0000
+@@ -1,6 +1,6 @@
+ (() => {
+-  if (window.__AI_BRIDGE_LOADED_V16__) return;
+-  window.__AI_BRIDGE_LOADED_V16__ = true;
++  if (window.__AI_BRIDGE_LOADED_V17__) return;
++  window.__AI_BRIDGE_LOADED_V17__ = true;
+@@ -207,6 +207,29 @@
+     return uploaded;
+   }
++
++  function visibleNewChatControl() {
++    const candidates = [...document.querySelectorAll("button, a")];
++    return candidates.find(el => {
++      const rect = el.getBoundingClientRect();
++      const style = getComputedStyle(el);
++      if (rect.width <= 0 || rect.height <= 0 || style.visibility === "hidden" || style.display === "none") return false;
++      const label = [el.getAttribute("aria-label"), el.getAttribute("title"), el.textContent]
++        .filter(Boolean).join(" ").replace(/\s+/g, " ").trim();
++      return /\b(new chat|new conversation|new topic|start new chat)\b/i.test(label);
++    }) || null;
++  }
++
++  async function openNewConversation() {
++    const control = visibleNewChatControl();
++    if (!control) return { clicked: false };
++    control.click();
++    await sleep(700);
++    return { clicked: true };
++  }
+@@ -417,10 +440,18 @@
+   chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
+     if (msg.type === "AI_BRIDGE_PING") {
+-      sendResponse({ ok: true, host: location.hostname, ready: true });
++      sendResponse({ ok: true, host: location.hostname, ready: true, version: "1.7.0" });
+       return false;
+     }
++
++    if (msg.type === "AI_BRIDGE_NEW_CHAT") {
++      openNewConversation()
++        .then(result => sendResponse({ ok: true, ...result }))
++        .catch(err => sendResponse({ ok: false, error: err.message }));
++      return true;
++    }

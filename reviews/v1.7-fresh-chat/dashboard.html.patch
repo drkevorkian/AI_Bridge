@@ -1,0 +1,26 @@
+--- /mnt/data/AI_Bridge_v1.6_base_for_v17/dashboard.html
++++ /mnt/data/AI_Bridge_v1.7_candidate/dashboard.html
+@@
+         <div class="control-grid four">
+           <button id="start" class="primary">Start</button>
+           <button id="pause" class="secondary" disabled>Pause</button>
+           <button id="resume" class="resume" disabled>Resume</button>
+           <button id="stop" class="danger" disabled>Stop</button>
+         </div>
++        <div class="fresh-chat-row">
++          <label class="check-line" for="freshOnStart">
++            <input id="freshOnStart" type="checkbox" checked>
++            <span>Start in fresh AI chats</span>
++          </label>
++          <button id="newAllChats" class="tiny ghost" type="button">New AI chats</button>
++        </div>
++        <div class="field-help">Uses the three selected, already-open AI tabs. AI Bridge never opens replacement AI tabs for this action.</div>
+@@
+-            <button id="resendA" class="tiny ghost" disabled>Resend</button>
++            <div class="agent-actions"><button id="newChatA" class="tiny ghost" type="button">New chat</button><button id="resendA" class="tiny ghost" disabled>Resend</button></div>
+@@
+-            <button id="resendB" class="tiny ghost" disabled>Resend</button>
++            <div class="agent-actions"><button id="newChatB" class="tiny ghost" type="button">New chat</button><button id="resendB" class="tiny ghost" disabled>Resend</button></div>
+@@
+-            <button id="resendC" class="tiny ghost" disabled>Resend</button>
++            <div class="agent-actions"><button id="newChatC" class="tiny ghost" type="button">New chat</button><button id="resendC" class="tiny ghost" disabled>Resend</button></div>

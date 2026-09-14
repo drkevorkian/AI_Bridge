@@ -1,0 +1,152 @@
+--- /mnt/data/AI_Bridge_v1.6_base_for_v17/background.js	2026-09-14 05:14:05.000000000 +0000
++++ /mnt/data/AI_Bridge_v1.7_candidate/background.js	2026-09-14 12:18:38.388866889 +0000
+@@ -1,5 +1,6 @@
+ const SIDES = ["A", "B", "C"];
+ const STATE_VERSION = 3;
++const CONTENT_VERSION = "1.7.0";
+ const INFINITE_TURNS = -1;
+ const MIN_FINITE_TURNS = 1;
+ const MAX_FINITE_TURNS = 10000;
+@@ -915,11 +916,24 @@
+   if (!Number.isInteger(Number(tabId))) throw new Error("No tab is assigned to this AI.");
+   tabId = Number(tabId);
+ 
++  let existingPong = null;
+   try {
+-    const pong = await chrome.tabs.sendMessage(tabId, { type: "AI_BRIDGE_PING" });
+-    if (pong?.ok) return pong;
++    existingPong = await chrome.tabs.sendMessage(tabId, { type: "AI_BRIDGE_PING" });
++    if (existingPong?.ok && existingPong.version === CONTENT_VERSION) return existingPong;
+   } catch (_) {}
+ 
++  if (existingPong?.ok && existingPong.version !== CONTENT_VERSION) {
++    await chrome.tabs.reload(tabId);
++    const started = Date.now();
++    while (Date.now() - started < 20000) {
++      try {
++        const reloaded = await chrome.tabs.get(tabId);
++        if (reloaded?.status === "complete") break;
++      } catch (_) {}
++      await new Promise(resolve => setTimeout(resolve, 250));
++    }
++  }
++
+   const tab = await chrome.tabs.get(tabId);
+   const url = tab?.url || "";
+   const supported = [
+@@ -942,7 +956,7 @@
+ 
+   try {
+     const pong = await chrome.tabs.sendMessage(tabId, { type: "AI_BRIDGE_PING" });
+-    if (pong?.ok) return pong;
++    if (pong?.ok && pong.version === CONTENT_VERSION) return pong;
+   } catch (_) {}
+ 
+   throw new Error("The page listener could not be established after reinjection.");
+@@ -1032,6 +1046,81 @@
+   } catch (_) {}
+ }
+ 
++function freshChatUrlFor(rawUrl) {
++  let url;
++  try { url = new URL(String(rawUrl || "")); }
++  catch (_) { throw new Error("The selected tab does not have a supported AI URL."); }
++
++  const host = url.hostname;
++  if (host === "chatgpt.com" || host === "chat.openai.com") return "https://chatgpt.com/";
++  if (host === "grok.com") return "https://grok.com/";
++  if (host === "claude.ai") return "https://claude.ai/new";
++  if (host === "gemini.google.com") return "https://gemini.google.com/app";
++  if (host === "copilot.microsoft.com") return "https://copilot.microsoft.com/";
++  throw new Error(`Unsupported AI tab: ${host || rawUrl}`);
++}
++
++async function waitForTabReady(tabId, timeoutMs = 20000) {
++  const id = Number(tabId);
++  const started = Date.now();
++  while (Date.now() - started < timeoutMs) {
++    try {
++      const tab = await chrome.tabs.get(id);
++      if (tab?.status === "complete" && tab?.url) {
++        await ensureTabListener(id);
++        return tab;
++      }
++    } catch (_) {}
++    await new Promise(resolve => setTimeout(resolve, 250));
++  }
++  throw new Error("Timed out waiting for the AI page to open its new conversation.");
++}
++
++async function resetChatTab(tabId) {
++  const id = Number(tabId);
++  if (!Number.isInteger(id) || id <= 0) throw new Error("Choose an open AI tab first.");
++  const tab = await chrome.tabs.get(id);
++  const target = freshChatUrlFor(tab?.url);
++
++  await ensureTabListener(id);
++  try {
++    const clicked = await chrome.tabs.sendMessage(id, { type: "AI_BRIDGE_NEW_CHAT" });
++    if (clicked?.ok && clicked.clicked) {
++      await new Promise(resolve => setTimeout(resolve, 500));
++      const afterClick = await chrome.tabs.get(id);
++      if (afterClick?.status === "loading") return waitForTabReady(id);
++      return afterClick;
++    }
++  } catch (_) {
++    // A navigation-triggering click can unload the sender before it replies.
++    // The canonical route fallback below still guarantees a fresh conversation.
++  }
++
++  const current = await chrome.tabs.get(id);
++  if (current?.url === target) await chrome.tabs.reload(id);
++  else await chrome.tabs.update(id, { url: target });
++  return waitForTabReady(id);
++}
++
++async function resetSelectedChats(msg, sides = SIDES, { allowActive = false } = {}) {
++  if (state.sessionActive && !allowActive) throw new Error("Stop the current bridge session before opening fresh AI chats.");
++  const chosen = [...new Set((Array.isArray(sides) ? sides : SIDES).map(side => String(side || "").toUpperCase()))]
++    .filter(side => SIDES.includes(side));
++  if (!chosen.length) throw new Error("Choose at least one AI role to reset.");
++
++  const ids = chosen.map(side => Number(msg?.[`tab${side}`]));
++  if (ids.some(id => !Number.isInteger(id) || id <= 0)) throw new Error("Choose an open supported AI tab for every requested role.");
++  if (new Set(ids).size !== ids.length) throw new Error("Each requested AI role must use a different tab.");
++
++  const tabs = await Promise.all(ids.map(id => chrome.tabs.get(id)));
++  for (const tab of tabs) freshChatUrlFor(tab?.url);
++
++  await Promise.all(ids.map(resetChatTab));
++  appendLog({ time: Date.now(), type: "system", text: `Opened fresh chat${chosen.length === 1 ? "" : "s"} for AI ${chosen.join(", AI ")}` });
++  await saveState();
++  return chosen;
++}
++
+ async function pauseBridge(reason = "Paused by user") {
+   if (!state.sessionActive) return;
+   state.running = false;
+@@ -1157,6 +1246,13 @@
+       return;
+     }
+ 
++    if (msg.type === "AI_BRIDGE_NEW_CHATS") {
++      const sides = Array.isArray(msg.sides) ? msg.sides : SIDES;
++      const resetSides = await resetSelectedChats(msg, sides);
++      sendResponse({ ok: true, sides: resetSides });
++      return;
++    }
++
+     if (msg.type === "AI_BRIDGE_START") {
+       if (state.sessionActive) throw new Error("A saved session already exists. Resume it or Stop it before starting a new one.");
+ 
+@@ -1184,6 +1280,10 @@
+       state = fresh;
+       try {
+         await bindTabsFromMessage(msg);
++        if (msg.freshChats) {
++          const selected = Object.fromEntries(SIDES.map(side => [`tab${side}`, fresh[`tab${side}`]]));
++          await resetSelectedChats(selected, SIDES, { allowActive: true });
++        }
+       } catch (err) {
+         state = previousState;
+         throw err;

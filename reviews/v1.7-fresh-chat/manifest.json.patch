@@ -1,0 +1,7 @@
+--- /mnt/data/AI_Bridge_v1.6_base_for_v17/manifest.json
++++ /mnt/data/AI_Bridge_v1.7_candidate/manifest.json
+@@
+-  "version": "1.6.0",
+-  "description": "Coordinate a resumable three-AI conversation with shared file relay, local source ingestion, history, themes, live transcript, and human intervention.",
++  "version": "1.7.0",
++  "description": "Coordinate a resumable three-AI conversation with fresh-chat control, shared file relay, local source ingestion, history, themes, live transcript, and human intervention.",
