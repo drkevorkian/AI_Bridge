@@ -1,6 +1,6 @@
 const SIDES = ["A", "B", "C"];
 const STATE_VERSION = 3;
-const CONTENT_VERSION = "1.10.0";
+const CONTENT_VERSION = "1.10.2";
 const WORK_MODES = new Set(["relay", "collaborate", "compete", "parallel", "review"]);
 const INFINITE_TURNS = -1;
 const MIN_FINITE_TURNS = 1;
@@ -1310,6 +1310,7 @@ async function clearAttention() {
     await chrome.action.setBadgeText({ text: "" });
     await chrome.action.setTitle({ title: "AI Bridge" });
   } catch (_) {}
+  try { await chrome.notifications.clear("ai-bridge-human-input"); } catch (_) {}
 }
 
 async function showHumanAttention(requestingSide, prompt) {
@@ -1466,6 +1467,50 @@ async function queueHumanRequest(side, text, humanPrompt) {
   } else {
     state.pendingHumanQueue.push(request);
   }
+}
+
+async function suppressPendingHumanRequest({ stop = false } = {}) {
+  if (!state.sessionActive || !state.awaitingHuman || !state.pendingHuman) {
+    throw new Error("There is no pending human-input request to suppress.");
+  }
+
+  const pending = state.pendingHuman;
+  const requestingSide = pending.requestingSide;
+  const requestingLabel = pending.requestingLabel || labelForSide(requestingSide);
+  const actionText = stop
+    ? `Suppressed human-input request from ${requestingLabel} without a response and stopped the session.`
+    : `Suppressed human-input request from ${requestingLabel} without a response. Session paused.`;
+
+  recordTranscript("human", {
+    text: actionText,
+    question: pending.prompt,
+    requestedBySide: requestingSide,
+    suppressed: true,
+    stoppedSession: Boolean(stop)
+  });
+  appendLog({
+    time: Date.now(),
+    type: "human-suppress",
+    side: requestingSide,
+    text: stop
+      ? `Human suppressed AI ${requestingSide} input request and stopped the session`
+      : `Human suppressed AI ${requestingSide} input request and paused the session`
+  });
+
+  state.awaitingHuman = false;
+  state.pendingHuman = null;
+  await clearAttention();
+
+  if (stop) {
+    await endBridge(`Human input request from ${requestingLabel} suppressed; session stopped by user`);
+    return { stopped: true, queued: 0 };
+  }
+
+  state.running = false;
+  state.paused = true;
+  state.pauseReason = `Human input request from ${requestingLabel} suppressed. Resume when ready or Stop to start a new session.`;
+  await saveState();
+  return { stopped: false, queued: state.pendingHumanQueue.length };
 }
 
 async function handleBatchCompletedResponse(side, text, { relay = true, artifacts = [] } = {}) {
@@ -1678,7 +1723,20 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
 
     if (msg.type === "AI_BRIDGE_RESUME") {
       if (!state.sessionActive) throw new Error("There is no saved session to resume.");
-      if (state.awaitingHuman) throw new Error("Answer the pending human-input request before resuming.");
+      if (state.awaitingHuman) throw new Error("Answer or suppress the pending human-input request before resuming.");
+
+      if (Array.isArray(state.pendingHumanQueue) && state.pendingHumanQueue.length) {
+        const nextRequest = state.pendingHumanQueue.shift();
+        state.awaitingHuman = true;
+        state.pendingHuman = nextRequest;
+        state.running = false;
+        state.paused = true;
+        state.pauseReason = `Human input still pending from ${nextRequest.requestingLabel || `AI ${nextRequest.requestingSide}`}.`;
+        await showHumanAttention(nextRequest.requestingSide, nextRequest.prompt);
+        await saveState();
+        sendResponse({ ok: true, awaitingHuman: true });
+        return;
+      }
 
       await bindTabsFromMessage(msg);
       state.running = true;
@@ -1753,6 +1811,12 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
           ? (state.workMode === "review" && state.workPhase === "primary" ? "review-phase" : "next-scheduled-handoff")
           : "next-scheduled-handoff"
       });
+      return;
+    }
+
+    if (msg.type === "AI_BRIDGE_HUMAN_SUPPRESS") {
+      const result = await suppressPendingHumanRequest({ stop: Boolean(msg.stop) });
+      sendResponse({ ok: true, ...result });
       return;
     }
 

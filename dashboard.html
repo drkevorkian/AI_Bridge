@@ -230,6 +230,10 @@
       <label for="humanModalResponse">Your response</label>
       <textarea id="humanModalResponse" rows="5" placeholder="Answer the AI's question or give the needed decision..."></textarea>
       <button id="sendHumanModal" class="human-send" type="button">Send response & continue</button>
+      <div class="human-modal-actions" role="group" aria-label="Human request actions">
+        <button id="suppressHumanModal" class="secondary" type="button">Suppress request</button>
+        <button id="stopHumanModal" class="danger" type="button">Stop session</button>
+      </div>
       <div id="humanModalQueue" class="field-help"></div>
     </section>
   </div>
