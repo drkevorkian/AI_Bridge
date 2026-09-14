@@ -443,3 +443,22 @@ input, select, textarea { border-radius: 12px; transition: border-color .14s eas
 :root[data-theme="ghostwhite"] .panel-section, :root[data-theme="ghostwhite"] .vault-panel, :root[data-theme="ghostwhite"] .human-panel, :root[data-theme="ghostwhite"] .transcript-card { box-shadow: 0 12px 30px rgba(70, 82, 128, .09); }
 :root[data-theme="ghostwhite"] .workspace-header { box-shadow: 0 1px 0 #e4e7f5, 0 12px 34px rgba(70,82,128,.07); }
 :root[data-theme="terminal"] button, :root[data-theme="terminal"] input, :root[data-theme="terminal"] select, :root[data-theme="terminal"] textarea, :root[data-theme="terminal"] .panel-section, :root[data-theme="terminal"] .vault-panel, :root[data-theme="terminal"] .human-panel { border-radius: 0; }
+
+
+/* v1.11 Direct Mesh + suppressed human request history */
+.history-use-group { display: flex; gap: 5px; flex: 0 0 auto; }
+.history-use-group .history-use { min-width: 30px; padding-inline: 7px; }
+.suppressed-panel { margin-top: 12px; }
+.suppressed-list { display: grid; gap: 8px; margin-top: 10px; }
+.suppressed-row {
+  display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; gap: 10px;
+  padding: 10px; border: 1px solid var(--human-line); border-radius: 12px; background: var(--human-question-bg);
+}
+.suppressed-copy { min-width: 0; }
+.suppressed-question { margin-top: 4px; color: var(--text); font-size: 12px; line-height: 1.4; white-space: pre-wrap; overflow-wrap: anywhere; }
+.direct-route-badge {
+  align-self: flex-start; margin: 0 12px 10px; padding: 5px 9px; border-radius: 999px;
+  border: 1px solid var(--line-strong); background: var(--notice-bg); color: var(--notice-text);
+  font-size: 10px; font-weight: 850; letter-spacing: .04em;
+}
+.direct-route-badge.route-error { border-color: var(--danger-line); background: var(--danger-bg); color: var(--danger); }

@@ -22,7 +22,8 @@ const WORK_MODE_INFO = {
   collaborate: { label: "Collaborate", minTurns: 1, help: "Sequential shared-deliverable mode. Each AI improves one common result using its assigned specialty." },
   compete: { label: "Compete", minTurns: 3, help: "All three AIs receive the same objective simultaneously and submit independently. They do not see competitor answers during the pass." },
   parallel: { label: "Parallel Independent", minTurns: 3, help: "All three AIs work simultaneously and independently on complementary versions of the same objective." },
-  review: { label: "Peer Review", minTurns: 6, help: "Phase 1: all three answer independently. Phase 2: each AI receives the other two answers and critiques them simultaneously." }
+  review: { label: "Peer Review", minTurns: 6, help: "Phase 1: all three answer independently. Phase 2: each AI receives the other two answers and critiques them simultaneously." },
+  mesh: { label: "Direct Mesh", minTurns: 1, help: "One AI speaks at a time, but each model can route its completed response directly to a specific teammate with a final-line SEND TO command. Without a command, routing falls back to the next AI." }
 };
 
 function selectedWorkMode() {
@@ -102,16 +103,22 @@ function renderHistory(history = latestState?.history) {
       text.textContent = item.job || "";
       copy.append(title, text);
 
-      const use = document.createElement("button");
-      use.type = "button";
-      use.className = "tiny ghost history-use";
-      use.textContent = `Use for ${item.side || "AI"}`;
-      use.disabled = locked || !SIDES.includes(item.side);
-      use.addEventListener("click", () => {
-        if (!locked && SIDES.includes(item.side)) $(`job${item.side}`).value = item.job || "";
-      });
+      const useGroup = document.createElement("div");
+      useGroup.className = "history-use-group";
+      for (const targetSide of SIDES) {
+        const use = document.createElement("button");
+        use.type = "button";
+        use.className = "tiny ghost history-use";
+        use.textContent = targetSide;
+        use.title = `Apply this role to AI ${targetSide}`;
+        use.disabled = locked;
+        use.addEventListener("click", () => {
+          if (!locked) $(`job${targetSide}`).value = item.job || "";
+        });
+        useGroup.appendChild(use);
+      }
 
-      row.append(badge, copy, use);
+      row.append(badge, copy, useGroup);
       jobList.appendChild(row);
     }
   }
@@ -321,6 +328,54 @@ function updateSessionPill(s) {
   }
 }
 
+function renderSuppressedRequests(s = latestState) {
+  const list = $("suppressedRequests");
+  if (!list) return;
+  const items = Array.isArray(s?.suppressedHumanRequests) ? s.suppressedHumanRequests : [];
+  $("suppressedSummary").textContent = items.length ? `${items.length} waiting` : "None";
+  if (items.length) $("suppressedPanel").open = true;
+  list.textContent = "";
+  if (!items.length) {
+    list.appendChild(historyEmpty("No suppressed requests."));
+    return;
+  }
+  for (const item of [...items].reverse()) {
+    const row = document.createElement("div");
+    row.className = "suppressed-row";
+    const copy = document.createElement("div");
+    copy.className = "suppressed-copy";
+    const title = document.createElement("div");
+    title.className = "history-title";
+    title.textContent = `${item.requestingLabel || `AI ${item.requestingSide || "?"}`} · ${formatHistoryTime(item.suppressedAt || item.time)}`;
+    const question = document.createElement("div");
+    question.className = "suppressed-question";
+    question.textContent = item.prompt || "Human input requested.";
+    copy.append(title, question);
+
+    const answer = document.createElement("button");
+    answer.type = "button";
+    answer.className = "tiny resume suppressed-answer";
+    answer.textContent = "Answer";
+    answer.disabled = !s?.sessionActive || Boolean(s?.awaitingHuman);
+    answer.addEventListener("click", async () => {
+      answer.disabled = true;
+      const old = answer.textContent;
+      answer.textContent = "Opening…";
+      try {
+        const res = await chrome.runtime.sendMessage({ type: "AI_BRIDGE_HUMAN_REOPEN", requestId: item.id });
+        if (!res?.ok) throw new Error(res?.error || "Could not reopen request");
+        await refreshState();
+      } catch (err) {
+        $("status").textContent = `Could not reopen suppressed request: ${err.message}`;
+        answer.disabled = false;
+        answer.textContent = old;
+      }
+    });
+    row.append(copy, answer);
+    list.appendChild(row);
+  }
+}
+
 function setHumanModal(s) {
   const modal = $("humanModal");
   const request = s?.sessionActive && s.awaitingHuman ? s.pendingHuman : null;
@@ -384,6 +439,17 @@ function transcriptCard(entry) {
 
   head.append(title, meta);
   card.append(head, body);
+  if (entry.directToSide) {
+    const route = document.createElement("div");
+    route.className = "direct-route-badge";
+    route.textContent = `SEND TO · AI ${entry.side || "?"} → AI ${entry.directToSide} · ${entry.directToLabel || "AI"}`;
+    card.appendChild(route);
+  } else if (entry.bridgeCommand === "send-to" && entry.commandValid === false) {
+    const route = document.createElement("div");
+    route.className = "direct-route-badge route-error";
+    route.textContent = `SEND TO rejected · ${entry.directTargetRaw || "unknown target"}`;
+    card.appendChild(route);
+  }
   const chips = attachmentChips(entry);
   if (chips) card.appendChild(chips);
   return card;
@@ -584,7 +650,8 @@ function updateStatus(s) {
   } else if (s.sessionActive && s.paused) {
     const batch = ["compete", "parallel", "review"].includes(s.workMode);
     const next = batch ? ((s.phasePendingSides || []).map(side => `AI ${side}`).join(", ") || "phase transition") : currentLabel(s);
-    $("status").textContent = `PAUSED — ${s.pauseReason || "Session saved."}\nNext/current: ${next}\nAI turns: ${s.turn}/${limit}`;
+    const suppressed = Array.isArray(s.suppressedHumanRequests) ? s.suppressedHumanRequests.length : 0;
+    $("status").textContent = `PAUSED — ${s.pauseReason || "Session saved."}\nNext/current: ${next}\nAI turns: ${s.turn}/${limit}${suppressed ? `\nSuppressed human requests: ${suppressed}` : ""}`;
   } else {
     const last = s.log?.length ? s.log[s.log.length - 1]?.text : "";
     $("status").textContent = `Idle${last ? ` — ${last}` : ""}`;
@@ -604,6 +671,7 @@ async function refreshState() {
     hydrateFromState(s);
     renderHistory(s.history);
     renderRelayArtifacts(s.relayArtifacts);
+    renderSuppressedRequests(s);
     updateStatus(s);
     updateControls(s);
     setHumanModal(s);
