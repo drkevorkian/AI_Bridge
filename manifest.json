@@ -1,11 +1,12 @@
 {
   "manifest_version": 3,
   "name": "AI Bridge",
-  "version": "1.3.0",
-  "description": "Coordinate a resumable three-AI conversation with per-agent jobs and human intervention.",
+  "version": "1.5.0",
+  "description": "Coordinate a resumable three-AI conversation with a 40% control dashboard, history, themes, local file ingestion, live transcript, and human intervention.",
   "permissions": [
     "tabs",
     "storage",
+    "unlimitedStorage",
     "notifications",
     "scripting"
   ],
@@ -37,9 +38,7 @@
         "https://gemini.google.com/*",
         "https://copilot.microsoft.com/*"
       ],
-      "js": [
-        "content.js"
-      ],
+      "js": ["content.js"],
       "run_at": "document_idle"
     }
   ],

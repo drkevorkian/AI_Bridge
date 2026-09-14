@@ -1,0 +1,170 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>AI Bridge Dashboard</title>
+  <link rel="stylesheet" href="dashboard.css">
+</head>
+<body>
+  <div class="app-shell">
+    <aside class="control-panel">
+      <header class="brand-block">
+        <div>
+          <div class="eyebrow">AI BRIDGE</div>
+          <h1>Three agents. One workspace.</h1>
+        </div>
+        <div class="header-tools">
+          <select id="themeSelect" class="theme-select" aria-label="Theme">
+            <option value="midnight">Midnight</option>
+            <option value="slate">Slate</option>
+            <option value="light">Light</option>
+          </select>
+          <div id="sessionPill" class="session-pill idle">Idle</div>
+        </div>
+      </header>
+
+      <section class="panel-section runtime-card">
+        <div class="section-heading">
+          <span>Runtime</span>
+          <span id="turnCounter" class="muted">0 / ∞</span>
+        </div>
+        <div id="status" class="status-text">Idle</div>
+        <div class="control-grid four">
+          <button id="start" class="primary">Start</button>
+          <button id="pause" class="secondary" disabled>Pause</button>
+          <button id="resume" class="resume" disabled>Resume</button>
+          <button id="stop" class="danger" disabled>Stop</button>
+        </div>
+      </section>
+
+      <section class="panel-section">
+        <div class="section-heading"><span>Team</span><span class="muted">A → B → C</span></div>
+
+        <article class="agent-card agent-a">
+          <div class="agent-topline">
+            <strong>AI A</strong>
+            <button id="resendA" class="tiny ghost" disabled>Resend</button>
+          </div>
+          <select id="tabA" aria-label="AI A tab"></select>
+          <textarea id="jobA" rows="3" placeholder="AI A job / responsibility"></textarea>
+        </article>
+
+        <article class="agent-card agent-b">
+          <div class="agent-topline">
+            <strong>AI B</strong>
+            <button id="resendB" class="tiny ghost" disabled>Resend</button>
+          </div>
+          <select id="tabB" aria-label="AI B tab"></select>
+          <textarea id="jobB" rows="3" placeholder="AI B job / responsibility"></textarea>
+        </article>
+
+        <article class="agent-card agent-c">
+          <div class="agent-topline">
+            <strong>AI C</strong>
+            <button id="resendC" class="tiny ghost" disabled>Resend</button>
+          </div>
+          <select id="tabC" aria-label="AI C tab"></select>
+          <textarea id="jobC" rows="3" placeholder="AI C job / responsibility"></textarea>
+        </article>
+
+        <div class="history-block">
+          <div class="history-heading">
+            <span>Previous jobs</span>
+            <button id="clearJobHistory" class="tiny ghost" type="button">Clear</button>
+          </div>
+          <div id="jobHistory" class="history-list">
+            <div class="history-empty">No previous jobs yet.</div>
+          </div>
+        </div>
+      </section>
+
+      <section class="panel-section">
+        <div class="field-row">
+          <label for="startSide">First speaker</label>
+          <select id="startSide">
+            <option value="A">AI A starts</option>
+            <option value="B">AI B starts</option>
+            <option value="C">AI C starts</option>
+          </select>
+        </div>
+
+        <label for="prompt">Primary objective</label>
+        <textarea id="prompt" rows="7" placeholder="Define the objective shared by all three agents..."></textarea>
+
+        <div class="history-block command-history-block">
+          <div class="history-heading">
+            <span>Previous commands</span>
+            <button id="clearCommandHistory" class="tiny ghost" type="button">Clear</button>
+          </div>
+          <div id="commandHistory" class="history-list">
+            <div class="history-empty">No previous commands yet.</div>
+          </div>
+        </div>
+
+        <section class="source-section" aria-labelledby="sourceHeading">
+          <div class="section-heading">
+            <span id="sourceHeading">Local code / files</span>
+            <span id="sourceSummary" class="muted">No files</span>
+          </div>
+          <div id="sourceDropZone" class="source-drop-zone" tabindex="0">
+            <strong>Drop code files here, or use Add folder</strong>
+            <span>No GitHub required. Text/code only; common dependency folders are skipped.</span>
+          </div>
+          <div class="source-actions">
+            <button id="pickFiles" class="ghost" type="button">Add files</button>
+            <button id="pickFolder" class="ghost" type="button">Add folder</button>
+            <button id="clearSources" class="ghost" type="button" disabled>Clear</button>
+          </div>
+          <input id="sourceFileInput" class="hidden" type="file" multiple>
+          <input id="sourceFolderInput" class="hidden" type="file" multiple webkitdirectory directory>
+          <div class="field-help">Up to 100 files · 200,000 chars/file · 400,000 chars combined. Files are sent once to each AI chat and again when a session is resumed.</div>
+          <div id="sourceNotice" class="source-notice hidden"></div>
+          <div id="sourceList" class="source-list"></div>
+        </section>
+
+        <div class="split-fields">
+          <div>
+            <label for="maxTurns">Max AI turns</label>
+            <input id="maxTurns" type="number" min="-1" max="10000" step="1" value="-1" inputmode="numeric">
+            <div class="field-help"><strong>-1 = Infinite</strong> · 1–10000 = finite</div>
+          </div>
+          <div>
+            <label for="delayMs">Relay delay (ms)</label>
+            <input id="delayMs" type="number" min="0" max="30000" step="100" value="1500" inputmode="numeric">
+          </div>
+        </div>
+      </section>
+
+      <section id="humanPanel" class="human-panel hidden">
+        <div class="section-heading"><span>Human input needed</span><span id="humanWho" class="muted"></span></div>
+        <div id="humanQuestion" class="human-question"></div>
+        <textarea id="humanResponse" rows="4" placeholder="Type the controller response..."></textarea>
+        <button id="sendHuman" class="human-send">Send response & continue</button>
+      </section>
+    </aside>
+
+    <main class="workspace">
+      <header class="workspace-header">
+        <div>
+          <div class="eyebrow">LIVE OUTPUT</div>
+          <h2>Shared transcript</h2>
+        </div>
+        <div class="workspace-actions">
+          <button id="jumpLatest" class="ghost hidden">Jump to latest</button>
+          <button id="refreshTabs" class="ghost">Refresh AI tabs</button>
+        </div>
+      </header>
+
+      <div id="transcript" class="transcript" aria-live="polite" aria-label="AI Bridge transcript">
+        <div id="emptyTranscript" class="empty-state">
+          <div class="empty-icon">↔</div>
+          <h3>No AI output yet</h3>
+          <p>Start a session and completed responses from AI A, B, and C will appear here in sequence.</p>
+        </div>
+      </div>
+    </main>
+  </div>
+  <script src="dashboard.js"></script>
+</body>
+</html>
