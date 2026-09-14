@@ -1,0 +1,41 @@
+--- /mnt/data/AI_Bridge_v1.6_base_for_v17/dashboard.js
++++ /mnt/data/AI_Bridge_v1.7_candidate/dashboard.js
+@@
+   $("stop").disabled = !s.sessionActive;
++  $("newAllChats").disabled = Boolean(s.sessionActive);
++  $("freshOnStart").disabled = Boolean(s.sessionActive);
+ 
+   for (const side of SIDES) {
++    $(`newChat${side}`).disabled = Boolean(s.sessionActive) || !selectedTab(side);
+     $(`resend${side}`).disabled = !s.sessionActive || !s.running || s.awaitingHuman || !s.lastSentBySide?.[side];
+   }
+@@
++async function openFreshChats(sides) {
++  if (latestState?.sessionActive) return;
++  const chosen = Array.isArray(sides) ? sides : SIDES;
++  const tabError = validateThreeTabs();
++  if (chosen.length === 3 && tabError) { $("status").textContent = tabError; return; }
++  try {
++    const payload = { type: "AI_BRIDGE_NEW_CHATS", sides: chosen };
++    for (const side of chosen) {
++      payload[`tab${side}`] = selectedTab(side);
++      if (!payload[`tab${side}`]) throw new Error(`Choose an open AI tab for AI ${side}.`);
++    }
++    const res = await chrome.runtime.sendMessage(payload);
++    if (!res?.ok) throw new Error(res?.error || "Could not open fresh AI chat.");
++    $("status").textContent = `Fresh chat${chosen.length === 1 ? "" : "s"} opened for AI ${chosen.join(", AI ")}.`;
++    await loadTabs({ preserve: true });
++    await refreshState();
++  } catch (err) { $("status").textContent = `New chat failed: ${err.message}`; }
++}
+@@
+-for (const side of SIDES) $(`tab${side}`).addEventListener("change", refreshStartLabels);
++for (const side of SIDES) {
++  $(`tab${side}`).addEventListener("change", () => { refreshStartLabels(); if (latestState) updateControls(latestState); });
++  $(`newChat${side}`).addEventListener("click", () => openFreshChats([side]));
++}
++$("newAllChats").addEventListener("click", () => openFreshChats(SIDES));
+@@
+       sourceFiles: selectedSourceFiles.map(file => ({ path: file.path, size: file.size, content: file.content })),
++      freshChats: $("freshOnStart").checked,
+       maxTurns: Number($("maxTurns").value),
