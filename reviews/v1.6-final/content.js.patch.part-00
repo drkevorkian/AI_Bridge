@@ -1,0 +1,169 @@
+--- a/content.js
++++ b/content.js
+@@ -1,12 +1,17 @@
+ (() => {
+-  if (window.__AI_BRIDGE_LOADED_V15__) return;
+-  window.__AI_BRIDGE_LOADED_V15__ = true;
++  if (window.__AI_BRIDGE_LOADED_V16__) return;
++  window.__AI_BRIDGE_LOADED_V16__ = true;
+ 
+   const host = location.hostname;
+   let lastObservedText = "";
+   let lastChangeAt = 0;
+   let lastReportedText = "";
++  let lastReportedSignature = "";
+   let pendingSend = false;
++  const MAX_ARTIFACTS_PER_RESPONSE = 8;
++  const MAX_ARTIFACT_FILE_BYTES = 12 * 1024 * 1024;
++  const MAX_ARTIFACT_TOTAL_BYTES = 24 * 1024 * 1024;
++  const ARTIFACT_FETCH_TIMEOUT_MS = 15000;
+ 
+   const adapters = {
+     chatgpt: {
+@@ -29,6 +34,11 @@
+       stopSelectors: [
+         "button[data-testid='stop-button']",
+         "button[aria-label*='Stop']"
++      ],
++      fileInputSelectors: ["input[type='file']"],
++      uploadButtonSelectors: [
++        "button[aria-label*='Attach']", "button[aria-label*='Upload']",
++        "button[data-testid*='attach']", "button[data-testid*='upload']"
+       ]
+     },
+     grok: {
+@@ -36,7 +46,9 @@
+       inputSelectors: ["textarea", "div[contenteditable='true']"],
+       sendSelectors: ["button[aria-label*='Send']", "button[type='submit']"],
+       responseSelectors: ["article", "div[class*='message']"],
+-      stopSelectors: ["button[aria-label*='Stop']", "button[title*='Stop']"]
++      stopSelectors: ["button[aria-label*='Stop']", "button[title*='Stop']"],
++      fileInputSelectors: ["input[type='file']"],
++      uploadButtonSelectors: ["button[aria-label*='Attach']", "button[aria-label*='Upload']", "button[title*='Attach']"]
+     },
+     claude: {
+       matches: () => host === "claude.ai",
+@@ -47,14 +59,18 @@
+         "div.font-claude-message",
+         "div[class*='font-claude']"
+       ],
+-      stopSelectors: ["button[aria-label*='Stop']"]
++      stopSelectors: ["button[aria-label*='Stop']"],
++      fileInputSelectors: ["input[type='file']"],
++      uploadButtonSelectors: ["button[aria-label*='Attach']", "button[aria-label*='Upload']", "button[aria-label*='Add']"]
+     },
+     gemini: {
+       matches: () => host === "gemini.google.com",
+       inputSelectors: ["div[contenteditable='true']", "textarea"],
+       sendSelectors: ["button[aria-label*='Send']", "button.send-button"],
+       responseSelectors: ["model-response", ".model-response-text", "message-content"],
+-      stopSelectors: ["button[aria-label*='Stop']"]
++      stopSelectors: ["button[aria-label*='Stop']"],
++      fileInputSelectors: ["input[type='file']"],
++      uploadButtonSelectors: ["button[aria-label*='Attach']", "button[aria-label*='Upload']", "button[aria-label*='Add']"]
+     },
+     copilot: {
+       matches: () => host === "copilot.microsoft.com",
+@@ -65,7 +81,9 @@
+         "button[type='submit']"
+       ],
+       responseSelectors: ["div[data-content='ai-message']", "div[class*='response']"],
+-      stopSelectors: ["button[aria-label*='Stop']"]
++      stopSelectors: ["button[aria-label*='Stop']"],
++      fileInputSelectors: ["input[type='file']"],
++      uploadButtonSelectors: ["button[aria-label*='Attach']", "button[aria-label*='Upload']", "button[aria-label*='Add']"]
+     }
+   };
+ 
+@@ -111,7 +129,7 @@
+     }
+ 
+     if (el.isContentEditable) {
+-      el.innerHTML = "";
++      el.replaceChildren();
+       const lines = text.split("\n");
+       lines.forEach((line, i) => {
+         if (i) el.appendChild(document.createElement("br"));
+@@ -125,14 +143,80 @@
+     }
+   }
+ 
+-  async function sendPrompt(text) {
++  function sleep(ms) {
++    return new Promise(resolve => setTimeout(resolve, ms));
++  }
++
++  function base64ToFile(item) {
++    const binary = atob(String(item.dataBase64 || ""));
++    const bytes = new Uint8Array(binary.length);
++    for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
++    return new File([bytes], String(item.name || "artifact.bin"), {
++      type: String(item.mime || "application/octet-stream"),
++      lastModified: Date.now()
++    });
++  }
++
++  async function findUploadInput() {
++    let input = firstVisible(adapter.fileInputSelectors || ["input[type='file']"])
++      || document.querySelector((adapter.fileInputSelectors || ["input[type='file']"]).join(","));
++    if (input) return input;
++
++    const trigger = firstVisible(adapter.uploadButtonSelectors || []);
++    if (trigger) {
++      trigger.click();
++      for (let i = 0; i < 12; i++) {
++        await sleep(150);
++        input = document.querySelector((adapter.fileInputSelectors || ["input[type='file']"]).join(","));
++        if (input) return input;
++      }
++    }
++    return null;
++  }
++
++  async function uploadArtifacts(items) {
++    const artifacts = Array.isArray(items) ? items.filter(item => item?.dataBase64) : [];
++    if (!artifacts.length) return 0;
++
++    let input = await findUploadInput();
++    if (!input) throw new Error("Could not find a file-upload control on this AI page.");
++
++    const files = artifacts.map(base64ToFile);
++    if (input.multiple || files.length === 1) {
++      const transfer = new DataTransfer();
++      for (const file of files) transfer.items.add(file);
++      input.files = transfer.files;
++      input.dispatchEvent(new Event("input", { bubbles: true }));
++      input.dispatchEvent(new Event("change", { bubbles: true }));
++      await sleep(900);
++      return files.length;
++    }
++
++    let uploaded = 0;
++    for (const file of files) {
++      input = await findUploadInput();
++      if (!input) throw new Error(`Could not attach ${file.name}.`);
++      const transfer = new DataTransfer();
++      transfer.items.add(file);
++      input.files = transfer.files;
++      input.dispatchEvent(new Event("input", { bubbles: true }));
++      input.dispatchEvent(new Event("change", { bubbles: true }));
++      uploaded += 1;
++      await sleep(650);
++    }
++    return uploaded;
++  }
++
++  async function sendPrompt(text, artifacts = []) {
+     lastReportedText = "";
++    lastReportedSignature = "";
+     const input = firstVisible(adapter.inputSelectors);
+     if (!input) throw new Error("Could not find the prompt box on this page.");
+ 
+     pendingSend = true;
++    const uploadedCount = await uploadArtifacts(artifacts);
+     setNativeValue(input, text);
+-    await new Promise(r => setTimeout(r, 300));
++    await sleep(uploadedCount ? 650 : 300);
+ 
+     const button = firstVisible(adapter.sendSelectors);
+     if (button && !button.disabled) {
