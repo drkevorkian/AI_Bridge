@@ -1,0 +1,40 @@
+name: Materialize v1.5 source
+
+on:
+  push:
+    branches:
+      - ai-a/v1.5-source-final
+    paths:
+      - '.github/workflows/materialize-v15.yml'
+
+permissions:
+  contents: write
+
+jobs:
+  materialize:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Reconstruct exact runtime sources
+        shell: bash
+        run: |
+          set -euo pipefail
+          cat .build/dashboard.*.b64 | tr -d '\r\n ' | base64 --decode > dashboard.js
+          cat .build/background.*.b64 | tr -d '\r\n ' | base64 --decode > background.js
+          echo '8132f22ee7804a78176622fe692b1fc9abd055dae4b7ed73c5dfd3f3920a05ee  dashboard.js' | sha256sum -c -
+          echo '46a237dc6bc67c22be0eb99901a01f68e09d41c7dd32aacea426c10eab705431  background.js' | sha256sum -c -
+          node --check dashboard.js
+          node --check background.js
+
+      - name: Commit materialized sources
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name 'AI Bridge Build'
+          git config user.email 'actions@users.noreply.github.com'
+          git add background.js dashboard.js
+          git commit -m 'Materialize exact v1.5 runtime sources'
+          git push origin HEAD:ai-a/v1.5-source-final
