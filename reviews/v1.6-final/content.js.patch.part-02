@@ -1,0 +1,65 @@
+MAX_ARTIFACTS_PER_RESPONSE);
++    return anchors.map((anchor, index) => `${artifactUrl(anchor)}|${artifactName(anchor, artifactUrl(anchor), index)}`).join("||");
++  }
++
++  async function captureArtifacts(node) {
++    const root = artifactRoot(node);
++    const anchors = [...(root?.querySelectorAll?.("a[href]") || [])].filter(looksLikeDownload).slice(0, MAX_ARTIFACTS_PER_RESPONSE);
++    const artifacts = [];
++    let total = 0;
++    for (let i = 0; i < anchors.length; i++) {
++      try {
++        const artifact = await fetchArtifact(anchors[i], i);
++        if (!artifact) continue;
++        if (artifacts.some(existing => existing.name === artifact.name && existing.size === artifact.size)) continue;
++        total += artifact.size;
++        if (total > MAX_ARTIFACT_TOTAL_BYTES) break;
++        artifacts.push(artifact);
++      } catch (_) {
++        // A failed artifact capture must not suppress the AI's text response.
++      }
++    }
++    return artifacts;
++  }
++
+   function generationAppearsActive() {
+     return Boolean(firstVisible(adapter.stopSelectors));
+   }
+ 
+   async function monitor() {
+-    const text = latestResponseText();
++    const node = latestResponseNode();
++    const text = latestResponseText(node);
+     if (!text) return;
+ 
+     if (text !== lastObservedText) {
+@@ -185,11 +398,16 @@
+     if (pendingSend) return;
+     if (generationAppearsActive()) return;
+     if (Date.now() - lastChangeAt < 2200) return;
+-    if (text === lastReportedText) return;
+ 
++    const linkSignature = artifactAnchorSignature(node);
++    const signature = `${text}\n::ARTIFACT_LINKS::${linkSignature}`;
++    if (signature === lastReportedSignature || (text === lastReportedText && !linkSignature)) return;
++
++    const artifacts = await captureArtifacts(node);
+     lastReportedText = text;
++    lastReportedSignature = signature;
+     try {
+-      await chrome.runtime.sendMessage({ type: "AI_BRIDGE_RESPONSE", text });
++      await chrome.runtime.sendMessage({ type: "AI_BRIDGE_RESPONSE", text, artifacts });
+     } catch (_) {}
+   }
+ 
+@@ -204,8 +422,8 @@
+     }
+ 
+     if (msg.type === "AI_BRIDGE_SEND") {
+-      sendPrompt(String(msg.text || ""))
+-        .then(() => sendResponse({ ok: true }))
++      sendPrompt(String(msg.text || ""), Array.isArray(msg.artifacts) ? msg.artifacts : [])
++        .then(uploadedCount => sendResponse({ ok: true, uploadedCount }))
+         .catch(err => sendResponse({ ok: false, error: err.message }));
+       return true;
+     }
