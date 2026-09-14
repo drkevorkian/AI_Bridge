@@ -1,0 +1,140 @@
+eliveredSources: Boolean(sourceContext),
+     artifactIds,
+     artifacts,
++    mainInterjectionIds: mainInterjections.ids,
+     text: [
+       teamContext(side),
+       "",
+@@ -1105,6 +1208,7 @@ function normalTurnMessage(side) {
+       state.initialPrompt,
+       ...(sourceContext ? ["", sourceContext] : []),
+       ...(attachmentContext ? ["", attachmentContext] : []),
++      ...(mainInterjections.text ? ["", "QUEUED HUMAN INTERJECTION FOR MAIN AI:", mainInterjections.text] : []),
+       "",
+       "SHARED UPDATES SINCE YOUR LAST HANDOFF:",
+       context || "No new shared updates were recorded.",
+@@ -1119,13 +1223,19 @@ function directTurnMessage(fromSide, targetSide, entry) {
+   const artifactIds = Array.isArray(entry?.artifactIds) ? entry.artifactIds : [];
+   const artifacts = artifactRecordsForIds(artifactIds);
+   const attachmentContext = artifactNote(artifacts);
+-  const recentHuman = state.transcript.filter(item => item.type === "human" && item.seq > Number(state.lastDeliveredSeqBySide[targetSide] || 0));
++  const recentHuman = state.transcript.filter(item =>
++    item.type === "human" &&
++    item.seq > Number(state.lastDeliveredSeqBySide[targetSide] || 0) &&
++    !(targetSide === state.mainSide && item.interjection)
++  );
+   const humanContext = boundedTranscript(recentHuman, 12000);
++  const mainInterjections = pendingMainInterjectionBundle(targetSide);
+   return {
+     deliveredSeq: Number(entry?.seq) || latestSeq(),
+     deliveredSources: Boolean(sourceContext),
+     artifactIds,
+     artifacts,
++    mainInterjectionIds: mainInterjections.ids,
+     text: [
+       teamContext(targetSide),
+       "",
+@@ -1136,6 +1246,7 @@ function directTurnMessage(fromSide, targetSide, entry) {
+       ...(sourceContext ? ["", sourceContext] : []),
+       ...(attachmentContext ? ["", attachmentContext] : []),
+       ...(humanContext ? ["", "RECENT HUMAN CONTROLLER UPDATES:", humanContext] : []),
++      ...(mainInterjections.text ? ["", "QUEUED HUMAN INTERJECTION FOR MAIN AI:", mainInterjections.text] : []),
+       "",
+       `DIRECT MESSAGE FROM AI ${fromSide} (${labelForSide(fromSide)}):`,
+       String(entry?.text || "").trim() || "[The sender routed the turn to you without an additional message body.]",
+@@ -1156,16 +1267,20 @@ function primaryResponseEntries() {
+ function reviewTurnMessage(side) {
+   const peers = primaryResponseEntries().filter(entry => entry.side !== side);
+   const context = boundedTranscript(peers, 70000);
+-  const humanNotes = state.transcript.filter(entry => entry.type === "human" && entry.interjection);
++  const humanNotes = state.transcript.filter(entry =>
++    entry.type === "human" && entry.interjection && side !== state.mainSide
++  );
+   const humanContext = boundedTranscript(humanNotes, 12000);
+   const artifactIds = artifactIdsFromEntries(peers);
+   const artifacts = artifactRecordsForIds(artifactIds);
+   const attachmentContext = artifactNote(artifacts);
++  const mainInterjections = pendingMainInterjectionBundle(side);
+   return {
+     deliveredSeq: latestSeq(),
+     deliveredSources: false,
+     artifactIds,
+     artifacts,
++    mainInterjectionIds: mainInterjections.ids,
+     text: [
+       teamContext(side),
+       "",
+@@ -1178,6 +1293,7 @@ function reviewTurnMessage(side) {
+       "OTHER AIS' PRIMARY RESPONSES TO REVIEW:",
+       context || "No peer primary responses were available.",
+       ...(humanContext ? ["", "HUMAN CONTROLLER INTERJECTIONS TO INCORPORATE:", humanContext] : []),
++      ...(mainInterjections.text ? ["", "QUEUED HUMAN INTERJECTION FOR MAIN AI:", mainInterjections.text] : []),
+       "",
+       "Return your critique as one complete review response. Incorporate any human interjection above. Do not ask the other AIs questions; critique the material you have."
+     ].join("\n")
+@@ -1212,6 +1328,7 @@ async function sendBatchPhase(sides = pendingUnsentSides()) {
+       deliveredSources: outgoing.deliveredSources,
+       artifactIds: outgoing.artifactIds || [],
+       artifacts: outgoing.artifacts || [],
++      mainInterjectionIds: outgoing.mainInterjectionIds || [],
+       saveRecord: false
+     });
+   }));
+@@ -1257,16 +1374,20 @@ async function advanceBatchIfReady() {
+ }
+ 
+ function recoveryMessage(side) {
+-  const recent = boundedTranscript(state.transcript);
++  const recent = boundedTranscript(state.transcript.filter(entry =>
++    !(side === state.mainSide && entry.type === "human" && entry.interjection)
++  ));
+   const sourceContext = sourceSectionForSide(side, { force: true });
+   const artifactIds = (state.relayArtifacts || []).map(item => item.id).filter(id => Boolean(artifactStore[id]));
+   const artifacts = artifactRecordsForIds(artifactIds);
+   const attachmentContext = artifactNote(artifacts);
++  const mainInterjections = pendingMainInterjectionBundle(side);
+   return {
+     deliveredSeq: latestSeq(),
+     deliveredSources: Boolean(sourceContext),
+     artifactIds,
+     artifacts,
++    mainInterjectionIds: mainInterjections.ids,
+     text: [
+       teamContext(side),
+       "",
+@@ -1279,6 +1400,7 @@ function recoveryMessage(side) {
+       state.initialPrompt,
+       ...(sourceContext ? ["", sourceContext] : []),
+       ...(attachmentContext ? ["", attachmentContext] : []),
++      ...(mainInterjections.text ? ["", "QUEUED HUMAN INTERJECTION FOR MAIN AI:", mainInterjections.text] : []),
+       "",
+       "RECENT SHARED TRANSCRIPT:",
+       recent || "No completed AI responses have been recorded yet.",
+@@ -1405,7 +1527,7 @@ async function ensureTabListener(tabId) {
+   throw new Error("The page listener could not be established after reinjection.");
+ }
+ 
+-async function sendToSide(side, text, { record = true, deliveredSeq = null, deliveredSources = false, artifactIds = [], artifacts = [], saveRecord = true } = {}) {
++async function sendToSide(side, text, { record = true, deliveredSeq = null, deliveredSources = false, artifactIds = [], artifacts = [], mainInterjectionIds = [], saveRecord = true } = {}) {
+   const tabId = tabForSide(side);
+   await ensureTabListener(tabId);
+ 
+@@ -1432,6 +1554,15 @@ async function sendToSide(side, text, { record = true, deliveredSeq = null, deli
+     throw new Error(`The page accepted ${Number(result.uploadedCount) || 0} of ${expectedArtifacts} relay files and no complete text fallback was available.`);
+   }
+ 
++  const round = beginRoundTimer(side);
++  appendLog({
++    time: round?.startedAt || Date.now(),
++    type: "round-start",
++    side,
++    roundNumber: round?.roundNumber || null,
++    text: `AI ${side} round ${round?.roundNumber || "?"} timer started after prompt submission`
++  });
++
+   if (record) {
+     // A fresh prompt can legitimately produce the exact same wording as this
+     // agent's previous turn. Clear the per-agent response guard only after the
+@@ -1441,6 +1572,9 @@ async function sendToSide(side, text, { record = true, deliveredSeq = null, deli
+     if (Number.isFinite(Number(deliveredSeq))) state.lastDeliveredSeqBySide[side] = Number(deliveredSeq);
+     if (de
