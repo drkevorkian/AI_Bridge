@@ -1,0 +1,172 @@
+--- a/background.js
++++ b/background.js
+@@ -9,6 +9,15 @@
+ const HISTORY_VERSION = 1;
+ const MAX_JOB_HISTORY = 60;
+ const MAX_COMMAND_HISTORY = 40;
++const MAX_RELAY_ARTIFACTS = 24;
++const MAX_ARTIFACTS_PER_RESPONSE = 8;
++const MAX_ARTIFACT_FILE_BYTES = 12 * 1024 * 1024;
++const MAX_ARTIFACT_TOTAL_BYTES = 24 * 1024 * 1024;
++const MAX_RELAY_ARTIFACT_TOTAL_BYTES = 60 * 1024 * 1024;
++const MAX_ARTIFACT_PREVIEW_CHARS = 220000;
++const MAX_ARTIFACT_CONTEXT_CHARS = 260000;
++const MAX_ZIP_TEXT_ENTRIES = 80;
++const MAX_ZIP_ENTRY_UNCOMPRESSED_BYTES = 2 * 1024 * 1024;
+ 
+ const DEFAULT_HISTORY = {
+   version: HISTORY_VERSION,
+@@ -41,6 +50,8 @@
+   initialPrompt: "",
+   sourceFiles: [],
+   sourceDeliveredBySide: { A: false, B: false, C: false },
++  relayArtifacts: [],
++  lastSentArtifactIdsBySide: { A: [], B: [], C: [] },
+ 
+   lastResponseBySide: {},
+   lastSentBySide: {},
+@@ -56,6 +67,7 @@
+ 
+ let state = { ...DEFAULT_STATE };
+ let history = { ...DEFAULT_HISTORY, jobs: [], commands: [] };
++let artifactStore = {};
+ let stateReady = loadState();
+ 
+ function cloneDefaultState() {
+@@ -63,6 +75,8 @@
+     ...DEFAULT_STATE,
+     sourceFiles: [],
+     sourceDeliveredBySide: { A: false, B: false, C: false },
++  relayArtifacts: [],
++  lastSentArtifactIdsBySide: { A: [], B: [], C: [] },
+     lastResponseBySide: {},
+     lastSentBySide: {},
+     lastDeliveredSeqBySide: { A: 0, B: 0, C: 0 },
+@@ -153,6 +167,352 @@
+   return sourceBundleText();
+ }
+ 
++function sanitizeArtifactName(raw, fallback = "artifact.bin") {
++  const value = String(raw || fallback).replace(/[\\/\0]/g, "_").trim();
++  return (value || fallback).slice(0, 240);
++}
++
++function estimateBase64Bytes(base64) {
++  const clean = String(base64 || "").replace(/\s+/g, "");
++  if (!clean) return 0;
++  const padding = clean.endsWith("==") ? 2 : clean.endsWith("=") ? 1 : 0;
++  return Math.max(0, Math.floor(clean.length * 3 / 4) - padding);
++}
++
++function artifactSummary(record) {
++  return {
++    id: record.id,
++    name: record.name,
++    mime: record.mime,
++    size: record.size,
++    sourceSide: record.sourceSide,
++    seq: record.seq,
++    time: record.time,
++    status: record.status || "File",
++    extractedFileCount: Number(record.extractedFileCount) || 0,
++    previewChars: String(record.previewText || "").length
++  };
++}
++
++function base64ToBytes(base64) {
++  const binary = atob(String(base64 || "").replace(/\s+/g, ""));
++  const bytes = new Uint8Array(binary.length);
++  for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
++  return bytes;
++}
++
++function textLikeArtifact(name, mime = "") {
++  if (/^text\//i.test(String(mime || ""))) return true;
++  const value = String(name || "");
++  if (/(?:^|\/)(?:Dockerfile|Makefile|Rakefile|Gemfile|Procfile|CMakeLists\.txt|\.gitignore|\.dockerignore)$/i.test(value)) return true;
++  return /\.(?:txt|md|markdown|log|csv|tsv|json|jsonl|ya?ml|toml|ini|cfg|conf|xml|html?|css|scss|less|js|mjs|cjs|jsx|ts|tsx|py|pyi|rb|php|java|kt|kts|c|h|cc|cpp|cxx|hpp|hh|cs|go|rs|swift|sh|bash|zsh|fish|ps1|bat|cmd|sql|graphql|gql|vue|svelte|astro|gradle|properties|env)$/i.test(value);
++}
++
++function probablyText(bytes) {
++  const sample = bytes.subarray(0, Math.min(bytes.length, 8192));
++  if (!sample.length) return true;
++  let controls = 0;
++  for (const byte of sample) {
++    if (byte === 0) return false;
++    if (byte < 9 || (byte > 13 && byte < 32)) controls += 1;
++  }
++  return controls / sample.length < 0.03;
++}
++
++function decodeText(bytes) {
++  return new TextDecoder("utf-8", { fatal: false }).decode(bytes);
++}
++
++async function inflateRaw(bytes, maxBytes = MAX_ZIP_ENTRY_UNCOMPRESSED_BYTES) {
++  const stream = new Blob([bytes]).stream().pipeThrough(new DecompressionStream("deflate-raw"));
++  const reader = stream.getReader();
++  const chunks = [];
++  let total = 0;
++  try {
++    while (true) {
++      const { value, done } = await reader.read();
++      if (done) break;
++      const chunk = value instanceof Uint8Array ? value : new Uint8Array(value);
++      total += chunk.byteLength;
++      if (total > maxBytes) {
++        try { await reader.cancel("ZIP entry exceeds extraction limit"); } catch (_) {}
++        throw new Error("ZIP entry exceeds extraction limit");
++      }
++      chunks.push(chunk);
++    }
++  } finally {
++    try { reader.releaseLock(); } catch (_) {}
++  }
++  const output = new Uint8Array(total);
++  let offset = 0;
++  for (const chunk of chunks) {
++    output.set(chunk, offset);
++    offset += chunk.byteLength;
++  }
++  return output;
++}
++
++function readU16(view, offset) {
++  return view.getUint16(offset, true);
++}
++
++function readU32(view, offset) {
++  return view.getUint32(offset, true);
++}
++
++async function zipTextPreview(dataBase64, archiveName) {
++  const bytes = base64ToBytes(dataBase64);
++  if (bytes.length < 22) return null;
++  const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
++  const eocdMin = Math.max(0, bytes.length - 22 - 65535);
++  let eocd = -1;
++  for (let i = bytes.length - 22; i >= eocdMin; i--) {
++    if (readU32(view, i) === 0x06054b50) { eocd = i; break; }
++  }
++  if (eocd < 0) return null;
++
++  const totalEntries = Math.min(readU16(view, eocd + 10), MAX_ZIP_TEXT_ENTRIES * 4);
++  let cursor = readU32(view, eocd + 16);
++  const parts = [];
++  let extracted = 0;
++  let scanned = 0;
++  let used = 0;
++  let truncated = false;
++
++  for (let index = 0; index < totalEntries && cursor + 46 <= bytes.length; index++) {
++    if (readU32(view, cursor) !== 0x02014b50) break;
++    const flags = readU16(view, cursor + 8);
++    const method = readU16(view, cursor + 10);
++    const compressedSize = readU32(view, cursor + 20);
++    const uncompressedSize = readU32(view, cursor + 24);
++    const nameLen = readU16(view, cursor + 28);
++    const extraLen = readU16(view, cursor + 30);
++    const commentLen = readU16(view, cursor + 32);
++    const localOffset = readU32(view, cursor + 42);
++    const rawName = bytes.subarray(cursor + 46, cursor + 46 + nameLen);
++    const 
