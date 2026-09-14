@@ -1,0 +1,10 @@
+--- a/popup.js
++++ b/popup.js
+@@ -1,6 +1,6 @@
+ const $ = id => document.getElementById(id);
+ const THEME_KEY = "aiBridgeTheme";
+-const THEMES = new Set(["midnight", "slate", "light"]);
++const THEMES = new Set(["midnight", "slate", "light", "solarized", "ocean", "terminal"]);
+ 
+ function applyTheme(theme) {
+   const chosen = THEMES.has(theme) ? theme : "midnight";

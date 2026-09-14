@@ -1,0 +1,32 @@
+--- a/dashboard.html
++++ b/dashboard.html
+@@ -19,6 +19,9 @@
+             <option value="midnight">Midnight</option>
+             <option value="slate">Slate</option>
+             <option value="light">Light</option>
++            <option value="solarized">Solarized Light</option>
++            <option value="ocean">Ocean</option>
++            <option value="terminal">Terminal</option>
+           </select>
+           <div id="sessionPill" class="session-pill idle">Idle</div>
+         </div>
+@@ -79,6 +82,19 @@
+         </div>
+       </section>
+ 
++      <details id="vaultPanel" class="vault-panel" open>
++        <summary>
++          <span class="vault-summary-title">Shared Vault</span>
++          <span id="relaySummary" class="muted">No relayed files</span>
++        </summary>
++        <div class="vault-body">
++          <div class="field-help">AI-generated downloads are preserved here. ZIP/code text is extracted into a bounded inspection preview, while the original file is still relayed when the destination supports attachments.</div>
++          <div id="relayArtifacts" class="relay-list">
++            <div class="history-empty">No AI-generated files captured yet.</div>
++          </div>
++        </div>
++      </details>
++
+       <section class="panel-section">
+         <div class="field-row">
+           <label for="startSide">First speaker</label>
