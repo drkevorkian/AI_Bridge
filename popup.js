@@ -1,9 +1,9 @@
 const $ = id => document.getElementById(id);
 const THEME_KEY = "aiBridgeTheme";
-const THEMES = new Set(["midnight", "slate", "light"]);
+const THEMES = new Set(["blizzard", "ghostwhite", "midnight", "slate", "light", "solarized", "ocean", "terminal"]);
 
 function applyTheme(theme) {
-  const chosen = THEMES.has(theme) ? theme : "midnight";
+  const chosen = THEMES.has(theme) ? theme : "blizzard";
   document.documentElement.dataset.theme = chosen;
   $("themeSelect").value = chosen;
 }
@@ -59,7 +59,7 @@ async function refresh() {
 }
 
 $("themeSelect").addEventListener("change", async event => {
-  const theme = THEMES.has(event.target.value) ? event.target.value : "midnight";
+  const theme = THEMES.has(event.target.value) ? event.target.value : "blizzard";
   applyTheme(theme);
   await chrome.storage.local.set({ [THEME_KEY]: theme });
 });
