@@ -1,6 +1,6 @@
 const SIDES = ["A", "B", "C"];
 const STATE_VERSION = 3;
-const CONTENT_VERSION = "1.11.0";
+const CONTENT_VERSION = "1.11.3";
 const WORK_MODES = new Set(["relay", "collaborate", "compete", "parallel", "review", "mesh"]);
 const INFINITE_TURNS = -1;
 const MIN_FINITE_TURNS = 1;
@@ -46,6 +46,8 @@ const DEFAULT_STATE = {
 
   currentSide: null,
   startSide: "A",
+  mainSide: "A",
+  pendingMainInterjections: [],
   workMode: "relay",
   workPhase: "relay",
   phasePendingSides: [],
@@ -62,11 +64,16 @@ const DEFAULT_STATE = {
   sourceFiles: [],
   sourceDeliveredBySide: { A: false, B: false, C: false },
   relayArtifacts: [],
+  activeArtifactIds: [],
   lastSentArtifactIdsBySide: { A: [], B: [], C: [] },
 
   lastResponseBySide: {},
   lastSentBySide: {},
   lastDeliveredSeqBySide: { A: 0, B: 0, C: 0 },
+  roundStartedAtBySide: { A: null, B: null, C: null },
+  roundNumberBySide: { A: 0, B: 0, C: 0 },
+  lastRoundDurationMsBySide: { A: null, B: null, C: null },
+  lastRoundCompletedAtBySide: { A: null, B: null, C: null },
 
   awaitingHuman: false,
   pendingHuman: null,
@@ -88,16 +95,22 @@ function cloneDefaultState() {
     sourceFiles: [],
     sourceDeliveredBySide: { A: false, B: false, C: false },
   relayArtifacts: [],
+  activeArtifactIds: [],
   lastSentArtifactIdsBySide: { A: [], B: [], C: [] },
     lastResponseBySide: {},
     lastSentBySide: {},
     lastDeliveredSeqBySide: { A: 0, B: 0, C: 0 },
+    roundStartedAtBySide: { A: null, B: null, C: null },
+    roundNumberBySide: { A: 0, B: 0, C: 0 },
+    lastRoundDurationMsBySide: { A: null, B: null, C: null },
+    lastRoundCompletedAtBySide: { A: null, B: null, C: null },
     phasePendingSides: [],
     phaseSentSides: [],
     phaseCompletedSides: [],
     primaryResponseSeqBySide: { A: null, B: null, C: null },
     reviewResponseSeqBySide: { A: null, B: null, C: null },
     pendingHumanQueue: [],
+    pendingMainInterjections: [],
     suppressedHumanRequests: [],
     transcript: [],
     log: []
@@ -227,6 +240,53 @@ function estimateBase64Bytes(base64) {
   if (!clean) return 0;
   const padding = clean.endsWith("==") ? 2 : clean.endsWith("=") ? 1 : 0;
   return Math.max(0, Math.floor(clean.length * 3 / 4) - padding);
+}
+
+function bytesToBase64(bytes) {
+  const view = bytes instanceof Uint8Array ? bytes : new Uint8Array(bytes || 0);
+  let binary = "";
+  const CHUNK = 0x8000;
+  for (let i = 0; i < view.length; i += CHUNK) {
+    binary += String.fromCharCode(...view.subarray(i, i + CHUNK));
+  }
+  return btoa(binary);
+}
+
+function artifactFetchHostAllowed(rawUrl) {
+  try {
+    const url = new URL(String(rawUrl || ""));
+    if (url.protocol !== "https:" && url.protocol !== "http:") return false;
+    const host = url.hostname.toLowerCase();
+    return host === "chatgpt.com" || host === "chat.openai.com" || host === "grok.com" ||
+      host === "assets.grok.com" || host === "claude.ai" || host === "gemini.google.com" ||
+      host === "copilot.microsoft.com" || host.endsWith(".oaiusercontent.com") ||
+      host === "x.ai" || host === "api.x.ai" || host.endsWith(".x.ai") || host.endsWith(".googleusercontent.com") ||
+      host.endsWith(".anthropic.com") || host.endsWith(".microsoft.com");
+  } catch (_) {
+    return false;
+  }
+}
+
+async function fetchArtifactInBackground(rawUrl, name = "artifact.bin", mime = "") {
+  if (!artifactFetchHostAllowed(rawUrl)) throw new Error("Artifact URL host is not permitted by AI Bridge.");
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 20000);
+  try {
+    const response = await fetch(String(rawUrl), { credentials: "include", redirect: "follow", signal: controller.signal });
+    if (!response.ok) throw new Error(`Artifact fetch failed with HTTP ${response.status}.`);
+    const declared = Number(response.headers.get("content-length") || 0);
+    if (declared > MAX_ARTIFACT_FILE_BYTES) throw new Error("Artifact exceeds the per-file relay limit.");
+    const bytes = new Uint8Array(await response.arrayBuffer());
+    if (!bytes.length || bytes.byteLength > MAX_ARTIFACT_FILE_BYTES) throw new Error("Artifact is empty or too large.");
+    return {
+      name: sanitizeArtifactName(name, "artifact.bin"),
+      mime: String(mime || response.headers.get("content-type") || "application/octet-stream").slice(0, 160),
+      size: bytes.byteLength,
+      dataBase64: bytesToBase64(bytes)
+    };
+  } finally {
+    clearTimeout(timer);
+  }
 }
 
 function artifactSummary(record) {
@@ -461,6 +521,37 @@ function normalizeIncomingArtifacts(rawArtifacts) {
   return out;
 }
 
+function artifactSummariesFromStore() {
+  return Object.values(artifactStore || {})
+    .filter(record => record?.id && record?.dataBase64)
+    .sort((a, b) => (Number(a.time) || 0) - (Number(b.time) || 0))
+    .map(artifactSummary);
+}
+
+function resetSessionArtifactRouting() {
+  state.activeArtifactIds = [];
+  state.lastSentArtifactIdsBySide = { A: [], B: [], C: [] };
+}
+
+function pruneArtifactVault() {
+  let records = Object.values(artifactStore || {})
+    .filter(record => record?.id && record?.dataBase64)
+    .sort((a, b) => (Number(a.time) || 0) - (Number(b.time) || 0));
+
+  const retainedBytes = () => records.reduce((sum, record) => sum + (Number(record.size) || 0), 0);
+  while (records.length > MAX_RELAY_ARTIFACTS || (records.length > 1 && retainedBytes() > MAX_RELAY_ARTIFACT_TOTAL_BYTES)) {
+    const evicted = records.shift();
+    if (evicted?.id) delete artifactStore[evicted.id];
+  }
+
+  const retainedIds = new Set(records.map(record => record.id));
+  state.relayArtifacts = records.map(artifactSummary);
+  state.activeArtifactIds = (state.activeArtifactIds || []).filter(id => retainedIds.has(id));
+  for (const side of SIDES) {
+    state.lastSentArtifactIdsBySide[side] = (state.lastSentArtifactIdsBySide?.[side] || []).filter(id => retainedIds.has(id));
+  }
+}
+
 async function saveArtifacts() {
   await chrome.storage.local.set({ bridgeArtifacts: artifactStore });
 }
@@ -468,6 +559,7 @@ async function saveArtifacts() {
 async function clearArtifacts() {
   artifactStore = {};
   state.relayArtifacts = [];
+  state.activeArtifactIds = [];
   state.lastSentArtifactIdsBySide = { A: [], B: [], C: [] };
   await chrome.storage.local.remove("bridgeArtifacts");
 }
@@ -494,18 +586,15 @@ async function storeResponseArtifacts(side, seq, rawArtifacts) {
       status: inspection.status || "Raw file"
     };
     artifactStore[id] = record;
-    state.relayArtifacts.push(artifactSummary(record));
+    state.activeArtifactIds = Array.isArray(state.activeArtifactIds) ? state.activeArtifactIds : [];
+    state.activeArtifactIds.push(id);
     ids.push(id);
   }
 
-  // Keep a bounded shared artifact shelf and drop byte payloads for evicted files.
-  const evictOne = () => {
-    const evicted = state.relayArtifacts.shift();
-    if (evicted) delete artifactStore[evicted.id];
-  };
-  while (state.relayArtifacts.length > MAX_RELAY_ARTIFACTS) evictOne();
-  const retainedBytes = () => state.relayArtifacts.reduce((sum, item) => sum + (Number(item.size) || 0), 0);
-  while (state.relayArtifacts.length > 1 && retainedBytes() > MAX_RELAY_ARTIFACT_TOTAL_BYTES) evictOne();
+  // The Vault is persistent across Bridge sessions. Keep it bounded, but never
+  // erase it just because a new session starts. Session routing uses
+  // activeArtifactIds so old Vault files are not silently re-sent.
+  pruneArtifactVault();
   await saveArtifacts();
   return ids;
 }
@@ -733,6 +822,9 @@ async function loadState() {
         ...(bridgeState.sourceDeliveredBySide || {})
       },
       relayArtifacts: Array.isArray(bridgeState.relayArtifacts) ? bridgeState.relayArtifacts : [],
+      activeArtifactIds: Array.isArray(bridgeState.activeArtifactIds)
+        ? bridgeState.activeArtifactIds
+        : (bridgeState.sessionActive && Array.isArray(bridgeState.relayArtifacts) ? bridgeState.relayArtifacts.map(item => item?.id).filter(Boolean) : []),
       lastSentArtifactIdsBySide: { A: [], B: [], C: [], ...(bridgeState.lastSentArtifactIdsBySide || {}) },
       lastResponseBySide: bridgeState.lastResponseBySide || {},
       lastSentBySide: bridgeState.lastSentBySide || {},
@@ -742,17 +834,23 @@ async function loadState() {
         C: 0,
         ...(bridgeState.lastDeliveredSeqBySide || {})
       },
+      roundStartedAtBySide: { A: null, B: null, C: null, ...(bridgeState.roundStartedAtBySide || {}) },
+      roundNumberBySide: { A: 0, B: 0, C: 0, ...(bridgeState.roundNumberBySide || {}) },
+      lastRoundDurationMsBySide: { A: null, B: null, C: null, ...(bridgeState.lastRoundDurationMsBySide || {}) },
+      lastRoundCompletedAtBySide: { A: null, B: null, C: null, ...(bridgeState.lastRoundCompletedAtBySide || {}) },
       phasePendingSides: Array.isArray(bridgeState.phasePendingSides) ? bridgeState.phasePendingSides.filter(side => SIDES.includes(side)) : [],
       phaseSentSides: Array.isArray(bridgeState.phaseSentSides) ? bridgeState.phaseSentSides.filter(side => SIDES.includes(side)) : [],
       phaseCompletedSides: Array.isArray(bridgeState.phaseCompletedSides) ? bridgeState.phaseCompletedSides.filter(side => SIDES.includes(side)) : [],
       primaryResponseSeqBySide: { A: null, B: null, C: null, ...(bridgeState.primaryResponseSeqBySide || {}) },
       reviewResponseSeqBySide: { A: null, B: null, C: null, ...(bridgeState.reviewResponseSeqBySide || {}) },
       pendingHumanQueue: Array.isArray(bridgeState.pendingHumanQueue) ? bridgeState.pendingHumanQueue : [],
+      pendingMainInterjections: Array.isArray(bridgeState.pendingMainInterjections) ? bridgeState.pendingMainInterjections : [],
       suppressedHumanRequests: migrateSuppressedHumanRequests(bridgeState),
       transcript: Array.isArray(bridgeState.transcript) ? bridgeState.transcript : [],
       log: Array.isArray(bridgeState.log) ? bridgeState.log : []
     };
     state.workMode = normalizeWorkMode(state.workMode);
+    state.mainSide = SIDES.includes(state.mainSide) ? state.mainSide : (SIDES.includes(state.startSide) ? state.startSide : "A");
     if (!isBatchWorkMode(state.workMode)) {
       state.workPhase = state.workMode === "collaborate" ? "collaborate" : (state.workMode === "mesh" ? "mesh" : "relay");
       state.phasePendingSides = [];
@@ -761,7 +859,10 @@ async function loadState() {
     } else if (!['primary', 'review'].includes(state.workPhase)) {
       state.workPhase = 'primary';
     }
-    state.relayArtifacts = (state.relayArtifacts || []).filter(item => item?.id && artifactStore[item.id]);
+    // bridgeArtifacts is the durable source of truth. Rebuild the visible Vault
+    // index from it so files survive service-worker/browser restarts and new sessions.
+    state.relayArtifacts = artifactSummariesFromStore();
+    state.activeArtifactIds = (state.activeArtifactIds || []).filter(id => Boolean(artifactStore[id]));
     try {
       state.maxTurns = normalizeMaxTurns(state.maxTurns);
     } catch (_) {
@@ -781,6 +882,8 @@ async function loadState() {
       state.maxTurns = Number(bridgeState.maxTurns) || state.maxTurns;
       state.delayMs = Number(bridgeState.delayMs) || state.delayMs;
     }
+    state.relayArtifacts = artifactSummariesFromStore();
+    state.activeArtifactIds = [];
     await saveState();
   }
 
@@ -855,20 +958,21 @@ function normalizeTargetToken(raw) {
 function resolveCommandTarget(raw, fromSide = null) {
   const token = normalizeTargetToken(raw);
   if (!token) return null;
+
   const sideMatch = token.match(/(?:^|\b)ai\s*[-:]?\s*([abc])(?:\b|$)/i) || token.match(/^([abc])$/i);
   if (sideMatch) {
     const side = String(sideMatch[1]).toUpperCase();
     return side === fromSide ? null : side;
   }
 
-  for (const side of SIDES) {
+  const matches = SIDES.filter(side => {
     const label = normalizeTargetToken(labelForSide(side));
-    if (!label) continue;
-    if (token === label || token.includes(label) || label.includes(token)) {
-      return side === fromSide ? null : side;
-    }
-  }
-  return null;
+    if (!label) return false;
+    return token === label || token.includes(label) || label.includes(token);
+  });
+
+  if (matches.length !== 1) return null;
+  return matches[0] === fromSide ? null : matches[0];
 }
 
 function extractRegisteredLlmCommand(text, fromSide) {
@@ -1055,12 +1159,90 @@ function recordTranscript(type, { side = null, text = "", ...extra } = {}) {
   return entry;
 }
 
+function beginRoundTimer(side, startedAt = Date.now()) {
+  if (!SIDES.includes(side)) return null;
+  const when = Number.isFinite(Number(startedAt)) ? Number(startedAt) : Date.now();
+  state.roundStartedAtBySide = { A: null, B: null, C: null, ...(state.roundStartedAtBySide || {}) };
+  state.roundNumberBySide = { A: 0, B: 0, C: 0, ...(state.roundNumberBySide || {}) };
+  state.roundStartedAtBySide[side] = when;
+  state.roundNumberBySide[side] = Math.max(0, Number(state.roundNumberBySide[side]) || 0) + 1;
+  return { startedAt: when, roundNumber: state.roundNumberBySide[side] };
+}
+
+function completeRoundTimer(side, completedAt = Date.now()) {
+  if (!SIDES.includes(side)) return { roundNumber: null, durationMs: null, completedAt: null };
+  state.roundStartedAtBySide = { A: null, B: null, C: null, ...(state.roundStartedAtBySide || {}) };
+  state.roundNumberBySide = { A: 0, B: 0, C: 0, ...(state.roundNumberBySide || {}) };
+  state.lastRoundDurationMsBySide = { A: null, B: null, C: null, ...(state.lastRoundDurationMsBySide || {}) };
+  state.lastRoundCompletedAtBySide = { A: null, B: null, C: null, ...(state.lastRoundCompletedAtBySide || {}) };
+
+  const start = Number(state.roundStartedAtBySide[side]);
+  const requestedEnd = Number(completedAt);
+  const end = Number.isFinite(requestedEnd) && requestedEnd > 0 ? requestedEnd : Date.now();
+  const roundNumber = Math.max(0, Number(state.roundNumberBySide[side]) || 0) || null;
+  if (!Number.isFinite(start) || start <= 0) {
+    return { roundNumber, durationMs: null, completedAt: end };
+  }
+
+  const safeEnd = Math.max(start, end);
+  const durationMs = Math.max(0, safeEnd - start);
+  state.roundStartedAtBySide[side] = null;
+  state.lastRoundDurationMsBySide[side] = durationMs;
+  state.lastRoundCompletedAtBySide[side] = safeEnd;
+  return { roundNumber, durationMs, completedAt: safeEnd };
+}
+
+function pendingMainInterjectionBundle(side) {
+  if (!SIDES.includes(side) || side !== state.mainSide) {
+    return { ids: [], text: "" };
+  }
+
+  const items = Array.isArray(state.pendingMainInterjections) ? state.pendingMainInterjections : [];
+  if (!items.length) return { ids: [], text: "" };
+
+  return {
+    ids: items.map(item => String(item.id || "")).filter(Boolean),
+    text: items.map(item => String(item.text || "").trim()).filter(Boolean).join("\n\n")
+  };
+}
+
+function consumeMainInterjections(side, ids = []) {
+  if (side !== state.mainSide || !Array.isArray(ids) || !ids.length) return 0;
+  const wanted = new Set(ids.map(String));
+  const queued = Array.isArray(state.pendingMainInterjections) ? state.pendingMainInterjections : [];
+  const consumed = queued.filter(item => wanted.has(String(item?.id || "")));
+  if (!consumed.length) return 0;
+
+  state.pendingMainInterjections = queued.filter(item => !wanted.has(String(item?.id || "")));
+  const deliveredAt = Date.now();
+  for (const item of consumed) {
+    recordTranscript("human", {
+      text: String(item.text || ""),
+      interjection: true,
+      queuedForMain: true,
+      mainSide: state.mainSide,
+      queuedAt: Number(item.time) || deliveredAt,
+      deliveredToMainAt: deliveredAt
+    });
+  }
+  state.lastDeliveredSeqBySide[state.mainSide] = latestSeq();
+  appendLog({
+    time: deliveredAt,
+    type: "human-interjection-delivered",
+    side: state.mainSide,
+    text: `Delivered ${consumed.length} queued human interjection${consumed.length === 1 ? "" : "s"} to Main AI ${state.mainSide}`
+  });
+  return consumed.length;
+}
+
 function initialMessage(side) {
   const sourceContext = sourceSectionForSide(side);
   const batch = isBatchWorkMode();
+  const mainInterjections = pendingMainInterjectionBundle(side);
   return {
     deliveredSeq: latestSeq(),
     deliveredSources: Boolean(sourceContext),
+    mainInterjectionIds: mainInterjections.ids,
     text: [
       teamContext(side),
       "",
@@ -1069,6 +1251,7 @@ function initialMessage(side) {
       "PRIMARY OBJECTIVE FROM THE HUMAN CONTROLLER:",
       state.initialPrompt,
       ...(sourceContext ? ["", sourceContext] : []),
+      ...(mainInterjections.text ? ["", "QUEUED HUMAN INTERJECTION FOR MAIN AI:", mainInterjections.text] : []),
       "",
       batch
         ? "Begin your independent primary work now. Return one complete response when finished."
@@ -1083,19 +1266,25 @@ function initialMessage(side) {
 
 function normalTurnMessage(side) {
   const delivered = Number(state.lastDeliveredSeqBySide[side] || 0);
-  const unseen = state.transcript.filter(entry => entry.seq > delivered && !(entry.type === "response" && entry.side === side));
+  const unseen = state.transcript.filter(entry =>
+    entry.seq > delivered &&
+    !(entry.type === "response" && entry.side === side) &&
+    !(side === state.mainSide && entry.type === "human" && entry.interjection)
+  );
   const context = boundedTranscript(unseen);
   const deliveredSeq = latestSeq();
   const sourceContext = sourceSectionForSide(side);
   const artifactIds = artifactIdsFromEntries(unseen);
   const artifacts = artifactRecordsForIds(artifactIds);
   const attachmentContext = artifactNote(artifacts);
+  const mainInterjections = pendingMainInterjectionBundle(side);
 
   return {
     deliveredSeq,
     deliveredSources: Boolean(sourceContext),
     artifactIds,
     artifacts,
+    mainInterjectionIds: mainInterjections.ids,
     text: [
       teamContext(side),
       "",
@@ -1105,6 +1294,7 @@ function normalTurnMessage(side) {
       state.initialPrompt,
       ...(sourceContext ? ["", sourceContext] : []),
       ...(attachmentContext ? ["", attachmentContext] : []),
+      ...(mainInterjections.text ? ["", "QUEUED HUMAN INTERJECTION FOR MAIN AI:", mainInterjections.text] : []),
       "",
       "SHARED UPDATES SINCE YOUR LAST HANDOFF:",
       context || "No new shared updates were recorded.",
@@ -1119,13 +1309,19 @@ function directTurnMessage(fromSide, targetSide, entry) {
   const artifactIds = Array.isArray(entry?.artifactIds) ? entry.artifactIds : [];
   const artifacts = artifactRecordsForIds(artifactIds);
   const attachmentContext = artifactNote(artifacts);
-  const recentHuman = state.transcript.filter(item => item.type === "human" && item.seq > Number(state.lastDeliveredSeqBySide[targetSide] || 0));
+  const recentHuman = state.transcript.filter(item =>
+    item.type === "human" &&
+    item.seq > Number(state.lastDeliveredSeqBySide[targetSide] || 0) &&
+    !(targetSide === state.mainSide && item.interjection)
+  );
   const humanContext = boundedTranscript(recentHuman, 12000);
+  const mainInterjections = pendingMainInterjectionBundle(targetSide);
   return {
     deliveredSeq: Number(entry?.seq) || latestSeq(),
     deliveredSources: Boolean(sourceContext),
     artifactIds,
     artifacts,
+    mainInterjectionIds: mainInterjections.ids,
     text: [
       teamContext(targetSide),
       "",
@@ -1136,6 +1332,7 @@ function directTurnMessage(fromSide, targetSide, entry) {
       ...(sourceContext ? ["", sourceContext] : []),
       ...(attachmentContext ? ["", attachmentContext] : []),
       ...(humanContext ? ["", "RECENT HUMAN CONTROLLER UPDATES:", humanContext] : []),
+      ...(mainInterjections.text ? ["", "QUEUED HUMAN INTERJECTION FOR MAIN AI:", mainInterjections.text] : []),
       "",
       `DIRECT MESSAGE FROM AI ${fromSide} (${labelForSide(fromSide)}):`,
       String(entry?.text || "").trim() || "[The sender routed the turn to you without an additional message body.]",
@@ -1156,16 +1353,20 @@ function primaryResponseEntries() {
 function reviewTurnMessage(side) {
   const peers = primaryResponseEntries().filter(entry => entry.side !== side);
   const context = boundedTranscript(peers, 70000);
-  const humanNotes = state.transcript.filter(entry => entry.type === "human" && entry.interjection);
+  const humanNotes = state.transcript.filter(entry =>
+    entry.type === "human" && entry.interjection && side !== state.mainSide
+  );
   const humanContext = boundedTranscript(humanNotes, 12000);
   const artifactIds = artifactIdsFromEntries(peers);
   const artifacts = artifactRecordsForIds(artifactIds);
   const attachmentContext = artifactNote(artifacts);
+  const mainInterjections = pendingMainInterjectionBundle(side);
   return {
     deliveredSeq: latestSeq(),
     deliveredSources: false,
     artifactIds,
     artifacts,
+    mainInterjectionIds: mainInterjections.ids,
     text: [
       teamContext(side),
       "",
@@ -1178,6 +1379,7 @@ function reviewTurnMessage(side) {
       "OTHER AIS' PRIMARY RESPONSES TO REVIEW:",
       context || "No peer primary responses were available.",
       ...(humanContext ? ["", "HUMAN CONTROLLER INTERJECTIONS TO INCORPORATE:", humanContext] : []),
+      ...(mainInterjections.text ? ["", "QUEUED HUMAN INTERJECTION FOR MAIN AI:", mainInterjections.text] : []),
       "",
       "Return your critique as one complete review response. Incorporate any human interjection above. Do not ask the other AIs questions; critique the material you have."
     ].join("\n")
@@ -1212,6 +1414,7 @@ async function sendBatchPhase(sides = pendingUnsentSides()) {
       deliveredSources: outgoing.deliveredSources,
       artifactIds: outgoing.artifactIds || [],
       artifacts: outgoing.artifacts || [],
+      mainInterjectionIds: outgoing.mainInterjectionIds || [],
       saveRecord: false
     });
   }));
@@ -1257,16 +1460,20 @@ async function advanceBatchIfReady() {
 }
 
 function recoveryMessage(side) {
-  const recent = boundedTranscript(state.transcript);
+  const recent = boundedTranscript(state.transcript.filter(entry =>
+    !(side === state.mainSide && entry.type === "human" && entry.interjection)
+  ));
   const sourceContext = sourceSectionForSide(side, { force: true });
-  const artifactIds = (state.relayArtifacts || []).map(item => item.id).filter(id => Boolean(artifactStore[id]));
+  const artifactIds = (state.activeArtifactIds || []).filter(id => Boolean(artifactStore[id]));
   const artifacts = artifactRecordsForIds(artifactIds);
   const attachmentContext = artifactNote(artifacts);
+  const mainInterjections = pendingMainInterjectionBundle(side);
   return {
     deliveredSeq: latestSeq(),
     deliveredSources: Boolean(sourceContext),
     artifactIds,
     artifacts,
+    mainInterjectionIds: mainInterjections.ids,
     text: [
       teamContext(side),
       "",
@@ -1279,6 +1486,7 @@ function recoveryMessage(side) {
       state.initialPrompt,
       ...(sourceContext ? ["", sourceContext] : []),
       ...(attachmentContext ? ["", attachmentContext] : []),
+      ...(mainInterjections.text ? ["", "QUEUED HUMAN INTERJECTION FOR MAIN AI:", mainInterjections.text] : []),
       "",
       "RECENT SHARED TRANSCRIPT:",
       recent || "No completed AI responses have been recorded yet.",
@@ -1405,7 +1613,7 @@ async function ensureTabListener(tabId) {
   throw new Error("The page listener could not be established after reinjection.");
 }
 
-async function sendToSide(side, text, { record = true, deliveredSeq = null, deliveredSources = false, artifactIds = [], artifacts = [], saveRecord = true } = {}) {
+async function sendToSide(side, text, { record = true, deliveredSeq = null, deliveredSources = false, artifactIds = [], artifacts = [], mainInterjectionIds = [], saveRecord = true } = {}) {
   const tabId = tabForSide(side);
   await ensureTabListener(tabId);
 
@@ -1432,6 +1640,15 @@ async function sendToSide(side, text, { record = true, deliveredSeq = null, deli
     throw new Error(`The page accepted ${Number(result.uploadedCount) || 0} of ${expectedArtifacts} relay files and no complete text fallback was available.`);
   }
 
+  const round = beginRoundTimer(side);
+  appendLog({
+    time: round?.startedAt || Date.now(),
+    type: "round-start",
+    side,
+    roundNumber: round?.roundNumber || null,
+    text: `AI ${side} round ${round?.roundNumber || "?"} timer started after prompt submission`
+  });
+
   if (record) {
     // A fresh prompt can legitimately produce the exact same wording as this
     // agent's previous turn. Clear the per-agent response guard only after the
@@ -1441,6 +1658,9 @@ async function sendToSide(side, text, { record = true, deliveredSeq = null, deli
     if (Number.isFinite(Number(deliveredSeq))) state.lastDeliveredSeqBySide[side] = Number(deliveredSeq);
     if (deliveredSources) state.sourceDeliveredBySide[side] = true;
     state.lastSentArtifactIdsBySide[side] = Array.isArray(artifactIds) ? [...artifactIds] : [];
+    if (Array.isArray(mainInterjectionIds) && mainInterjectionIds.length) {
+      consumeMainInterjections(side, mainInterjectionIds);
+    }
     appendLog({ time: Date.now(), type: "sent", side, text: `Sent prompt to AI ${side}`, chars: String(text || "").length });
     if (saveRecord) await saveState();
   }
@@ -1586,7 +1806,9 @@ async function endBridge(reason = "Stopped") {
   state.awaitingHuman = false;
   state.pendingHuman = null;
   state.pendingHumanQueue = [];
+  state.pendingMainInterjections = [];
   state.suppressedHumanRequests = [];
+  state.roundStartedAtBySide = { A: null, B: null, C: null };
   appendLog({ time: Date.now(), type: "system", text: reason });
   await clearAttention();
   await saveState();
@@ -1695,14 +1917,18 @@ async function reopenSuppressedHumanRequest(requestId) {
   return request;
 }
 
-async function handleBatchCompletedResponse(side, text, { relay = true, artifacts = [] } = {}) {
+async function handleBatchCompletedResponse(side, text, { relay = true, artifacts = [], completedAt = null } = {}) {
   if (!side || !state.phasePendingSides.includes(side)) return { ok: false, ignored: true };
   if (!text) return { ok: false, ignored: true };
   if (state.lastResponseBySide[side] === text) return { ok: false, duplicate: true };
 
   state.lastResponseBySide[side] = text;
   const phase = state.workPhase;
-  const entry = recordTranscript("response", { side, text, workMode: state.workMode, workPhase: phase });
+  const round = completeRoundTimer(side, completedAt);
+  const entry = recordTranscript("response", {
+    side, text, workMode: state.workMode, workPhase: phase,
+    ...(round.durationMs !== null ? { roundDurationMs: round.durationMs, roundNumber: round.roundNumber, roundCompletedAt: round.completedAt } : {})
+  });
   const artifactIds = await storeResponseArtifacts(side, entry.seq, artifacts);
   if (artifactIds.length) entry.artifactIds = artifactIds;
   state.turn += 1;
@@ -1710,7 +1936,7 @@ async function handleBatchCompletedResponse(side, text, { relay = true, artifact
   if (!state.phaseCompletedSides.includes(side)) state.phaseCompletedSides.push(side);
   if (phase === "review") state.reviewResponseSeqBySide[side] = entry.seq;
   else state.primaryResponseSeqBySide[side] = entry.seq;
-  appendLog({ time: Date.now(), type: "response", side, seq: entry.seq, text: `AI ${side} completed ${phaseLabel(phase).toLowerCase()} response #${entry.seq}`, chars: String(text || "").length });
+  appendLog({ time: Date.now(), type: "response", side, seq: entry.seq, roundNumber: round.roundNumber, durationMs: round.durationMs, text: `AI ${side} completed ${phaseLabel(phase).toLowerCase()} response #${entry.seq}${round.durationMs !== null ? ` in ${round.durationMs} ms` : ""}`, chars: String(text || "").length });
 
   const humanPrompt = extractHumanRequest(text);
   if (humanPrompt) await queueHumanRequest(side, text, humanPrompt);
@@ -1732,8 +1958,8 @@ async function handleBatchCompletedResponse(side, text, { relay = true, artifact
   return { ok: true, ...transition };
 }
 
-async function handleCompletedResponse(side, text, { relay = true, artifacts = [] } = {}) {
-  if (isBatchWorkMode()) return handleBatchCompletedResponse(side, text, { relay, artifacts });
+async function handleCompletedResponse(side, text, { relay = true, artifacts = [], completedAt = null } = {}) {
+  if (isBatchWorkMode()) return handleBatchCompletedResponse(side, text, { relay, artifacts, completedAt });
   if (!side || side !== state.currentSide) return { ok: false, ignored: true };
   if (!text) return { ok: false, ignored: true };
   if (state.lastResponseBySide[side] === text) return { ok: false, duplicate: true };
@@ -1741,11 +1967,13 @@ async function handleCompletedResponse(side, text, { relay = true, artifacts = [
   const command = extractRegisteredLlmCommand(text, side);
   const entryText = command ? command.body : text;
   state.lastResponseBySide[side] = text;
+  const round = completeRoundTimer(side, completedAt);
   const entry = recordTranscript("response", {
     side,
     text: entryText,
     workMode: state.workMode,
     workPhase: state.workPhase,
+    ...(round.durationMs !== null ? { roundDurationMs: round.durationMs, roundNumber: round.roundNumber, roundCompletedAt: round.completedAt } : {}),
     ...(command ? {
       bridgeCommand: command.id,
       directTargetRaw: command.targetRaw,
@@ -1755,7 +1983,7 @@ async function handleCompletedResponse(side, text, { relay = true, artifacts = [
   const artifactIds = await storeResponseArtifacts(side, entry.seq, artifacts);
   if (artifactIds.length) entry.artifactIds = artifactIds;
   state.turn += 1;
-  appendLog({ time: Date.now(), type: "response", side, seq: entry.seq, text: `AI ${side} completed response #${entry.seq}`, chars: String(entryText || "").length });
+  appendLog({ time: Date.now(), type: "response", side, seq: entry.seq, roundNumber: round.roundNumber, durationMs: round.durationMs, text: `AI ${side} completed response #${entry.seq}${round.durationMs !== null ? ` in ${round.durationMs} ms` : ""}`, chars: String(entryText || "").length });
 
   const humanPrompt = extractHumanRequest(entryText);
   if (humanPrompt) {
@@ -1804,7 +2032,7 @@ async function handleCompletedResponse(side, text, { relay = true, artifacts = [
     ? directTurnMessage(side, targetSide, entry)
     : normalTurnMessage(targetSide);
   try {
-    await sendToSide(targetSide, outgoing.text, { deliveredSeq: outgoing.deliveredSeq, deliveredSources: outgoing.deliveredSources, artifactIds: outgoing.artifactIds, artifacts: outgoing.artifacts });
+    await sendToSide(targetSide, outgoing.text, { deliveredSeq: outgoing.deliveredSeq, deliveredSources: outgoing.deliveredSources, artifactIds: outgoing.artifactIds, artifacts: outgoing.artifacts, mainInterjectionIds: outgoing.mainInterjectionIds || [] });
     return { ok: true, direct: Boolean(command?.targetSide), targetSide };
   } catch (err) {
     await pauseBridge(`Could not send to AI ${targetSide}: ${err.message}`);
@@ -1834,6 +2062,37 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
       return;
     }
 
+    if (msg.type === "AI_BRIDGE_FETCH_ARTIFACT") {
+      if (!sender.tab) throw new Error("Artifact fetch must originate from a supported AI tab.");
+      const artifact = await fetchArtifactInBackground(msg.url, msg.name, msg.mime);
+      sendResponse({ ok: true, artifact });
+      return;
+    }
+
+    if (msg.type === "AI_BRIDGE_DOWNLOAD_ARTIFACT") {
+      const id = String(msg.id || "");
+      const record = artifactStore[id];
+      if (!record?.dataBase64) throw new Error("That Vault file is no longer available.");
+      const filename = sanitizeArtifactName(record.name, "artifact.bin");
+      const mime = String(record.mime || "application/octet-stream").replace(/[;,\r\n]/g, "") || "application/octet-stream";
+      const downloadId = await chrome.downloads.download({
+        url: `data:${mime};base64,${record.dataBase64}`,
+        filename,
+        saveAs: Boolean(msg.saveAs !== false),
+        conflictAction: "uniquify"
+      });
+      sendResponse({ ok: true, downloadId });
+      return;
+    }
+
+    if (msg.type === "AI_BRIDGE_CLEAR_ARTIFACTS") {
+      if (state.sessionActive) throw new Error("Stop the active Bridge session before clearing the persistent Vault.");
+      await clearArtifacts();
+      await saveState();
+      sendResponse({ ok: true });
+      return;
+    }
+
     if (msg.type === "AI_BRIDGE_CLEAR_HISTORY") {
       const kind = String(msg.kind || "all");
       if (kind === "jobs" || kind === "all") history.jobs = [];
@@ -1859,6 +2118,8 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
       fresh.running = false;
       fresh.paused = false;
       fresh.startSide = SIDES.includes(msg.startSide) ? msg.startSide : "A";
+      fresh.mainSide = fresh.startSide;
+      fresh.pendingMainInterjections = [];
       fresh.workMode = normalizeWorkMode(msg.workMode);
       fresh.workPhase = isBatchWorkMode(fresh.workMode) ? "primary" : (fresh.workMode === "collaborate" ? "collaborate" : (fresh.workMode === "mesh" ? "mesh" : "relay"));
       fresh.currentSide = isBatchWorkMode(fresh.workMode) ? null : fresh.startSide;
@@ -1881,6 +2142,9 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
       }
 
       const previousState = state;
+      // Preserve the durable Vault index while starting a clean routing session.
+      fresh.relayArtifacts = artifactSummariesFromStore();
+      fresh.activeArtifactIds = [];
       state = fresh;
       try {
         await bindTabsFromMessage(msg);
@@ -1894,7 +2158,7 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
       }
 
       state.running = true;
-      await clearArtifacts();
+      resetSessionArtifactRouting();
       await clearAttention();
       await saveState();
 
@@ -1905,7 +2169,7 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
           await sendBatchPhase();
         } else {
           const outgoing = initialMessage(state.startSide);
-          await sendToSide(state.startSide, outgoing.text, { deliveredSeq: outgoing.deliveredSeq, deliveredSources: outgoing.deliveredSources });
+          await sendToSide(state.startSide, outgoing.text, { deliveredSeq: outgoing.deliveredSeq, deliveredSources: outgoing.deliveredSources, mainInterjectionIds: outgoing.mainInterjectionIds || [] });
         }
       } catch (err) {
         await pauseBridge(`Initial send failed: ${err.message}`);
@@ -1959,7 +2223,7 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
           state.currentSide = SIDES.includes(state.currentSide) ? state.currentSide : state.startSide;
           delete state.lastResponseBySide[state.currentSide];
           const outgoing = recoveryMessage(state.currentSide);
-          await sendToSide(state.currentSide, outgoing.text, { deliveredSeq: outgoing.deliveredSeq, deliveredSources: outgoing.deliveredSources, artifactIds: outgoing.artifactIds, artifacts: outgoing.artifacts });
+          await sendToSide(state.currentSide, outgoing.text, { deliveredSeq: outgoing.deliveredSeq, deliveredSources: outgoing.deliveredSources, artifactIds: outgoing.artifactIds, artifacts: outgoing.artifacts, mainInterjectionIds: outgoing.mainInterjectionIds || [] });
         }
       } catch (err) {
         await pauseBridge(`Resume failed: ${err.message}`);
@@ -2004,15 +2268,30 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
       if (state.awaitingHuman) throw new Error("Answer the pending human-input request first; use the modal so the requesting AI receives your answer directly.");
       const text = String(msg.text || "").trim();
       if (!text) throw new Error("Type an interjection first.");
-      const entry = recordTranscript("human", { text, interjection: true });
-      appendLog({ time: Date.now(), type: "human-interjection", seq: entry.seq, text: "Human controller interjected into shared context", chars: text.length });
+
+      state.mainSide = SIDES.includes(state.mainSide) ? state.mainSide : (SIDES.includes(state.startSide) ? state.startSide : "A");
+      state.pendingMainInterjections = Array.isArray(state.pendingMainInterjections) ? state.pendingMainInterjections : [];
+      const item = {
+        id: `interjection-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`,
+        time: Date.now(),
+        text,
+        mainSide: state.mainSide
+      };
+      state.pendingMainInterjections.push(item);
+      appendLog({
+        time: item.time,
+        type: "human-interjection-queued",
+        side: state.mainSide,
+        text: `Human interjection queued for Main AI ${state.mainSide} on its next turn`,
+        chars: text.length
+      });
       await saveState();
       sendResponse({
         ok: true,
-        seq: entry.seq,
-        delivery: isBatchWorkMode()
-          ? (state.workMode === "review" && state.workPhase === "primary" ? "review-phase" : "next-scheduled-handoff")
-          : "next-scheduled-handoff"
+        interjectionId: item.id,
+        mainSide: state.mainSide,
+        mainLabel: labelForSide(state.mainSide),
+        delivery: "main-next-turn"
       });
       return;
     }
@@ -2039,39 +2318,49 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
 
       const pending = state.pendingHuman;
       const requestingSide = pending.requestingSide;
+      const outgoing = humanReplyMessage(requestingSide, pending.prompt, answer);
+
+      await sendToSide(requestingSide, outgoing.text, { deliveredSeq: outgoing.deliveredSeq });
+
       recordTranscript("human", {
         text: answer,
         question: pending.prompt,
         requestedBySide: requestingSide
       });
-
+      // The requesting AI already received this answer in the successful direct
+      // reply, so do not echo the same human answer back on its next team turn.
+      state.lastDeliveredSeqBySide[requestingSide] = latestSeq();
       state.awaitingHuman = false;
       state.pendingHuman = null;
-      delete state.lastResponseBySide[requestingSide];
       appendLog({ time: Date.now(), type: "human", side: requestingSide, text: `Human replied to AI ${requestingSide}`, chars: answer.length });
 
       if (isBatchWorkMode()) {
         state.phaseCompletedSides = state.phaseCompletedSides.filter(side => side !== requestingSide);
         if (!state.phasePendingSides.includes(requestingSide)) state.phasePendingSides.push(requestingSide);
-        const outgoing = humanReplyMessage(requestingSide, pending.prompt, answer);
-        await sendToSide(requestingSide, outgoing.text, { deliveredSeq: outgoing.deliveredSeq });
 
         const nextRequest = state.pendingHumanQueue.shift() || null;
         if (nextRequest) {
           state.awaitingHuman = true;
           state.pendingHuman = nextRequest;
+          state.running = false;
+          state.paused = true;
+          state.pauseReason = `Human input still pending from ${nextRequest.requestingLabel || `AI ${nextRequest.requestingSide}`}.`;
           await showHumanAttention(nextRequest.requestingSide, nextRequest.prompt);
         } else {
+          state.running = true;
+          state.paused = false;
+          state.pauseReason = "";
           await clearAttention();
         }
-        await saveState();
       } else {
         state.currentSide = requestingSide;
+        state.running = true;
+        state.paused = false;
+        state.pauseReason = "";
         await clearAttention();
-        await saveState();
-        const outgoing = humanReplyMessage(requestingSide, pending.prompt, answer);
-        await sendToSide(requestingSide, outgoing.text, { deliveredSeq: outgoing.deliveredSeq });
       }
+
+      await saveState();
       sendResponse({ ok: true });
       return;
     }
@@ -2092,7 +2381,18 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
       // If the user manually paused while the current AI was still generating,
       // capture that completed work and advance the cursor, but do not relay it.
       const relay = state.running;
-      const task = () => handleCompletedResponse(side, text, { relay, artifacts: msg.artifacts });
+      const completedAt = Number.isFinite(Number(msg.completedAt)) ? Number(msg.completedAt) : null;
+      const diagnostics = msg.artifactDiagnostics && typeof msg.artifactDiagnostics === "object" ? msg.artifactDiagnostics : null;
+      if (diagnostics?.candidateCount || diagnostics?.errors?.length) {
+        appendLog({
+          time: Date.now(),
+          type: diagnostics.errors?.length ? "artifact-capture-warning" : "artifact-capture",
+          side,
+          text: `AI ${side} artifact scan: ${Number(diagnostics.candidateCount) || 0} candidate(s), ${Array.isArray(msg.artifacts) ? msg.artifacts.length : 0} captured`,
+          errors: Array.isArray(diagnostics.errors) ? diagnostics.errors.slice(0, 8) : []
+        });
+      }
+      const task = () => handleCompletedResponse(side, text, { relay, artifacts: msg.artifacts, completedAt });
       responseCommitQueue = responseCommitQueue.catch(() => {}).then(task);
       const result = await responseCommitQueue;
       sendResponse(result);

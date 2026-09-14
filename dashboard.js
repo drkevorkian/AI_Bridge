@@ -36,8 +36,10 @@ function updateWorkModeUI() {
   const info = WORK_MODE_INFO[mode];
   if ($("workModeHelp")) $("workModeHelp").textContent = info.help;
   const batch = ["compete", "parallel", "review"].includes(mode);
-  $("startSide").disabled = batch || Boolean(latestState?.sessionActive);
-  $("startSide").title = batch ? "All three AIs start simultaneously in this work strategy." : "Choose which AI speaks first.";
+  $("startSide").disabled = Boolean(latestState?.sessionActive);
+  $("startSide").title = batch
+    ? "All three AIs start simultaneously; this selection still defines the Main AI for queued human interjections."
+    : "Choose the first speaker and Main AI for queued human interjections.";
   const maxHelp = $("maxTurns")?.parentElement?.querySelector(".field-help");
   if (maxHelp) {
     maxHelp.innerHTML = `<strong>-1 = Infinite</strong> · ${info.minTurns > 1 ? `${info.minTurns}–10000 for this mode` : "1–10000 = finite"}`;
@@ -179,7 +181,7 @@ function refreshStartLabels() {
   for (const side of SIDES) {
     const tab = tabsById.get(selectedTab(side));
     const option = [...$("startSide").options].find(o => o.value === side);
-    if (option) option.textContent = `${aiName(tab?.url)} (AI ${side}) starts`;
+    if (option) option.textContent = `${aiName(tab?.url)} (AI ${side}) — Main`;
   }
 }
 
@@ -247,7 +249,8 @@ function renderRelayArtifacts(items = latestState?.relayArtifacts) {
   const list = $("relayArtifacts");
   const artifacts = Array.isArray(items) ? items : [];
   list.textContent = "";
-  $("relaySummary").textContent = artifacts.length ? `${artifacts.length} retained` : "No relayed files";
+  const storedBytes = artifacts.reduce((sum, item) => sum + (Number(item.size) || 0), 0);
+  $("relaySummary").textContent = artifacts.length ? `${artifacts.length} stored · ${formatBytes(storedBytes)}` : "No stored files";
   if (!artifacts.length) {
     list.appendChild(historyEmpty("No AI-generated files captured yet."));
     return;
@@ -272,7 +275,32 @@ function renderRelayArtifacts(items = latestState?.relayArtifacts) {
     const status = item.status || (item.extractedFileCount ? "Extracted" : "Raw file");
     meta.textContent = `${status} · ${formatBytes(item.size)} · #${item.seq || "?"}`;
     copy.append(name, meta);
-    row.append(badge, copy);
+
+    const actions = document.createElement("div");
+    actions.className = "relay-actions";
+    const download = document.createElement("button");
+    download.type = "button";
+    download.className = "tiny ghost relay-download";
+    download.textContent = "Download";
+    download.title = `Download ${item.name || "artifact"}`;
+    download.addEventListener("click", async () => {
+      download.disabled = true;
+      const old = download.textContent;
+      download.textContent = "Saving…";
+      try {
+        const res = await chrome.runtime.sendMessage({ type: "AI_BRIDGE_DOWNLOAD_ARTIFACT", id: item.id, saveAs: true });
+        if (!res?.ok) throw new Error(res?.error || "Download failed");
+        $("status").textContent = `Download started: ${item.name || "artifact"}`;
+      } catch (err) {
+        $("status").textContent = `Vault download failed: ${err.message}`;
+      } finally {
+        download.textContent = old;
+        download.disabled = false;
+      }
+    });
+    actions.appendChild(download);
+
+    row.append(badge, copy, actions);
     list.appendChild(row);
   }
 }
@@ -308,6 +336,40 @@ function currentLabel(s) {
   const side = s?.currentSide;
   if (!side) return "none";
   return `${s[`label${side}`] || "AI"} (AI ${side})`;
+}
+
+function formatRoundDuration(ms, live = false) {
+  const value = Math.max(0, Number(ms) || 0);
+  if (value < 60000) return `${(value / 1000).toFixed(live ? 1 : (value < 10000 ? 2 : 1))}s`;
+  const totalSeconds = Math.floor(value / 1000);
+  const minutes = Math.floor(totalSeconds / 60);
+  const seconds = totalSeconds % 60;
+  const tenths = Math.floor((value % 1000) / 100);
+  return `${minutes}:${String(seconds).padStart(2, "0")}.${tenths}`;
+}
+
+function updateRoundTimers(s = latestState) {
+  const now = Date.now();
+  for (const side of SIDES) {
+    const node = $(`timer${side}`);
+    if (!node) continue;
+    const startedAt = Number(s?.roundStartedAtBySide?.[side]);
+    const roundNumber = Math.max(0, Number(s?.roundNumberBySide?.[side]) || 0);
+    const lastDuration = Number(s?.lastRoundDurationMsBySide?.[side]);
+    const active = Boolean(s?.sessionActive && Number.isFinite(startedAt) && startedAt > 0);
+    node.classList.toggle("active", active);
+    node.classList.toggle("idle", !active);
+    if (active) {
+      node.textContent = `R${roundNumber} · ${formatRoundDuration(now - startedAt, true)}`;
+      node.title = `Round ${roundNumber} active · extension timer started when the prompt was submitted`;
+    } else if (roundNumber > 0 && Number.isFinite(lastDuration) && lastDuration >= 0) {
+      node.textContent = `R${roundNumber} · ${formatRoundDuration(lastDuration)}`;
+      node.title = `Last completed round ${roundNumber} · extension-measured prompt-to-final-response time`;
+    } else {
+      node.textContent = "No round yet";
+      node.title = "No extension-measured round has completed yet";
+    }
+  }
 }
 
 function updateSessionPill(s) {
@@ -431,7 +493,9 @@ function transcriptCard(entry) {
   meta.className = "transcript-meta";
   const when = entry.time ? new Date(entry.time).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" }) : "";
   const phase = entry.workPhase && !["relay", "collaborate"].includes(entry.workPhase) ? ` · ${String(entry.workPhase).toUpperCase()}` : "";
-  meta.textContent = `#${entry.seq}${phase}${when ? ` · ${when}` : ""}`;
+  const elapsed = Number.isFinite(Number(entry.roundDurationMs)) ? ` · ${formatRoundDuration(Number(entry.roundDurationMs))}` : "";
+  const round = Number.isFinite(Number(entry.roundNumber)) && Number(entry.roundNumber) > 0 ? ` · R${Number(entry.roundNumber)}` : "";
+  meta.textContent = `#${entry.seq}${phase}${round}${elapsed}${when ? ` · ${when}` : ""}`;
 
   const body = document.createElement("div");
   body.className = "transcript-body";
@@ -672,6 +736,7 @@ async function refreshState() {
     renderHistory(s.history);
     renderRelayArtifacts(s.relayArtifacts);
     renderSuppressedRequests(s);
+    updateRoundTimers(s);
     updateStatus(s);
     updateControls(s);
     setHumanModal(s);
@@ -929,13 +994,12 @@ $("sendInterject").addEventListener("click", async () => {
     const res = await chrome.runtime.sendMessage({ type: "AI_BRIDGE_INTERJECT", text });
     if (!res?.ok) throw new Error(res?.error || "Could not add interjection");
     $("interjectText").value = "";
-    $("status").textContent = res.delivery === "review-phase"
-      ? "Interjection added — it will be included in the upcoming peer-review prompts."
-      : "Interjection added — it will be delivered on the next safe scheduled handoff.";
+    const mainName = res.mainLabel || (res.mainSide ? `AI ${res.mainSide}` : "Main AI");
+    $("status").textContent = `Interjection queued for ${mainName}. It will be delivered with that Main AI's next group turn.`;
   } catch (err) {
     $("status").textContent = `Interjection failed: ${err.message}`;
   } finally {
-    $("sendInterject").textContent = "Interject into team";
+    $("sendInterject").textContent = "Queue for Main AI";
     await refreshState();
   }
 });
@@ -980,6 +1044,18 @@ $("sourceDropZone").addEventListener("keydown", event => {
   }
 });
 
+if ($("clearRelayArtifacts")) $("clearRelayArtifacts").addEventListener("click", async () => {
+  if (latestState?.sessionActive) {
+    $("status").textContent = "Stop the active Bridge session before clearing the persistent Vault.";
+    return;
+  }
+  if (!confirm("Clear every file currently stored in the AI Bridge Vault?")) return;
+  const res = await chrome.runtime.sendMessage({ type: "AI_BRIDGE_CLEAR_ARTIFACTS" });
+  if (!res?.ok) $("status").textContent = `Clear Vault failed: ${res?.error || "Unknown error"}`;
+  else $("status").textContent = "Persistent Vault cleared.";
+  await refreshState();
+});
+
 $("refreshTabs").addEventListener("click", async () => {
   await loadTabs({ preserve: true });
   await refreshState();
@@ -1001,3 +1077,4 @@ $("jumpLatest").addEventListener("click", () => {
 
 Promise.all([loadTheme(), loadTabs({ preserve: false })]).then(refreshState);
 setInterval(refreshState, 750);
+setInterval(() => updateRoundTimers(latestState), 100);

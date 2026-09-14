@@ -1,9 +1,9 @@
-# AI Bridge 1.11.1 — Direct Mesh + Resumable Human Requests
+# AI Bridge 1.11.3 — Direct Mesh + Resumable Human Requests
 
-Version 1.11.1 builds on the verified 1.10.2 release with Direct Mesh peer routing, resumable suppressed human requests, and universal role reuse.
+Version 1.11.3 builds on the verified 1.10.2 release with Direct Mesh peer routing, resumable suppressed human requests, and universal role reuse.
 
 
-## 1.11.1 additions
+## 1.11.2 additions
 
 - **Direct Mesh work mode**: an AI can make a specific teammate the next speaker by ending its response with `SEND TO: AI A`, `SEND TO: AI B`, `SEND TO: AI C`, or the teammate's current label such as `SEND TO: Gemini`. Everything above that final line is the direct message. Without a routing command, Mesh falls back to the normal next-AI handoff.
 - **Registered LLM command architecture**: `SEND TO` is parsed only in Direct Mesh mode and only from the final non-empty line, avoiding accidental execution when the command is discussed in prose. Unknown/self targets pause instead of silently routing to the wrong AI.
@@ -200,8 +200,30 @@ Session state, transcript, jobs, objective, bindings, turn cursor, and relay sta
 - A Human interjection box lets the controller add steering notes/corrections to the shared transcript during an active session. Interjections are delivered on the next safe scheduled handoff rather than interrupting an AI mid-generation; Peer Review also injects them into the review prompts.
 
 
-## v1.11.1 controller routing refinements
+## v1.11.2 controller routing refinements
 
 - **Deferred Main-AI interjections:** the selected Main AI is the session's first-speaker selection. Human interjections are persisted immediately, but are held until that Main AI's next group turn. They are not injected into whichever secondary AI happens to be queued when the human writes the note. After Main receives the note, it becomes normal shared transcript context for later teammates.
 - **Ambiguous SEND TO aliases fail closed:** duplicate or overlapping configured labels are not guessed. Use `SEND TO: AI A`, `AI B`, or `AI C` when labels are ambiguous.
 - **Human replies are send-before-clear:** AI Bridge keeps the pending human question/modal state until the provider accepts the human answer, so a failed send can be retried without losing the question.
+
+## 1.11.2 independent round timers
+
+AI Bridge now measures each AI round itself, independently of any timing reported by the provider or LLM. The clock starts only after the browser page accepts the prompt and stops at the final observed response-text change that AI Bridge later recognizes as complete. This intentionally measures extension-observed prompt-to-response time, including network/browser/provider delivery, while excluding artifact-download time and AI Bridge's post-response file capture.
+
+- Each AI card shows a live stopwatch while that AI has an outstanding prompt.
+- Completed response transcript entries permanently store the round number and elapsed duration.
+- Parallel/Compete/Review modes keep three independent clocks.
+- Direct Mesh handoffs start a new clock only for the routed recipient.
+- Resend starts a new numbered round.
+- Active start timestamps are persisted so service-worker suspension does not reset the clock.
+
+
+
+## 1.11.3 persistent Vault + download hardening
+
+- `chrome.storage.local` + `unlimitedStorage` remains the durable backing store for AI-generated artifact bytes. Starting a new Bridge session no longer erases the Vault.
+- Session routing now tracks `activeArtifactIds` separately, so files from an older session stay downloadable without being silently re-attached to a new session.
+- Shared Vault rows have a **Download** action backed by the Chrome downloads API, plus an explicit **Clear vault** action.
+- Artifact discovery now scans file/download buttons and data-URL controls as well as ordinary `<a href>` links.
+- HTTP(S) artifacts that fail in page context because of CORS are retried by the extension service worker on approved provider/CDN hosts.
+- Artifact capture errors are logged instead of disappearing silently, making provider DOM/download regressions debuggable.

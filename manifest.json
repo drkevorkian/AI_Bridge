@@ -1,12 +1,13 @@
 {
   "manifest_version": 3,
   "name": "AI Bridge",
-  "version": "1.11.2",
-  "description": "Coordinate three AI agents with relay, direct-mesh routing, main-AI interjections, independent round timers, human control, file relay, and a modern multi-theme workspace.",
+  "version": "1.11.3",
+  "description": "Coordinate three AI agents with relay, direct-mesh routing, persistent artifact vault storage, ZIP/file relay, human control, and a modern multi-theme workspace.",
   "permissions": [
     "tabs",
     "storage",
     "unlimitedStorage",
+    "downloads",
     "notifications",
     "scripting"
   ],
@@ -17,7 +18,14 @@
     "https://claude.ai/*",
     "https://gemini.google.com/*",
     "https://copilot.microsoft.com/*",
-    "https://*.oaiusercontent.com/*"
+    "https://*.oaiusercontent.com/*",
+    "https://assets.grok.com/*",
+    "https://*.x.ai/*",
+    "https://*.googleusercontent.com/*",
+    "https://*.anthropic.com/*",
+    "https://*.microsoft.com/*",
+    "https://x.ai/*",
+    "https://api.x.ai/*"
   ],
   "background": {
     "service_worker": "background.js"

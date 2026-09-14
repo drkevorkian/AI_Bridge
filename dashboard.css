@@ -286,6 +286,18 @@ h2 { margin: 4px 0 0; font-size: 20px; }
 .agent-card.agent-a { border-left-color: var(--a); }
 .agent-card.agent-b { border-left-color: var(--b); }
 .agent-card.agent-c { border-left-color: var(--c); }
+
+.agent-identity { display: flex; align-items: center; gap: 8px; min-width: 0; }
+.round-timer {
+  display: inline-flex; align-items: center; min-width: 74px; justify-content: center;
+  border: 1px solid var(--line-strong); border-radius: 999px; padding: 3px 7px;
+  font-variant-numeric: tabular-nums; font-size: 10px; font-weight: 800; letter-spacing: .01em;
+  color: var(--muted); background: var(--ghost-bg); white-space: nowrap;
+}
+.round-timer.active { color: var(--text); border-color: var(--c); box-shadow: 0 0 0 2px var(--shadow-focus); animation: timerPulse 1.4s ease-in-out infinite; }
+@keyframes timerPulse { 0%, 100% { opacity: .78; } 50% { opacity: 1; } }
+@media (prefers-reduced-motion: reduce) { .round-timer.active { animation: none; } }
+
 .agent-topline { display: flex; align-items: center; justify-content: space-between; margin-bottom: 7px; font-size: 12px; }
 .agent-card textarea { min-height: 64px; margin-top: 7px; }
 .work-mode-card { border: 1px solid var(--line); border-radius: 10px; background: var(--panel-3); padding: 9px; margin-bottom: 10px; }
@@ -367,10 +379,14 @@ h2 { margin: 4px 0 0; font-size: 20px; }
 .source-remove { flex: 0 0 auto; }
 .relay-section { margin-top: 12px; border-top: 1px solid var(--line); padding-top: 12px; }
 .relay-list { display: grid; gap: 6px; margin-top: 8px; max-height: 180px; overflow-y: auto; }
-.relay-row { display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 8px; align-items: center; border: 1px solid var(--line); border-radius: 8px; padding: 8px 9px; background: var(--panel-3); }
+.relay-row { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; gap: 8px; align-items: center; border: 1px solid var(--line); border-radius: 8px; padding: 8px 9px; background: var(--panel-3); }
 .relay-row.relay-side-a { border-left: 3px solid var(--a); }
 .relay-row.relay-side-b { border-left: 3px solid var(--b); }
 .relay-row.relay-side-c { border-left: 3px solid var(--c); }
+
+.vault-actions { display: flex; justify-content: flex-end; margin: 8px 0; }
+.relay-actions { display: flex; gap: 6px; align-items: center; }
+.relay-download { white-space: nowrap; }
 .relay-copy { min-width: 0; }
 .relay-name { font-size: 11px; color: var(--text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .relay-meta { margin-top: 3px; font-size: 9px; color: var(--muted); }

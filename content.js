@@ -1,6 +1,6 @@
 (() => {
-  if (window.__AI_BRIDGE_LOADED_V111__) return;
-  window.__AI_BRIDGE_LOADED_V111__ = true;
+  if (window.__AI_BRIDGE_LOADED_V113__) return;
+  window.__AI_BRIDGE_LOADED_V113__ = true;
 
   const host = location.hostname;
   let lastObservedText = "";
@@ -12,6 +12,10 @@
   const MAX_ARTIFACT_FILE_BYTES = 12 * 1024 * 1024;
   const MAX_ARTIFACT_TOTAL_BYTES = 24 * 1024 * 1024;
   const ARTIFACT_FETCH_TIMEOUT_MS = 15000;
+  const DOWNLOAD_CANDIDATE_SELECTOR = [
+    "a[href]", "a[download]", "button", "[role='button']",
+    "[data-download-url]", "[data-file-url]", "[data-url]", "[data-href]"
+  ].join(",");
 
   const adapters = {
     chatgpt: {
@@ -355,57 +359,113 @@
   }
 
   function artifactRoot(node) {
-    return node?.closest?.("[data-message-author-role='assistant'], [data-message-id], article, model-response") || node;
+    const primary = node?.closest?.("[data-message-author-role='assistant'], [data-message-id], article, model-response") || node;
+    if (!primary) return node;
+    if (primary.querySelector?.(DOWNLOAD_CANDIDATE_SELECTOR)) return primary;
+    // Some providers render a file card as a sibling of the textual response.
+    // Look one message-wrapper level up, but never scan the whole conversation.
+    const parent = primary.parentElement;
+    if (parent && parent !== document.body && parent.querySelector?.(DOWNLOAD_CANDIDATE_SELECTOR)) return parent;
+    return primary;
   }
 
-  function looksLikeDownload(anchor) {
-    const rawHref = String(anchor.getAttribute("href") || "");
-    const href = String(anchor.href || rawHref);
-    const text = String(anchor.textContent || "").trim();
-    const aria = String(anchor.getAttribute("aria-label") || "");
-    const testId = String(anchor.getAttribute("data-testid") || "");
-    return Boolean(
-      anchor.hasAttribute("download") ||
-      /^(blob:|data:|sandbox:)/i.test(rawHref) ||
-      /\b(download|attachment|artifact|file)\b/i.test(`${aria} ${testId}`) ||
-      /\/interpreter\/download\b/i.test(href) ||
-      /\/download(?:[/?#]|$)/i.test(href) ||
-      (/\.(zip|7z|tar|tgz|gz|bz2|xz|rar|py|js|ts|tsx|jsx|json|txt|md|csv|pdf|docx|xlsx|pptx)(?:$|[?#])/i.test(text) && /download/i.test(`${text} ${aria}`))
-    );
+  function candidateLinks(node) {
+    const links = [];
+    if (!node) return links;
+    if (node.matches?.("a[href], a[download]")) links.push(node);
+    const parent = node.closest?.("a[href], a[download]");
+    if (parent && parent !== node) links.push(parent);
+    const child = node.querySelector?.("a[href], a[download]");
+    if (child && child !== node) links.push(child);
+    return links;
   }
 
-  function datasetUrls(anchor) {
+  function datasetUrls(node) {
     const urls = [];
-    for (const value of Object.values(anchor.dataset || {})) {
+    for (const value of Object.values(node?.dataset || {})) {
       const candidate = String(value || "").trim();
-      if (/^(https?:|blob:|data:)/i.test(candidate)) urls.push(candidate);
+      if (/^(https?:|blob:|data:|sandbox:)/i.test(candidate)) urls.push(candidate);
     }
     return urls;
   }
 
-  function chatGptSandboxUrl(anchor, sandboxHref) {
+  function rawCandidateUrls(node) {
+    const values = [];
+    const add = value => {
+      const candidate = String(value || "").trim();
+      if (candidate && !values.includes(candidate)) values.push(candidate);
+    };
+    add(node?.getAttribute?.("href"));
+    add(node?.href);
+    for (const attr of ["data-download-url", "data-file-url", "data-url", "data-href"]) add(node?.getAttribute?.(attr));
+    for (const value of datasetUrls(node)) add(value);
+    for (const link of candidateLinks(node)) {
+      add(link.getAttribute?.("href"));
+      add(link.href);
+      for (const value of datasetUrls(link)) add(value);
+    }
+    return values;
+  }
+
+  function looksLikeDownload(node) {
+    const text = String(node?.textContent || "").trim();
+    const aria = String(node?.getAttribute?.("aria-label") || "");
+    const title = String(node?.getAttribute?.("title") || "");
+    const testId = String(node?.getAttribute?.("data-testid") || "");
+    const role = String(node?.getAttribute?.("role") || "");
+    const className = typeof node?.className === "string" ? node.className : "";
+    const urls = rawCandidateUrls(node).join(" ");
+    const label = `${text} ${aria} ${title} ${testId} ${role} ${className}`;
+    return Boolean(
+      node?.hasAttribute?.("download") ||
+      /(?:^|\s)(?:blob:|data:|sandbox:)/i.test(urls) ||
+      /\b(download|attachment|artifact|file|rendered file|save file)\b/i.test(label) ||
+      /\/(?:interpreter\/)?download(?:[/?#]|$)/i.test(urls) ||
+      /\.(?:zip|7z|tar|tgz|gz|bz2|xz|rar|py|js|ts|tsx|jsx|json|txt|md|csv|pdf|docx|xlsx|pptx)(?:$|[?#\s])/i.test(`${urls} ${text}`)
+    );
+  }
+
+  function chatGptSandboxUrl(node, sandboxHref) {
     if (!(host === "chatgpt.com" || host === "chat.openai.com")) return "";
     const sandboxPath = String(sandboxHref || "").replace(/^sandbox:/i, "");
     if (!sandboxPath.startsWith("/mnt/data/")) return "";
     const conversationMatch = location.pathname.match(/(?:^|\/)c\/([^/?#]+)/);
-    const messageNode = anchor.closest?.("[data-message-id]") || artifactRoot(anchor);
+    const messageNode = node?.closest?.("[data-message-id]") || artifactRoot(node);
     const messageId = messageNode?.getAttribute?.("data-message-id") || messageNode?.dataset?.messageId || "";
     if (!conversationMatch?.[1] || !messageId) return "";
     return `${location.origin}/backend-api/conversation/${encodeURIComponent(conversationMatch[1])}/interpreter/download?message_id=${encodeURIComponent(messageId)}&sandbox_path=${encodeURIComponent(sandboxPath)}`;
   }
 
-  function artifactUrl(anchor) {
-    const rawHref = String(anchor.getAttribute("href") || "").trim();
-    const candidates = [String(anchor.href || ""), ...datasetUrls(anchor), rawHref].filter(Boolean);
+  function artifactUrl(node) {
+    const candidates = rawCandidateUrls(node);
     for (const candidate of candidates) {
       if (/^(https?:|blob:|data:)/i.test(candidate)) return candidate;
+      if (/^sandbox:/i.test(candidate)) {
+        const translated = chatGptSandboxUrl(node, candidate);
+        if (translated) return translated;
+      }
     }
-    if (/^sandbox:/i.test(rawHref)) return chatGptSandboxUrl(anchor, rawHref);
     return "";
   }
 
-  function artifactName(anchor, url, index) {
-    const explicit = String(anchor.getAttribute("download") || "").trim();
+  function downloadCandidates(root) {
+    const nodes = [...(root?.querySelectorAll?.(DOWNLOAD_CANDIDATE_SELECTOR) || [])];
+    const out = [];
+    const seen = new Set();
+    for (const node of nodes) {
+      if (!looksLikeDownload(node)) continue;
+      const url = artifactUrl(node);
+      const key = url || `${node.tagName || "node"}|${String(node.textContent || "").trim()}|${String(node.getAttribute?.("aria-label") || "")}`;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      out.push(node);
+      if (out.length >= MAX_ARTIFACTS_PER_RESPONSE) break;
+    }
+    return out;
+  }
+
+  function artifactName(node, url, index) {
+    const explicit = String(node?.getAttribute?.("download") || "").trim();
     if (explicit) return explicit.slice(0, 240);
     try {
       const parsed = new URL(url, location.href);
@@ -414,7 +474,7 @@
       const name = path.split("/").filter(Boolean).pop();
       if (name) return name.slice(0, 240);
     } catch (_) {}
-    const text = String(anchor.textContent || "").trim();
+    const text = String(node?.textContent || "").trim();
     if (text && text.length <= 240) return text.replace(/[\\/]/g, "_");
     return `artifact-${index + 1}.bin`;
   }
@@ -429,53 +489,81 @@
     return btoa(binary);
   }
 
-  async function fetchArtifact(anchor, index) {
-    const url = artifactUrl(anchor);
-    if (!url) return null;
+  async function fetchArtifact(node, index) {
+    const url = artifactUrl(node);
+    if (!url) throw new Error("download control has no resolvable URL");
+    const name = artifactName(node, url, index);
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), ARTIFACT_FETCH_TIMEOUT_MS);
+    let localError = null;
     try {
-      const response = await fetch(url, { credentials: "include", signal: controller.signal });
-      if (!response.ok) throw new Error(`HTTP ${response.status}`);
-      const declared = Number(response.headers.get("content-length") || 0);
-      if (declared > MAX_ARTIFACT_FILE_BYTES) throw new Error("file too large");
-      const blob = await response.blob();
-      if (blob.size <= 0 || blob.size > MAX_ARTIFACT_FILE_BYTES) throw new Error("file too large or empty");
-      return {
-        name: artifactName(anchor, url, index),
-        mime: blob.type || response.headers.get("content-type") || "application/octet-stream",
-        size: blob.size,
-        dataBase64: await blobToBase64(blob)
-      };
+      try {
+        const response = await fetch(url, { credentials: "include", signal: controller.signal });
+        if (!response.ok) throw new Error(`HTTP ${response.status}`);
+        const declared = Number(response.headers.get("content-length") || 0);
+        if (declared > MAX_ARTIFACT_FILE_BYTES) throw new Error("file too large");
+        const blob = await response.blob();
+        if (blob.size <= 0 || blob.size > MAX_ARTIFACT_FILE_BYTES) throw new Error("file too large or empty");
+        return {
+          name,
+          mime: blob.type || response.headers.get("content-type") || "application/octet-stream",
+          size: blob.size,
+          dataBase64: await blobToBase64(blob)
+        };
+      } catch (err) {
+        localError = err;
+      }
     } finally {
       clearTimeout(timer);
     }
+
+    // Page-context fetch can be blocked by CORS even though the extension has
+    // permission to retrieve the file. Retry HTTP(S) downloads in the service worker.
+    if (/^https?:/i.test(url)) {
+      const remote = await chrome.runtime.sendMessage({
+        type: "AI_BRIDGE_FETCH_ARTIFACT",
+        url,
+        name,
+        mime: ""
+      });
+      if (remote?.ok && remote.artifact?.dataBase64) return remote.artifact;
+      throw new Error(remote?.error || localError?.message || "artifact fetch failed");
+    }
+    throw localError || new Error("artifact fetch failed");
   }
 
-  function artifactAnchorSignature(node) {
+  function artifactCandidateSignature(node) {
     const root = artifactRoot(node);
-    const anchors = [...(root?.querySelectorAll?.("a[href]") || [])].filter(looksLikeDownload).slice(0, MAX_ARTIFACTS_PER_RESPONSE);
-    return anchors.map((anchor, index) => `${artifactUrl(anchor)}|${artifactName(anchor, artifactUrl(anchor), index)}`).join("||");
+    const candidates = downloadCandidates(root);
+    return candidates.map((candidate, index) => {
+      const url = artifactUrl(candidate);
+      return `${url}|${artifactName(candidate, url, index)}`;
+    }).join("||");
   }
 
   async function captureArtifacts(node) {
     const root = artifactRoot(node);
-    const anchors = [...(root?.querySelectorAll?.("a[href]") || [])].filter(looksLikeDownload).slice(0, MAX_ARTIFACTS_PER_RESPONSE);
+    const candidates = downloadCandidates(root);
     const artifacts = [];
+    const errors = [];
     let total = 0;
-    for (let i = 0; i < anchors.length; i++) {
+    for (let i = 0; i < candidates.length; i++) {
       try {
-        const artifact = await fetchArtifact(anchors[i], i);
+        const artifact = await fetchArtifact(candidates[i], i);
         if (!artifact) continue;
         if (artifacts.some(existing => existing.name === artifact.name && existing.size === artifact.size)) continue;
         total += artifact.size;
-        if (total > MAX_ARTIFACT_TOTAL_BYTES) break;
+        if (total > MAX_ARTIFACT_TOTAL_BYTES) {
+          errors.push("combined artifact relay limit reached");
+          break;
+        }
         artifacts.push(artifact);
-      } catch (_) {
-        // A failed artifact capture must not suppress the AI's text response.
+      } catch (err) {
+        const label = String(candidates[i]?.textContent || candidates[i]?.getAttribute?.("aria-label") || `candidate ${i + 1}`).trim().slice(0, 120);
+        errors.push(`${label || `candidate ${i + 1}`}: ${err?.message || "capture failed"}`);
       }
     }
-    return artifacts;
+    return { artifacts, errors, candidateCount: candidates.length };
   }
 
   function generationAppearsActive(node = latestResponseNode()) {
@@ -508,15 +596,22 @@
     const stableMs = host === "gemini.google.com" ? 4200 : 2200;
     if (Date.now() - lastChangeAt < stableMs) return;
 
-    const linkSignature = artifactAnchorSignature(node);
+    const linkSignature = artifactCandidateSignature(node);
     const signature = `${text}\n::ARTIFACT_LINKS::${linkSignature}`;
     if (signature === lastReportedSignature || (text === lastReportedText && !linkSignature)) return;
 
-    const artifacts = await captureArtifacts(node);
+    const completedAt = Number(lastChangeAt) || Date.now();
+    const captured = await captureArtifacts(node);
     lastReportedText = text;
     lastReportedSignature = signature;
     try {
-      await chrome.runtime.sendMessage({ type: "AI_BRIDGE_RESPONSE", text, artifacts });
+      await chrome.runtime.sendMessage({
+        type: "AI_BRIDGE_RESPONSE",
+        text,
+        artifacts: captured.artifacts,
+        artifactDiagnostics: { candidateCount: captured.candidateCount, errors: captured.errors },
+        completedAt
+      });
     } catch (_) {}
   }
 
@@ -526,7 +621,7 @@
 
   chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
     if (msg.type === "AI_BRIDGE_PING") {
-      sendResponse({ ok: true, host: location.hostname, ready: true, version: "1.11.0" });
+      sendResponse({ ok: true, host: location.hostname, ready: true, version: "1.11.3" });
       return false;
     }
 

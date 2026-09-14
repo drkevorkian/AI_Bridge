@@ -56,7 +56,7 @@
 
         <article class="agent-card agent-a">
           <div class="agent-topline">
-            <strong>AI A</strong>
+            <div class="agent-identity"><strong>AI A</strong><span id="timerA" class="round-timer idle" title="Extension-measured prompt-to-response time">No round yet</span></div>
             <div class="agent-actions">
               <button id="newChatA" class="tiny ghost" type="button">New chat</button>
               <button id="resendA" class="tiny ghost" disabled>Resend</button>
@@ -68,7 +68,7 @@
 
         <article class="agent-card agent-b">
           <div class="agent-topline">
-            <strong>AI B</strong>
+            <div class="agent-identity"><strong>AI B</strong><span id="timerB" class="round-timer idle" title="Extension-measured prompt-to-response time">No round yet</span></div>
             <div class="agent-actions">
               <button id="newChatB" class="tiny ghost" type="button">New chat</button>
               <button id="resendB" class="tiny ghost" disabled>Resend</button>
@@ -80,7 +80,7 @@
 
         <article class="agent-card agent-c">
           <div class="agent-topline">
-            <strong>AI C</strong>
+            <div class="agent-identity"><strong>AI C</strong><span id="timerC" class="round-timer idle" title="Extension-measured prompt-to-response time">No round yet</span></div>
             <div class="agent-actions">
               <button id="newChatC" class="tiny ghost" type="button">New chat</button>
               <button id="resendC" class="tiny ghost" disabled>Resend</button>
@@ -107,7 +107,10 @@
           <span id="relaySummary" class="muted">No relayed files</span>
         </summary>
         <div class="vault-body">
-          <div class="field-help">AI-generated downloads are preserved here. ZIP/code text is extracted into a bounded inspection preview, while the original file is still relayed when the destination supports attachments.</div>
+          <div class="field-help">AI-generated downloads are stored persistently across Bridge sessions until the Vault limit evicts the oldest files or you clear it. ZIP/code text is inspected while the original bytes remain available for relay or download.</div>
+          <div class="vault-actions">
+            <button id="clearRelayArtifacts" class="tiny ghost" type="button">Clear vault</button>
+          </div>
           <div id="relayArtifacts" class="relay-list">
             <div class="history-empty">No AI-generated files captured yet.</div>
           </div>
@@ -131,12 +134,13 @@
         </div>
 
         <div class="field-row">
-          <label for="startSide">First speaker</label>
+          <label for="startSide">Main AI (first speaker)</label>
           <select id="startSide">
-            <option value="A">AI A starts</option>
-            <option value="B">AI B starts</option>
-            <option value="C">AI C starts</option>
+            <option value="A">AI A — Main</option>
+            <option value="B">AI B — Main</option>
+            <option value="C">AI C — Main</option>
           </select>
+          <div class="field-help">This is the Main AI for the run. Human interjections wait for this model and are delivered with its next group turn.</div>
         </div>
 
         <label for="prompt">Primary objective</label>
@@ -200,10 +204,10 @@
       </details>
 
       <section class="human-panel interject-panel">
-        <div class="section-heading"><span>Human interjection</span><span class="muted">shared context</span></div>
+        <div class="section-heading"><span>Human interjection</span><span class="muted">queued for Main AI</span></div>
         <textarea id="interjectText" rows="3" placeholder="Add your 2 cents, correction, priority, or steering note..."></textarea>
-        <button id="sendInterject" class="human-send" type="button" disabled>Interject into team</button>
-        <div class="field-help">Safe delivery: your note is added to the shared transcript immediately and reaches the AIs on the next scheduled handoff. It will not interrupt a model while it is generating.</div>
+        <button id="sendInterject" class="human-send" type="button" disabled>Queue for Main AI</button>
+        <div class="field-help">Safe delivery: your note is queued now, but it is not injected into the currently queued model. It is sent with the Main AI's next group turn, then becomes shared context for later teammates.</div>
       </section>
     </aside>
 
