@@ -9,13 +9,40 @@ const supported = [
 
 const $ = id => document.getElementById(id);
 const THEME_KEY = "aiBridgeTheme";
-const THEMES = new Set(["midnight", "slate", "light"]);
+const THEMES = new Set(["blizzard", "ghostwhite", "midnight", "slate", "light", "solarized", "ocean", "terminal"]);
 let tabsById = new Map();
 let latestState = null;
 let hydrated = false;
 let renderedSeq = 0;
 let autoScroll = true;
 let selectedSourceFiles = [];
+let activeHumanModalKey = "";
+const WORK_MODE_INFO = {
+  relay: { label: "Relay", minTurns: 1, help: "Normal sequential A → B → C relay. Each AI receives shared updates from the previous agents." },
+  collaborate: { label: "Collaborate", minTurns: 1, help: "Sequential shared-deliverable mode. Each AI improves one common result using its assigned specialty." },
+  compete: { label: "Compete", minTurns: 3, help: "All three AIs receive the same objective simultaneously and submit independently. They do not see competitor answers during the pass." },
+  parallel: { label: "Parallel Independent", minTurns: 3, help: "All three AIs work simultaneously and independently on complementary versions of the same objective." },
+  review: { label: "Peer Review", minTurns: 6, help: "Phase 1: all three answer independently. Phase 2: each AI receives the other two answers and critiques them simultaneously." }
+};
+
+function selectedWorkMode() {
+  const value = $("workMode")?.value || "relay";
+  return WORK_MODE_INFO[value] ? value : "relay";
+}
+
+function updateWorkModeUI() {
+  const mode = selectedWorkMode();
+  const info = WORK_MODE_INFO[mode];
+  if ($("workModeHelp")) $("workModeHelp").textContent = info.help;
+  const batch = ["compete", "parallel", "review"].includes(mode);
+  $("startSide").disabled = batch || Boolean(latestState?.sessionActive);
+  $("startSide").title = batch ? "All three AIs start simultaneously in this work strategy." : "Choose which AI speaks first.";
+  const maxHelp = $("maxTurns")?.parentElement?.querySelector(".field-help");
+  if (maxHelp) {
+    maxHelp.innerHTML = `<strong>-1 = Infinite</strong> · ${info.minTurns > 1 ? `${info.minTurns}–10000 for this mode` : "1–10000 = finite"}`;
+  }
+}
+
 const MAX_SOURCE_FILES = 100;
 const MAX_SOURCE_FILE_BYTES = 512 * 1024;
 const MAX_SOURCE_FILE_CHARS = 200000;
@@ -23,7 +50,7 @@ const MAX_SOURCE_TOTAL_CHARS = 400000;
 const IGNORED_SOURCE_SEGMENTS = new Set([".git", "node_modules", ".venv", "venv", "__pycache__", ".next", "dist", "build"]);
 
 function applyTheme(theme) {
-  const chosen = THEMES.has(theme) ? theme : "midnight";
+  const chosen = THEMES.has(theme) ? theme : "blizzard";
   document.documentElement.dataset.theme = chosen;
   if ($("themeSelect")) $("themeSelect").value = chosen;
 }
@@ -191,12 +218,79 @@ function hydrateFromState(s) {
   }
   if (s.initialPrompt) $("prompt").value = s.initialPrompt;
   if (s.startSide && SIDES.includes(s.startSide)) $("startSide").value = s.startSide;
+  if (s.workMode && WORK_MODE_INFO[s.workMode]) $("workMode").value = s.workMode;
+  updateWorkModeUI();
   if (Number.isInteger(Number(s.maxTurns))) $("maxTurns").value = String(s.maxTurns);
   if (Number.isFinite(Number(s.delayMs))) $("delayMs").value = String(s.delayMs);
   selectedSourceFiles = Array.isArray(s.sourceFiles) ? s.sourceFiles.map(file => ({ ...file })) : [];
   renderSourceFiles();
   renderHistory(s.history);
   refreshStartLabels();
+}
+
+
+function formatBytes(value) {
+  const bytes = Math.max(0, Number(value) || 0);
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(bytes < 10240 ? 1 : 0)} KiB`;
+  return `${(bytes / 1024 / 1024).toFixed(1)} MiB`;
+}
+
+function renderRelayArtifacts(items = latestState?.relayArtifacts) {
+  const list = $("relayArtifacts");
+  const artifacts = Array.isArray(items) ? items : [];
+  list.textContent = "";
+  $("relaySummary").textContent = artifacts.length ? `${artifacts.length} retained` : "No relayed files";
+  if (!artifacts.length) {
+    list.appendChild(historyEmpty("No AI-generated files captured yet."));
+    return;
+  }
+
+  for (const item of [...artifacts].reverse()) {
+    const side = String(item.sourceSide || "?").toLowerCase();
+    const row = document.createElement("div");
+    row.className = `relay-row relay-side-${side}`;
+
+    const badge = document.createElement("span");
+    badge.className = `vault-source-badge side-${side}`;
+    badge.textContent = item.sourceSide ? `AI ${item.sourceSide}` : "AI";
+
+    const copy = document.createElement("div");
+    copy.className = "relay-copy";
+    const name = document.createElement("div");
+    name.className = "relay-name";
+    name.textContent = item.name || "artifact";
+    const meta = document.createElement("div");
+    meta.className = "relay-meta";
+    const status = item.status || (item.extractedFileCount ? "Extracted" : "Raw file");
+    meta.textContent = `${status} · ${formatBytes(item.size)} · #${item.seq || "?"}`;
+    copy.append(name, meta);
+    row.append(badge, copy);
+    list.appendChild(row);
+  }
+}
+
+function artifactMetadataMap() {
+  return new Map((latestState?.relayArtifacts || []).map(item => [item.id, item]));
+}
+
+function attachmentChips(entry) {
+  const ids = Array.isArray(entry?.artifactIds) ? entry.artifactIds : [];
+  if (!ids.length) return null;
+  const map = artifactMetadataMap();
+  const wrap = document.createElement("div");
+  wrap.className = "vault-chips";
+  for (const id of ids) {
+    const item = map.get(id);
+    const chip = document.createElement("span");
+    const side = String(entry.side || item?.sourceSide || "?").toLowerCase();
+    chip.className = `vault-chip relay-side-${side}`;
+    const label = item?.name || "Vault file";
+    const status = item?.status ? ` · ${item.status}` : "";
+    chip.textContent = `Vault Upload · ${label}${status}`;
+    wrap.appendChild(chip);
+  }
+  return wrap;
 }
 
 function limitLabel(s) {
@@ -227,17 +321,29 @@ function updateSessionPill(s) {
   }
 }
 
-function setHumanPanel(s) {
-  const panel = $("humanPanel");
-  if (s?.sessionActive && s.awaitingHuman && s.pendingHuman) {
-    panel.classList.remove("hidden");
-    $("humanWho").textContent = s.pendingHuman.requestingLabel || `AI ${s.pendingHuman.requestingSide || ""}`;
-    $("humanQuestion").textContent = s.pendingHuman.prompt || "Human input requested.";
-    $("sendHuman").disabled = false;
-  } else {
-    panel.classList.add("hidden");
-    $("humanWho").textContent = "";
-    $("humanQuestion").textContent = "";
+function setHumanModal(s) {
+  const modal = $("humanModal");
+  const request = s?.sessionActive && s.awaitingHuman ? s.pendingHuman : null;
+  if (!request) {
+    modal.classList.add("hidden");
+    modal.setAttribute("aria-hidden", "true");
+    activeHumanModalKey = "";
+    return;
+  }
+
+  const key = `${request.time || ""}:${request.requestingSide || ""}:${request.prompt || ""}`;
+  $("humanModalWho").textContent = request.requestingLabel || `AI ${request.requestingSide || ""}`;
+  $("humanModalQuestion").textContent = request.prompt || "Human input requested.";
+  const queued = Array.isArray(s.pendingHumanQueue) ? s.pendingHumanQueue.length : 0;
+  $("humanModalQueue").textContent = queued ? `${queued} additional human-input request${queued === 1 ? "" : "s"} queued behind this one.` : "The bridge is paused until this request is answered.";
+  $("sendHumanModal").disabled = false;
+  modal.classList.remove("hidden");
+  modal.setAttribute("aria-hidden", "false");
+
+  if (key !== activeHumanModalKey) {
+    activeHumanModalKey = key;
+    $("humanModalResponse").value = "";
+    setTimeout(() => $("humanModalResponse").focus(), 0);
   }
 }
 
@@ -259,7 +365,7 @@ function transcriptCard(entry) {
   const title = document.createElement("div");
   title.className = "transcript-title";
   if (entry.type === "human") {
-    title.textContent = "Human controller";
+    title.textContent = entry.interjection ? "Human controller · interjection" : "Human controller";
   } else {
     title.textContent = `AI ${entry.side || "?"} · ${entry.label || "AI"}`;
   }
@@ -267,7 +373,8 @@ function transcriptCard(entry) {
   const meta = document.createElement("div");
   meta.className = "transcript-meta";
   const when = entry.time ? new Date(entry.time).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" }) : "";
-  meta.textContent = `#${entry.seq}${when ? ` · ${when}` : ""}`;
+  const phase = entry.workPhase && !["relay", "collaborate"].includes(entry.workPhase) ? ` · ${String(entry.workPhase).toUpperCase()}` : "";
+  meta.textContent = `#${entry.seq}${phase}${when ? ` · ${when}` : ""}`;
 
   const body = document.createElement("div");
   body.className = "transcript-body";
@@ -275,6 +382,8 @@ function transcriptCard(entry) {
 
   head.append(title, meta);
   card.append(head, body);
+  const chips = attachmentChips(entry);
+  if (chips) card.appendChild(chips);
   return card;
 }
 
@@ -438,9 +547,18 @@ function updateControls(s) {
   $("pause").disabled = !s.sessionActive || !s.running || s.awaitingHuman;
   $("resume").disabled = !s.sessionActive || s.running || s.awaitingHuman;
   $("stop").disabled = !s.sessionActive;
+  $("newAllChats").disabled = Boolean(s.sessionActive);
+  $("freshOnStart").disabled = Boolean(s.sessionActive);
+  $("workMode").disabled = Boolean(s.sessionActive);
+  $("sendInterject").disabled = !s.sessionActive || s.awaitingHuman;
+  $("interjectText").disabled = !s.sessionActive || s.awaitingHuman;
+  $("interjectNow").disabled = !s.sessionActive || s.awaitingHuman;
+  updateWorkModeUI();
 
   for (const side of SIDES) {
-    $(`resend${side}`).disabled = !s.sessionActive || !s.running || s.awaitingHuman || !s.lastSentBySide?.[side];
+    $(`newChat${side}`).disabled = Boolean(s.sessionActive) || !selectedTab(side);
+    const batchDone = ["compete", "parallel", "review"].includes(s.workMode) && Array.isArray(s.phaseCompletedSides) && s.phaseCompletedSides.includes(side);
+    $(`resend${side}`).disabled = !s.sessionActive || !s.running || s.awaitingHuman || !s.lastSentBySide?.[side] || batchDone;
   }
   $("jobHistory").querySelectorAll(".history-use").forEach(button => { button.disabled = Boolean(s.sessionActive); });
   $("commandHistory").querySelectorAll(".history-use").forEach(button => { button.disabled = Boolean(s.sessionActive); });
@@ -454,9 +572,17 @@ function updateStatus(s) {
   if (s.sessionActive && s.awaitingHuman && s.pendingHuman) {
     $("status").textContent = `PAUSED — HUMAN INPUT NEEDED\nWaiting on controller for ${s.pendingHuman.requestingLabel || `AI ${s.pendingHuman.requestingSide}`}.`;
   } else if (s.sessionActive && s.running) {
-    $("status").textContent = `Running\nWaiting on: ${currentLabel(s)}\nAI turns: ${s.turn}/${limit}`;
+    const batch = ["compete", "parallel", "review"].includes(s.workMode);
+    if (batch) {
+      const pending = Array.isArray(s.phasePendingSides) && s.phasePendingSides.length ? s.phasePendingSides.map(side => `AI ${side}`).join(", ") : "phase transition";
+      $("status").textContent = `Running — ${WORK_MODE_INFO[s.workMode]?.label || s.workMode} / ${String(s.workPhase || "primary").toUpperCase()}\nWaiting on: ${pending}\nAI turns: ${s.turn}/${limit}`;
+    } else {
+      $("status").textContent = `Running — ${WORK_MODE_INFO[s.workMode]?.label || "Relay"}\nWaiting on: ${currentLabel(s)}\nAI turns: ${s.turn}/${limit}`;
+    }
   } else if (s.sessionActive && s.paused) {
-    $("status").textContent = `PAUSED — ${s.pauseReason || "Session saved."}\nNext/current: ${currentLabel(s)}\nAI turns: ${s.turn}/${limit}`;
+    const batch = ["compete", "parallel", "review"].includes(s.workMode);
+    const next = batch ? ((s.phasePendingSides || []).map(side => `AI ${side}`).join(", ") || "phase transition") : currentLabel(s);
+    $("status").textContent = `PAUSED — ${s.pauseReason || "Session saved."}\nNext/current: ${next}\nAI turns: ${s.turn}/${limit}`;
   } else {
     const last = s.log?.length ? s.log[s.log.length - 1]?.text : "";
     $("status").textContent = `Idle${last ? ` — ${last}` : ""}`;
@@ -475,9 +601,10 @@ async function refreshState() {
     latestState = s;
     hydrateFromState(s);
     renderHistory(s.history);
+    renderRelayArtifacts(s.relayArtifacts);
     updateStatus(s);
     updateControls(s);
-    setHumanPanel(s);
+    setHumanModal(s);
     renderTranscript(s);
   } catch (err) {
     $("status").textContent = `Bridge state error: ${err.message}`;
@@ -507,16 +634,18 @@ function validateMaxTurns() {
   input.classList.remove("validation-error");
   const raw = input.value.trim();
   const value = Number(raw);
-  const valid = raw !== "" && Number.isInteger(value) && (value === -1 || (value >= 1 && value <= 10000));
+  const mode = selectedWorkMode();
+  const minTurns = WORK_MODE_INFO[mode]?.minTurns || 1;
+  const valid = raw !== "" && Number.isInteger(value) && (value === -1 || (value >= minTurns && value <= 10000));
   if (!valid) {
     input.classList.add("validation-error");
-    return "Max AI turns must be -1 (infinite) or an integer from 1 to 10000.";
+    return `${WORK_MODE_INFO[mode]?.label || "This"} mode requires -1 (infinite) or an integer from ${minTurns} to 10000.`;
   }
   return null;
 }
 
 $("themeSelect").addEventListener("change", async event => {
-  const theme = THEMES.has(event.target.value) ? event.target.value : "midnight";
+  const theme = THEMES.has(event.target.value) ? event.target.value : "blizzard";
   applyTheme(theme);
   await chrome.storage.local.set({ [THEME_KEY]: theme });
 });
@@ -524,6 +653,40 @@ $("themeSelect").addEventListener("change", async event => {
 chrome.storage.onChanged.addListener((changes, area) => {
   if (area === "local" && changes[THEME_KEY]) applyTheme(changes[THEME_KEY].newValue);
 });
+
+async function openFreshChats(sides) {
+  if (latestState?.sessionActive) return;
+  const chosen = Array.isArray(sides) ? sides : SIDES;
+  const tabError = validateThreeTabs();
+  if (chosen.length === 3 && tabError) {
+    $("status").textContent = tabError;
+    return;
+  }
+
+  const oldLabels = new Map();
+  for (const side of chosen) {
+    const button = chosen.length === 1 ? $(`newChat${side}`) : null;
+    if (button) { oldLabels.set(button, button.textContent); button.textContent = "Opening…"; button.disabled = true; }
+  }
+  if (chosen.length === 3) { oldLabels.set($("newAllChats"), $("newAllChats").textContent); $("newAllChats").textContent = "Opening…"; $("newAllChats").disabled = true; }
+
+  try {
+    const payload = { type: "AI_BRIDGE_NEW_CHATS", sides: chosen };
+    for (const side of chosen) {
+      payload[`tab${side}`] = selectedTab(side);
+      if (!payload[`tab${side}`]) throw new Error(`Choose an open AI tab for AI ${side}.`);
+    }
+    const res = await chrome.runtime.sendMessage(payload);
+    if (!res?.ok) throw new Error(res?.error || "Could not open fresh AI chat.");
+    $("status").textContent = `Fresh chat${chosen.length === 1 ? "" : "s"} opened for AI ${chosen.join(", AI ")}.`;
+    await loadTabs({ preserve: true });
+    await refreshState();
+  } catch (err) {
+    $("status").textContent = `New chat failed: ${err.message}`;
+  } finally {
+    for (const [button, label] of oldLabels) button.textContent = label;
+  }
+}
 
 async function clearHistory(kind) {
   const res = await chrome.runtime.sendMessage({ type: "AI_BRIDGE_CLEAR_HISTORY", kind });
@@ -537,7 +700,15 @@ async function clearHistory(kind) {
 $("clearJobHistory").addEventListener("click", () => clearHistory("jobs"));
 $("clearCommandHistory").addEventListener("click", () => clearHistory("commands"));
 
-for (const side of SIDES) $(`tab${side}`).addEventListener("change", refreshStartLabels);
+for (const side of SIDES) {
+  $(`tab${side}`).addEventListener("change", () => { refreshStartLabels(); if (latestState) updateControls(latestState); });
+  $(`newChat${side}`).addEventListener("click", () => openFreshChats([side]));
+}
+$("newAllChats").addEventListener("click", () => openFreshChats(SIDES));
+$("workMode").addEventListener("change", () => {
+  updateWorkModeUI();
+  $("maxTurns").classList.remove("validation-error");
+});
 $("maxTurns").addEventListener("input", () => $("maxTurns").classList.remove("validation-error"));
 
 $("start").addEventListener("click", async () => {
@@ -555,11 +726,13 @@ $("start").addEventListener("click", async () => {
       type: "AI_BRIDGE_START",
       ...selectedBindings(),
       startSide: $("startSide").value,
+      workMode: selectedWorkMode(),
       jobA: $("jobA").value.trim(),
       jobB: $("jobB").value.trim(),
       jobC: $("jobC").value.trim(),
       initialPrompt,
       sourceFiles: selectedSourceFiles.map(file => ({ path: file.path, size: file.size, content: file.content })),
+      freshChats: $("freshOnStart").checked,
       maxTurns: Number($("maxTurns").value),
       delayMs: Number($("delayMs").value)
     });
@@ -617,20 +790,55 @@ async function resend(side) {
 }
 for (const side of SIDES) $(`resend${side}`).addEventListener("click", () => resend(side));
 
-$("sendHuman").addEventListener("click", async () => {
-  const text = $("humanResponse").value.trim();
-  if (!text) return $("status").textContent = "Type your response to the AI first.";
+$("sendHumanModal").addEventListener("click", async () => {
+  const text = $("humanModalResponse").value.trim();
+  if (!text) {
+    $("humanModalResponse").focus();
+    return;
+  }
 
-  $("sendHuman").disabled = true;
-  $("sendHuman").textContent = "Sending…";
+  $("sendHumanModal").disabled = true;
+  $("sendHumanModal").textContent = "Sending…";
   try {
     const res = await chrome.runtime.sendMessage({ type: "AI_BRIDGE_HUMAN_REPLY", text });
     if (!res?.ok) throw new Error(res?.error || "Could not send human response");
-    $("humanResponse").value = "";
+    $("humanModalResponse").value = "";
   } catch (err) {
     $("status").textContent = `Human response failed: ${err.message}`;
   } finally {
-    $("sendHuman").textContent = "Send response & continue";
+    $("sendHumanModal").textContent = "Send response & continue";
+    await refreshState();
+  }
+});
+
+$("humanModalResponse").addEventListener("keydown", event => {
+  if ((event.ctrlKey || event.metaKey) && event.key === "Enter") {
+    event.preventDefault();
+    $("sendHumanModal").click();
+  }
+});
+
+$("interjectNow").addEventListener("click", () => {
+  $("interjectText").scrollIntoView({ behavior: "smooth", block: "center" });
+  setTimeout(() => $("interjectText").focus(), 180);
+});
+
+$("sendInterject").addEventListener("click", async () => {
+  const text = $("interjectText").value.trim();
+  if (!text) return $("status").textContent = "Type your interjection first.";
+  $("sendInterject").disabled = true;
+  $("sendInterject").textContent = "Adding…";
+  try {
+    const res = await chrome.runtime.sendMessage({ type: "AI_BRIDGE_INTERJECT", text });
+    if (!res?.ok) throw new Error(res?.error || "Could not add interjection");
+    $("interjectText").value = "";
+    $("status").textContent = res.delivery === "review-phase"
+      ? "Interjection added — it will be included in the upcoming peer-review prompts."
+      : "Interjection added — it will be delivered on the next safe scheduled handoff.";
+  } catch (err) {
+    $("status").textContent = `Interjection failed: ${err.message}`;
+  } finally {
+    $("sendInterject").textContent = "Interject into team";
     await refreshState();
   }
 });
