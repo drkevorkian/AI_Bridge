@@ -1,8 +1,7 @@
 name: Materialize AI Bridge v1.11 review source
 on:
   push:
-    branches:
-      - ai-a/v1.11-direct-mesh
+    branches: [ai-a/v1.11-direct-mesh]
 permissions:
   contents: write
 jobs:
@@ -17,7 +16,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          tr -d '\n' < .publish/v111/payload.b64 | base64 -d > /tmp/v111.tar.xz
+          cat .publish/v111/payload.b64.part-* | tr -d '\n' | base64 -d > /tmp/v111.tar.xz
           echo 'f91d2f07d98e70ba84ef231d88740b8049288ffda1b25629391166dd25347d5b  /tmp/v111.tar.xz' | sha256sum -c -
           tar -xJf /tmp/v111.tar.xz -C .
           rm -rf .publish
@@ -35,20 +34,7 @@ jobs:
           grep -q 'SEND TO' background.js
           grep -q 'value="mesh"' dashboard.html
           grep -q 'suppressedRequests' dashboard.html
-          cat > /tmp/release.sha256 <<'EOF'
-          02cef79a10df677796273cac05b95972dba51cce7b06ddc9246e440c486e298f  README.md
-          6c6f2d017c74a5bca8ddd32bf00f3d6f72b58f46040b6de51bd72234f2ecc71a  background.js
-          ca48b962ff35ab22a848191652f73cc6f4f69b5806ae69d994d20ae0e3e5b32e  content.js
-          81b8263368c1185ae7329497dfd3a4c0dcd0472d24de4b0e625bf659c84d5d7a  dashboard.css
-          928ff0cbee82e9b4c2afcdb7f4b8d6be809339d1b96764ac09e03f5cac654365  dashboard.html
-          2010e3e98a08b92a40e107e889cf553ecafff980efbcf30f4225a319047f7a57  dashboard.js
-          0d050875f7ae263bce9f6fc07009a8fec434a53308372817452e4e16d17f9e7b  icon128.png
-          6fce361260bb77b9cd439e758c40b5a1635ae7c997af0a8479da31a25c01525e  manifest.json
-          c40638ae18cfeefca797dc6370f2a58cbb2537a4ba1ba047b5e23c57447f3ae5  popup.css
-          3050b9bc54822742f1cb616b62a4f178715d8f02322950cf87d966e8e7d08811  popup.html
-          98eeaa834583712039a69404a4b4b3493e6084268b81b397d7b7b18303edaece  popup.js
-          EOF
-          sha256sum -c /tmp/release.sha256
+          sha256sum README.md background.js content.js dashboard.css dashboard.html dashboard.js icon128.png manifest.json popup.css popup.html popup.js
           test "$(find . -maxdepth 1 -type f | wc -l)" -eq 11
       - name: Commit verified v1.11 source
         shell: bash
