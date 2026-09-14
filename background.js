@@ -11,6 +11,7 @@ const MAX_SOURCE_TOTAL_CHARS = 400000;
 const HISTORY_VERSION = 1;
 const MAX_JOB_HISTORY = 60;
 const MAX_COMMAND_HISTORY = 40;
+const MAX_RULES_HISTORY = 40;
 const MAX_RELAY_ARTIFACTS = 24;
 const MAX_ARTIFACTS_PER_RESPONSE = 8;
 const MAX_ARTIFACT_FILE_BYTES = 12 * 1024 * 1024;
@@ -24,7 +25,8 @@ const MAX_ZIP_ENTRY_UNCOMPRESSED_BYTES = 2 * 1024 * 1024;
 const DEFAULT_HISTORY = {
   version: HISTORY_VERSION,
   jobs: [],
-  commands: []
+  commands: [],
+  rules: []
 };
 
 const DEFAULT_STATE = {
@@ -43,6 +45,7 @@ const DEFAULT_STATE = {
   jobA: "",
   jobB: "",
   jobC: "",
+  teamRules: "",
 
   currentSide: null,
   startSide: "A",
@@ -84,7 +87,7 @@ const DEFAULT_STATE = {
 };
 
 let state = { ...DEFAULT_STATE };
-let history = { ...DEFAULT_HISTORY, jobs: [], commands: [] };
+let history = { ...DEFAULT_HISTORY, jobs: [], commands: [], rules: [] };
 let artifactStore = {};
 let responseCommitQueue = Promise.resolve();
 let stateReady = loadState();
@@ -664,6 +667,7 @@ function normalizeHistory(raw) {
   const safe = raw && typeof raw === "object" ? raw : {};
   const jobs = Array.isArray(safe.jobs) ? safe.jobs : [];
   const commands = Array.isArray(safe.commands) ? safe.commands : [];
+  const rules = Array.isArray(safe.rules) ? safe.rules : [];
 
   return {
     version: HISTORY_VERSION,
@@ -682,7 +686,14 @@ function normalizeHistory(raw) {
         text: String(item?.text || "").trim().slice(0, 12000)
       }))
       .filter(item => item.text)
-      .slice(0, MAX_COMMAND_HISTORY)
+      .slice(0, MAX_COMMAND_HISTORY),
+    rules: rules
+      .map(item => ({
+        time: Number(item?.time) || Date.now(),
+        text: String(item?.text || "").trim().slice(0, 12000)
+      }))
+      .filter(item => item.text)
+      .slice(0, MAX_RULES_HISTORY)
   };
 }
 
@@ -707,6 +718,14 @@ function recordSessionHistory(sessionState) {
     history.commands.unshift({ time: now, text: command });
     history.commands = history.commands.slice(0, MAX_COMMAND_HISTORY);
   }
+
+  const rules = String(sessionState.teamRules || "").trim();
+  if (rules) {
+    if (!Array.isArray(history.rules)) history.rules = [];
+    history.rules = history.rules.filter(item => item.text !== rules);
+    history.rules.unshift({ time: now, text: rules });
+    history.rules = history.rules.slice(0, MAX_RULES_HISTORY);
+  }
 }
 
 function appendLog(entry) {
@@ -719,7 +738,8 @@ function clientStateSnapshot({ includeSources = false, afterSeq = null, omitTran
     ...state,
     history: {
       jobs: history.jobs.map(item => ({ ...item })),
-      commands: history.commands.map(item => ({ ...item }))
+      commands: history.commands.map(item => ({ ...item })),
+      rules: history.rules.map(item => ({ ...item }))
     },
     lastSentBySide: Object.fromEntries(
       Object.entries(state.lastSentBySide || {}).map(([side, text]) => [side, text ? "[available]" : ""])
@@ -1035,8 +1055,19 @@ function humanProtocolText() {
   ].join("\n");
 }
 
+function teamRulesBlock() {
+  const rules = String(state.teamRules || "").trim();
+  if (!rules) return "";
+  return [
+    "TEAM RULES (ALL MEMBERS):",
+    "These standing rules bind every teammate regardless of assigned job or role. Follow them even when they conflict with convenience. Do not treat them as optional, and do not apply them only to yourself.",
+    rules
+  ].join("\n");
+}
+
 function teamContext(side) {
   const roster = SIDES.map(s => `- AI ${s} — ${labelForSide(s)} — JOB: ${jobForSide(s)}`).join("\n");
+  const rules = teamRulesBlock();
   return [
     `You are AI ${side} (${labelForSide(side)}) in a three-AI team coordinated by AI Bridge.`,
     "",
@@ -1045,6 +1076,7 @@ function teamContext(side) {
     "",
     "TEAM ROSTER:",
     roster,
+    ...(rules ? ["", rules] : []),
     "",
     "WORKING RULES:",
     "- Do your assigned job first. Do not silently take over another agent's job unless it is necessary to unblock the team.",
@@ -2097,7 +2129,8 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
       const kind = String(msg.kind || "all");
       if (kind === "jobs" || kind === "all") history.jobs = [];
       if (kind === "commands" || kind === "all") history.commands = [];
-      if (!["jobs", "commands", "all"].includes(kind)) throw new Error("Unknown history type.");
+      if (kind === "rules" || kind === "all") history.rules = [];
+      if (!["jobs", "commands", "rules", "all"].includes(kind)) throw new Error("Unknown history type.");
       await saveHistory();
       sendResponse({ ok: true });
       return;
@@ -2132,6 +2165,7 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
       fresh.delayMs = Math.max(0, Math.min(30000, Number.isFinite(requestedDelay) ? requestedDelay : 1500));
       fresh.initialPrompt = String(msg.initialPrompt || "").trim();
       if (!fresh.initialPrompt) throw new Error("Enter an initial objective or prompt.");
+      fresh.teamRules = String(msg.teamRules || "").trim();
       fresh.sourceFiles = normalizeSourceFiles(msg.sourceFiles);
       fresh.sourceDeliveredBySide = { A: false, B: false, C: false };
 

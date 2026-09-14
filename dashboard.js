@@ -189,6 +189,7 @@ function historyEmpty(text) {
 function renderHistory(history = latestState?.history) {
   const jobs = Array.isArray(history?.jobs) ? history.jobs : [];
   const commands = Array.isArray(history?.commands) ? history.commands : [];
+  const rules = Array.isArray(history?.rules) ? history.rules : [];
   const locked = Boolean(latestState?.sessionActive);
 
   const jobList = $("jobHistory");
@@ -270,6 +271,45 @@ function renderHistory(history = latestState?.history) {
       commandList.appendChild(row);
     }
   }
+
+  const rulesList = $("rulesHistory");
+  if (rulesList) {
+    rulesList.textContent = "";
+    if (!rules.length) {
+      rulesList.appendChild(historyEmpty("No previous team rules yet."));
+    } else {
+      for (const item of rules) {
+        const row = document.createElement("div");
+        row.className = "history-row";
+
+        const badge = document.createElement("div");
+        badge.className = "history-badge";
+        badge.textContent = "ALL";
+
+        const copy = document.createElement("div");
+        copy.className = "history-copy";
+        const title = document.createElement("div");
+        title.className = "history-title";
+        title.textContent = formatHistoryTime(item.time);
+        const text = document.createElement("div");
+        text.className = "history-text";
+        text.textContent = item.text || "";
+        copy.append(title, text);
+
+        const use = document.createElement("button");
+        use.type = "button";
+        use.className = "tiny ghost history-use";
+        use.textContent = "Use";
+        use.disabled = locked;
+        use.addEventListener("click", () => {
+          if (!locked) $("teamRules").value = item.text || "";
+        });
+
+        row.append(badge, copy, use);
+        rulesList.appendChild(row);
+      }
+    }
+  }
 }
 
 function aiName(url) {
@@ -335,6 +375,7 @@ function hydrateFromState(s) {
     if (s[`job${side}`]) $(`job${side}`).value = s[`job${side}`];
   }
   if (s.initialPrompt) $("prompt").value = s.initialPrompt;
+  if (typeof s.teamRules === "string") $("teamRules").value = s.teamRules;
   if (s.startSide && SIDES.includes(s.startSide)) $("startSide").value = s.startSide;
   if (s.workMode && WORK_MODE_INFO[s.workMode]) $("workMode").value = s.workMode;
   updateWorkModeUI();
@@ -791,6 +832,7 @@ function updateControls(s) {
   $("newAllChats").disabled = Boolean(s.sessionActive);
   $("freshOnStart").disabled = Boolean(s.sessionActive);
   $("workMode").disabled = Boolean(s.sessionActive);
+  $("teamRules").disabled = Boolean(s.sessionActive);
   $("sendInterject").disabled = !s.sessionActive || s.awaitingHuman;
   $("interjectText").disabled = !s.sessionActive || s.awaitingHuman;
   $("interjectNow").disabled = !s.sessionActive || s.awaitingHuman;
@@ -803,6 +845,7 @@ function updateControls(s) {
   }
   $("jobHistory").querySelectorAll(".history-use").forEach(button => { button.disabled = Boolean(s.sessionActive); });
   $("commandHistory").querySelectorAll(".history-use").forEach(button => { button.disabled = Boolean(s.sessionActive); });
+  $("rulesHistory")?.querySelectorAll(".history-use").forEach(button => { button.disabled = Boolean(s.sessionActive); });
 }
 
 function updateStatus(s) {
@@ -947,6 +990,7 @@ async function clearHistory(kind) {
 
 $("clearJobHistory").addEventListener("click", () => clearHistory("jobs"));
 $("clearCommandHistory").addEventListener("click", () => clearHistory("commands"));
+$("clearRulesHistory").addEventListener("click", () => clearHistory("rules"));
 
 for (const side of SIDES) {
   $(`tab${side}`).addEventListener("change", () => { refreshStartLabels(); if (latestState) updateControls(latestState); });
@@ -978,6 +1022,7 @@ $("start").addEventListener("click", async () => {
       jobA: $("jobA").value.trim(),
       jobB: $("jobB").value.trim(),
       jobC: $("jobC").value.trim(),
+      teamRules: $("teamRules").value.trim(),
       initialPrompt,
       sourceFiles: selectedSourceFiles.map(file => ({ path: file.path, size: file.size, content: file.content })),
       freshChats: $("freshOnStart").checked,

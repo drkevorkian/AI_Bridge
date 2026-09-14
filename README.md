@@ -1,6 +1,6 @@
 # AI Bridge
 
-**Current version: 1.11.4**
+**Current version: 1.12.0**
 
 > GitHub commit [`f34778f`](https://github.com/drkevorkian/AI_Bridge/commit/f34778f81f9362ef0ad2c03933011e41d3c9fe36) was accidentally titled `1.13`. That was a **label typo only**. The shipped extension version is **1.11.3**.
 
@@ -29,7 +29,7 @@ The AI webpages must remain open in browser tabs. AI Bridge reuses those tabs ra
 5. For an update, replace the files in that folder and click **Reload** on the extension card.
 6. Open three supported AI chats.
 7. Click the AI Bridge extension and open the dashboard.
-8. Bind the three tabs to AI A, B, and C, assign roles, choose a work mode, enter the objective, and press **Start**.
+8. Bind the three tabs to AI A, B, and C, assign roles, set standing team rules, choose a work mode, enter the objective, and press **Start**.
 
 ## Dashboard
 
@@ -39,6 +39,7 @@ Core controls include:
 
 - bind AI A / B / C to open supported tabs
 - assign a separate role to each AI
+- set standing **Team rules** that bind A, B, and C regardless of job
 - choose the Main AI / first speaker
 - set the primary objective
 - choose a work mode
@@ -280,6 +281,7 @@ AI Bridge stores reusable history separately from the active transcript.
 
 - prior roles can be applied to **any** of A, B, or C, regardless of which AI originally used the role
 - previous primary objectives can be reused from command history
+- previous **team rules** can be reused independently of the objective
 - duplicate history entries are de-duplicated / promoted rather than endlessly repeated
 
 ## Themes
@@ -307,6 +309,7 @@ AI Bridge stores session state in `chrome.storage.local`, including:
 - transcript
 - AI bindings and labels
 - roles
+- standing team rules
 - objective
 - turn cursor and limits
 - work-mode phase state
@@ -333,7 +336,19 @@ The release contains exactly 11 extension files:
 - `README.md`
 - `icon128.png`
 
-## Current release notes — 1.11.4
+## Current release notes — 1.12.0
+
+**This release is 1.12.0.**
+
+- New **Team rules** field binds every teammate regardless of assigned job
+- Rules are injected into every A/B/C turn (initial, relay, mesh, review, resume)
+- Previous team rules are saved and reusable independently of the objective
+- Empty team rules stay omitted from prompts so old sessions do not get extra boilerplate
+- Default layout remains 40% / 60% and still resizable
+
+It also retains the 1.11.4 resizable panes and the rest of the 1.11.x series.
+
+## Release notes — 1.11.4
 
 **This release is 1.11.4.**
 

@@ -15,7 +15,7 @@
     <aside id="controlPanel" class="control-panel">
       <header class="brand-block">
         <div>
-          <div class="eyebrow">AI BRIDGE <span id="versionBadge" class="version-badge">v1.11.4</span></div>
+          <div class="eyebrow">AI BRIDGE <span id="versionBadge" class="version-badge">v1.12.0</span></div>
           <h1>Three agents. One workspace.</h1>
         </div>
         <div class="header-tools">
@@ -145,6 +145,20 @@
             <option value="C">AI C — Main</option>
           </select>
           <div class="field-help">This is the Main AI for the run. Human interjections wait for this model and are delivered with its next group turn.</div>
+        </div>
+
+        <label for="teamRules">Team rules</label>
+        <textarea id="teamRules" rows="6" placeholder="Standing rules every teammate must follow, regardless of assigned job..."></textarea>
+        <div class="field-help">Injected into every A/B/C turn. Use this for shared constraints, communication protocol, coding standards, or anything that should bind the whole team — not one role.</div>
+
+        <div class="history-block command-history-block">
+          <div class="history-heading">
+            <span>Previous team rules</span>
+            <button id="clearRulesHistory" class="tiny ghost" type="button">Clear</button>
+          </div>
+          <div id="rulesHistory" class="history-list">
+            <div class="history-empty">No previous team rules yet.</div>
+          </div>
         </div>
 
         <label for="prompt">Primary objective</label>
