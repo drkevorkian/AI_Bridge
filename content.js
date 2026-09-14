@@ -1,6 +1,6 @@
 (() => {
-  if (window.__AI_BRIDGE_LOADED_V13__) return;
-  window.__AI_BRIDGE_LOADED_V13__ = true;
+  if (window.__AI_BRIDGE_LOADED_V15__) return;
+  window.__AI_BRIDGE_LOADED_V15__ = true;
 
   const host = location.hostname;
   let lastObservedText = "";
@@ -33,79 +33,39 @@
     },
     grok: {
       matches: () => host === "grok.com",
-      inputSelectors: [
-        "textarea",
-        "div[contenteditable='true']"
-      ],
-      sendSelectors: [
-        "button[aria-label*='Send']",
-        "button[type='submit']"
-      ],
-      responseSelectors: [
-        "article",
-        "div[class*='message']"
-      ],
-      stopSelectors: [
-        "button[aria-label*='Stop']",
-        "button[title*='Stop']"
-      ]
+      inputSelectors: ["textarea", "div[contenteditable='true']"],
+      sendSelectors: ["button[aria-label*='Send']", "button[type='submit']"],
+      responseSelectors: ["article", "div[class*='message']"],
+      stopSelectors: ["button[aria-label*='Stop']", "button[title*='Stop']"]
     },
     claude: {
       matches: () => host === "claude.ai",
-      inputSelectors: [
-        "div[contenteditable='true']",
-        "textarea"
-      ],
-      sendSelectors: [
-        "button[aria-label*='Send']",
-        "button[type='submit']"
-      ],
+      inputSelectors: ["div[contenteditable='true']", "textarea"],
+      sendSelectors: ["button[aria-label*='Send']", "button[type='submit']"],
       responseSelectors: [
         "div[data-is-streaming]",
         "div.font-claude-message",
         "div[class*='font-claude']"
       ],
-      stopSelectors: [
-        "button[aria-label*='Stop']"
-      ]
+      stopSelectors: ["button[aria-label*='Stop']"]
     },
     gemini: {
       matches: () => host === "gemini.google.com",
-      inputSelectors: [
-        "div[contenteditable='true']",
-        "textarea"
-      ],
-      sendSelectors: [
-        "button[aria-label*='Send']",
-        "button.send-button"
-      ],
-      responseSelectors: [
-        "model-response",
-        ".model-response-text",
-        "message-content"
-      ],
-      stopSelectors: [
-        "button[aria-label*='Stop']"
-      ]
+      inputSelectors: ["div[contenteditable='true']", "textarea"],
+      sendSelectors: ["button[aria-label*='Send']", "button.send-button"],
+      responseSelectors: ["model-response", ".model-response-text", "message-content"],
+      stopSelectors: ["button[aria-label*='Stop']"]
     },
     copilot: {
       matches: () => host === "copilot.microsoft.com",
-      inputSelectors: [
-        "textarea",
-        "div[contenteditable='true']"
-      ],
+      inputSelectors: ["textarea", "div[contenteditable='true']"],
       sendSelectors: [
         "button[aria-label*='Submit']",
         "button[aria-label*='Send']",
         "button[type='submit']"
       ],
-      responseSelectors: [
-        "div[data-content='ai-message']",
-        "div[class*='response']"
-      ],
-      stopSelectors: [
-        "button[aria-label*='Stop']"
-      ]
+      responseSelectors: ["div[data-content='ai-message']", "div[class*='response']"],
+      stopSelectors: ["button[aria-label*='Stop']"]
     }
   };
 
@@ -166,8 +126,6 @@
   }
 
   async function sendPrompt(text) {
-    // A resend may legitimately produce the same answer as before, so clear
-    // the reporting guard whenever a new prompt is injected.
     lastReportedText = "";
     const input = firstVisible(adapter.inputSelectors);
     if (!input) throw new Error("Could not find the prompt box on this page.");
@@ -203,7 +161,6 @@
     const nodes = allVisible(adapter.responseSelectors);
     if (!nodes.length) return "";
 
-    // Prefer the last substantial visible node.
     for (let i = nodes.length - 1; i >= 0; i--) {
       const text = (nodes[i].innerText || nodes[i].textContent || "").trim();
       if (text.length >= 2) return text;
@@ -236,10 +193,7 @@
     } catch (_) {}
   }
 
-  const observer = new MutationObserver(() => {
-    // The interval below does the actual stability check. The observer merely
-    // ensures DOM-heavy sites keep us responsive without polling too slowly.
-  });
+  const observer = new MutationObserver(() => {});
   observer.observe(document.documentElement, { childList: true, subtree: true, characterData: true });
   setInterval(monitor, 650);
 

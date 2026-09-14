@@ -1,5 +1,5 @@
 <!doctype html>
-<html>
+<html lang="en">
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width,initial-scale=1">
@@ -8,69 +8,29 @@
 </head>
 <body>
   <main>
-    <h1>AI Bridge</h1>
-    <p class="sub">Three AI agents, three jobs, one persistent shared conversation.</p>
-
-    <section class="ai-card">
-      <div class="row-title"><strong>AI A</strong><button id="resendA" class="small secondary" disabled>Resend</button></div>
-      <select id="tabA"></select>
-      <label for="jobA">AI A job / responsibility</label>
-      <textarea id="jobA" class="job" rows="3" placeholder="Example: Lead architect — propose the primary plan and maintain the system-level design."></textarea>
-    </section>
-
-    <section class="ai-card">
-      <div class="row-title"><strong>AI B</strong><button id="resendB" class="small secondary" disabled>Resend</button></div>
-      <select id="tabB"></select>
-      <label for="jobB">AI B job / responsibility</label>
-      <textarea id="jobB" class="job" rows="3" placeholder="Example: Red-team critic — attack assumptions, find failure modes, and demand evidence."></textarea>
-    </section>
-
-    <section class="ai-card">
-      <div class="row-title"><strong>AI C</strong><button id="resendC" class="small secondary" disabled>Resend</button></div>
-      <select id="tabC"></select>
-      <label for="jobC">AI C job / responsibility</label>
-      <textarea id="jobC" class="job" rows="3" placeholder="Example: Verifier — reconcile A and B, check calculations, and turn conclusions into decisions."></textarea>
-    </section>
-
-    <label for="startSide">Who gets the first prompt?</label>
-    <select id="startSide">
-      <option value="A">AI A starts</option>
-      <option value="B">AI B starts</option>
-      <option value="C">AI C starts</option>
-    </select>
-
-    <label for="prompt">Primary objective / initial prompt</label>
-    <textarea id="prompt" rows="6" placeholder="Define the problem all three AIs are working on..."></textarea>
-
-    <div class="grid">
+    <div class="head">
       <div>
-        <label for="maxTurns">Max AI turns</label>
-        <input id="maxTurns" type="number" min="1" max="300" value="30">
+        <div class="eyebrow">AI BRIDGE</div>
+        <h1>Bridge control</h1>
       </div>
-      <div>
-        <label for="delayMs">Delay (ms)</label>
-        <input id="delayMs" type="number" min="0" max="30000" step="100" value="1500">
-      </div>
+      <div id="pill" class="pill idle">Idle</div>
     </div>
 
-    <div class="buttons primary-buttons">
-      <button id="start">Start new</button>
+    <div id="status" class="status">Loading…</div>
+    <label class="theme-label" for="themeSelect">Theme</label>
+    <select id="themeSelect" class="theme-select">
+      <option value="midnight">Midnight</option>
+      <option value="slate">Slate</option>
+      <option value="light">Light</option>
+    </select>
+    <button id="openDashboard" class="primary">Open Dashboard</button>
+
+    <div class="actions">
       <button id="pause" class="secondary" disabled>Pause</button>
-      <button id="resume" class="resume" disabled>Resume</button>
       <button id="stop" class="danger" disabled>Stop</button>
     </div>
 
-    <section id="humanPanel" class="human-panel hidden">
-      <div class="human-title">Human input needed</div>
-      <div id="humanWho" class="human-who"></div>
-      <div id="humanQuestion" class="human-question"></div>
-      <label for="humanResponse">Your response</label>
-      <textarea id="humanResponse" rows="4" placeholder="Type your answer here..."></textarea>
-      <button id="sendHuman" class="human-send">Send response & continue</button>
-    </section>
-
-    <div id="status" class="status">Idle</div>
-    <p class="hint">Turn order is A → B → C → A unless you choose a different starting agent. Each agent receives its job plus all new team updates since its previous handoff. Pause/resume preserves the session.</p>
+    <p class="hint">The dashboard contains tab bindings, jobs, the objective, human responses, turn limits, and live AI output.</p>
   </main>
   <script src="popup.js"></script>
 </body>
