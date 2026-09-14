@@ -1,0 +1,104 @@
+diff --git a/background.js b/background.js
+--- a/background.js
++++ b/background.js
+@@
+ const SIDES = ["A", "B", "C"];
+ const STATE_VERSION = 3;
++const INFINITE_TURNS = -1;
++const MIN_FINITE_TURNS = 1;
++const MAX_FINITE_TURNS = 10000;
+@@
+   currentSide: null,
+   startSide: "A",
+   turn: 0,
+-  maxTurns: 30,
++  maxTurns: INFINITE_TURNS,
+   delayMs: 1500,
+   initialPrompt: "",
+@@
+ function cloneDefaultState() {
+@@
+ }
++
++function normalizeMaxTurns(raw) {
++  if (raw === undefined || raw === null || raw === "") return INFINITE_TURNS;
++
++  const value = Number(raw);
++  if (!Number.isInteger(value)) {
++    throw new Error("Max AI turns must be -1 (infinite) or an integer from 1 to 10000.");
++  }
++  if (value === INFINITE_TURNS) return INFINITE_TURNS;
++  if (value < MIN_FINITE_TURNS || value > MAX_FINITE_TURNS) {
++    throw new Error("Max AI turns must be -1 (infinite) or an integer from 1 to 10000.");
++  }
++  return value;
++}
++
++function hasReachedTurnLimit() {
++  return state.maxTurns !== INFINITE_TURNS && state.turn >= state.maxTurns;
++}
+@@
+ function humanProtocolText() {
+   return [
+     "HUMAN-INPUT PROTOCOL:",
+-    "If you genuinely need information, a decision, clarification, or permission from the human controller before you can continue, end your response with exactly:",
++    "Only request human input when you genuinely cannot continue without information, a decision, clarification, or permission from the human controller.",
++    "To request it, the FINAL NON-EMPTY LINE of your response must be exactly this form, with nothing before or after it on that line:",
+     "[[HUMAN_INPUT: your question to the human]]",
+-    "Use that marker only when the human must answer. Do not use it merely because you are asking another AI a question."
++    "Do not quote, explain, demonstrate, echo, or mention that marker unless you are actually requesting human input.",
++    "Questions directed to another AI do not use this marker.",
++    "References to app commands, stop/resume behavior, or the human-input protocol itself do not use this marker unless the human must answer before work can continue."
+   ].join("\n");
+ }
+@@
+ function extractHumanRequest(text) {
+-  const marker = /\[\[HUMAN_INPUT\s*:\s*([\s\S]*?)\]\]/i.exec(text);
+-  if (marker?.[1]?.trim()) return marker[1].trim();
+-
+-  const fallback = /(?:human input (?:needed|required)|ask the human|need (?:the )?human(?:'s)? input)\s*[:\-]?\s*([\s\S]{3,500})$/i.exec(text.trim());
+-  return fallback?.[1]?.trim() || null;
++  const lines = String(text || "").trimEnd().split(/\r?\n/);
++  const finalLine = lines[lines.length - 1]?.trim() || "";
++  const marker = /^\[\[HUMAN_INPUT\s*:\s*(.+?)\]\]$/i.exec(finalLine);
++  return marker?.[1]?.trim() || null;
+ }
+@@
+-  if (state.turn >= state.maxTurns) {
++  if (hasReachedTurnLimit()) {
+     await endBridge(`Reached maximum of ${state.maxTurns} AI turns`);
+     return { ok: true, finished: true };
+   }
+@@
+       fresh.paused = false;
+       fresh.startSide = SIDES.includes(msg.startSide) ? msg.startSide : "A";
+       fresh.currentSide = fresh.startSide;
+-      fresh.maxTurns = Math.max(1, Math.min(300, Number(msg.maxTurns) || 30));
++      fresh.maxTurns = normalizeMaxTurns(msg.maxTurns);
+       const requestedDelay = Number(msg.delayMs);
+@@
+-      state = fresh;
+-      await bindTabsFromMessage(msg);
++      const previousState = state;
++      state = fresh;
++      try {
++        await bindTabsFromMessage(msg);
++      } catch (err) {
++        // A failed Start must not leave an unsaved in-memory "active" session
++        // that blocks the next Start attempt until the MV3 worker is recycled.
++        state = previousState;
++        throw err;
++      }
+       state.running = true;
+
+diff --git a/manifest.json b/manifest.json
+--- a/manifest.json
++++ b/manifest.json
+@@
+   "permissions": [
+     "tabs",
+     "storage",
++    "unlimitedStorage",
+     "notifications",
+     "scripting"
+   ],
