@@ -1,9 +1,9 @@
-# AI Bridge 1.11.0 — Direct Mesh + Resumable Human Requests
+# AI Bridge 1.11.1 — Direct Mesh + Resumable Human Requests
 
-Version 1.11.0 builds on the verified 1.10.2 release with Direct Mesh peer routing, resumable suppressed human requests, and universal role reuse.
+Version 1.11.1 builds on the verified 1.10.2 release with Direct Mesh peer routing, resumable suppressed human requests, and universal role reuse.
 
 
-## 1.11.0 additions
+## 1.11.1 additions
 
 - **Direct Mesh work mode**: an AI can make a specific teammate the next speaker by ending its response with `SEND TO: AI A`, `SEND TO: AI B`, `SEND TO: AI C`, or the teammate's current label such as `SEND TO: Gemini`. Everything above that final line is the direct message. Without a routing command, Mesh falls back to the normal next-AI handoff.
 - **Registered LLM command architecture**: `SEND TO` is parsed only in Direct Mesh mode and only from the final non-empty line, avoiding accidental execution when the command is discussed in prose. Unknown/self targets pause instead of silently routing to the wrong AI.
@@ -198,3 +198,10 @@ Session state, transcript, jobs, objective, bindings, turn cursor, and relay sta
 - Human-input detection still prefers `[[HUMAN_INPUT: ...]]`, but also scans the response tail for formatting-drifted markers and clear blocking natural language asking for a decision, approval, clarification, permission, or required choice.
 - Human input is shown as a centered modal dialog and the dashboard is brought forward when attention is required.
 - A Human interjection box lets the controller add steering notes/corrections to the shared transcript during an active session. Interjections are delivered on the next safe scheduled handoff rather than interrupting an AI mid-generation; Peer Review also injects them into the review prompts.
+
+
+## v1.11.1 controller routing refinements
+
+- **Deferred Main-AI interjections:** the selected Main AI is the session's first-speaker selection. Human interjections are persisted immediately, but are held until that Main AI's next group turn. They are not injected into whichever secondary AI happens to be queued when the human writes the note. After Main receives the note, it becomes normal shared transcript context for later teammates.
+- **Ambiguous SEND TO aliases fail closed:** duplicate or overlapping configured labels are not guessed. Use `SEND TO: AI A`, `AI B`, or `AI C` when labels are ambiguous.
+- **Human replies are send-before-clear:** AI Bridge keeps the pending human question/modal state until the provider accepts the human answer, so a failed send can be retried without losing the question.
