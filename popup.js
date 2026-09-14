@@ -17,6 +17,29 @@ function limitLabel(s) {
   return Number(s?.maxTurns) === -1 ? "∞" : String(s?.maxTurns ?? "?");
 }
 
+function formatDurationMs(ms) {
+  if (!Number.isFinite(Number(ms)) || Number(ms) < 0) return "";
+  const value = Number(ms);
+  if (value < 60000) return `${(value / 1000).toFixed(1)}s`;
+  const total = Math.round(value / 1000);
+  const minutes = Math.floor(total / 60);
+  const seconds = total % 60;
+  return minutes < 60 ? `${minutes}m ${seconds}s` : `${Math.floor(minutes / 60)}h ${minutes % 60}m`;
+}
+
+function liveRoundLine(s) {
+  const started = s?.roundStartedAtBySide || {};
+  const parts = [];
+  for (const side of ["A", "B", "C"]) {
+    const startedAt = Number(started[side]);
+    if (Number.isFinite(startedAt) && startedAt > 0) {
+      const round = Math.max(1, Number(s?.roundNumberBySide?.[side]) || 1);
+      parts.push(`AI ${side} R${round} ${formatDurationMs(Date.now() - startedAt)}`);
+    }
+  }
+  return parts.length ? `\nClock: ${parts.join(" · ")}` : "";
+}
+
 function updatePill(s) {
   const pill = $("pill");
   pill.className = "pill";
@@ -45,7 +68,7 @@ async function refresh() {
     if (s.sessionActive && s.awaitingHuman) {
       $("status").textContent = `Human input needed\n${s.pendingHuman?.requestingLabel || `AI ${s.pendingHuman?.requestingSide || ""}`} is waiting.\nTurns: ${s.turn}/${limit}`;
     } else if (s.sessionActive && s.running) {
-      $("status").textContent = `Running · turns ${s.turn}/${limit}\nCurrent: AI ${s.currentSide || "?"}`;
+      $("status").textContent = `Running · turns ${s.turn}/${limit}\nCurrent: AI ${s.currentSide || "?"}${liveRoundLine(s)}`;
     } else if (s.sessionActive) {
       $("status").textContent = `Paused · turns ${s.turn}/${limit}\n${s.pauseReason || "Session saved."}`;
     } else {
