@@ -1,0 +1,139 @@
+ible(adapter.inputSelectors);
+     if (!input) throw new Error("Could not find the prompt box on this page.");
+ 
+     pendingSend = true;
++    const uploadedCount = await uploadArtifacts(artifacts);
+     setNativeValue(input, text);
+-    await new Promise(r => setTimeout(r, 300));
++    await sleep(uploadedCount ? 650 : 300);
+ 
+     const button = firstVisible(adapter.sendSelectors);
+     if (button && !button.disabled) {
+@@ -154,26 +238,155 @@
+ 
+     lastObservedText = "";
+     lastChangeAt = Date.now();
+-    setTimeout(() => { pendingSend = false; }, 1200);
++    setTimeout(() => { pendingSend = false; }, uploadedCount ? 2200 : 1200);
++    return uploadedCount;
+   }
+ 
+-  function latestResponseText() {
++  function latestResponseNode() {
+     const nodes = allVisible(adapter.responseSelectors);
+-    if (!nodes.length) return "";
+-
++    if (!nodes.length) return null;
+     for (let i = nodes.length - 1; i >= 0; i--) {
+       const text = (nodes[i].innerText || nodes[i].textContent || "").trim();
+-      if (text.length >= 2) return text;
++      if (text.length >= 2) return nodes[i];
+     }
++    return null;
++  }
++
++  function latestResponseText(node = latestResponseNode()) {
++    return (node?.innerText || node?.textContent || "").trim();
++  }
++
++  function artifactRoot(node) {
++    return node?.closest?.("[data-message-author-role='assistant'], [data-message-id], article, model-response") || node;
++  }
++
++  function looksLikeDownload(anchor) {
++    const rawHref = String(anchor.getAttribute("href") || "");
++    const href = String(anchor.href || rawHref);
++    const text = String(anchor.textContent || "").trim();
++    const aria = String(anchor.getAttribute("aria-label") || "");
++    const testId = String(anchor.getAttribute("data-testid") || "");
++    return Boolean(
++      anchor.hasAttribute("download") ||
++      /^(blob:|data:|sandbox:)/i.test(rawHref) ||
++      /\b(download|attachment|artifact|file)\b/i.test(`${aria} ${testId}`) ||
++      /\/interpreter\/download\b/i.test(href) ||
++      /\/download(?:[/?#]|$)/i.test(href) ||
++      (/\.(zip|7z|tar|tgz|gz|bz2|xz|rar|py|js|ts|tsx|jsx|json|txt|md|csv|pdf|docx|xlsx|pptx)(?:$|[?#])/i.test(text) && /download/i.test(`${text} ${aria}`))
++    );
++  }
++
++  function datasetUrls(anchor) {
++    const urls = [];
++    for (const value of Object.values(anchor.dataset || {})) {
++      const candidate = String(value || "").trim();
++      if (/^(https?:|blob:|data:)/i.test(candidate)) urls.push(candidate);
++    }
++    return urls;
++  }
++
++  function chatGptSandboxUrl(anchor, sandboxHref) {
++    if (!(host === "chatgpt.com" || host === "chat.openai.com")) return "";
++    const sandboxPath = String(sandboxHref || "").replace(/^sandbox:/i, "");
++    if (!sandboxPath.startsWith("/mnt/data/")) return "";
++    const conversationMatch = location.pathname.match(/(?:^|\/)c\/([^/?#]+)/);
++    const messageNode = anchor.closest?.("[data-message-id]") || artifactRoot(anchor);
++    const messageId = messageNode?.getAttribute?.("data-message-id") || messageNode?.dataset?.messageId || "";
++    if (!conversationMatch?.[1] || !messageId) return "";
++    return `${location.origin}/backend-api/conversation/${encodeURIComponent(conversationMatch[1])}/interpreter/download?message_id=${encodeURIComponent(messageId)}&sandbox_path=${encodeURIComponent(sandboxPath)}`;
++  }
++
++  function artifactUrl(anchor) {
++    const rawHref = String(anchor.getAttribute("href") || "").trim();
++    const candidates = [String(anchor.href || ""), ...datasetUrls(anchor), rawHref].filter(Boolean);
++    for (const candidate of candidates) {
++      if (/^(https?:|blob:|data:)/i.test(candidate)) return candidate;
++    }
++    if (/^sandbox:/i.test(rawHref)) return chatGptSandboxUrl(anchor, rawHref);
+     return "";
+   }
+ 
++  function artifactName(anchor, url, index) {
++    const explicit = String(anchor.getAttribute("download") || "").trim();
++    if (explicit) return explicit.slice(0, 240);
++    try {
++      const parsed = new URL(url, location.href);
++      const sandboxPath = parsed.searchParams.get("sandbox_path");
++      const path = sandboxPath || decodeURIComponent(parsed.pathname || "");
++      const name = path.split("/").filter(Boolean).pop();
++      if (name) return name.slice(0, 240);
++    } catch (_) {}
++    const text = String(anchor.textContent || "").trim();
++    if (text && text.length <= 240) return text.replace(/[\\/]/g, "_");
++    return `artifact-${index + 1}.bin`;
++  }
++
++  async function blobToBase64(blob) {
++    const bytes = new Uint8Array(await blob.arrayBuffer());
++    let binary = "";
++    const CHUNK = 0x8000;
++    for (let i = 0; i < bytes.length; i += CHUNK) {
++      binary += String.fromCharCode(...bytes.subarray(i, i + CHUNK));
++    }
++    return btoa(binary);
++  }
++
++  async function fetchArtifact(anchor, index) {
++    const url = artifactUrl(anchor);
++    if (!url) return null;
++    const controller = new AbortController();
++    const timer = setTimeout(() => controller.abort(), ARTIFACT_FETCH_TIMEOUT_MS);
++    try {
++      const response = await fetch(url, { credentials: "include", signal: controller.signal });
++      if (!response.ok) throw new Error(`HTTP ${response.status}`);
++      const declared = Number(response.headers.get("content-length") || 0);
++      if (declared > MAX_ARTIFACT_FILE_BYTES) throw new Error("file too large");
++      const blob = await response.blob();
++      if (blob.size <= 0 || blob.size > MAX_ARTIFACT_FILE_BYTES) throw new Error("file too large or empty");
++      return {
++        name: artifactName(anchor, url, index),
++        mime: blob.type || response.headers.get("content-type") || "application/octet-stream",
++        size: blob.size,
++        dataBase64: await blobToBase64(blob)
++      };
++    } finally {
++      clearTimeout(timer);
++    }
++  }
++
++  function artifactAnchorSignature(node) {
++    const root = artifactRoot(node);
++    const anchors = [...(root?.querySelectorAll?.("a[href]") || [])].filter(looksLikeDownload).slice(0, 
