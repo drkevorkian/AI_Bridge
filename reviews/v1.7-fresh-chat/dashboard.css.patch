@@ -1,8 +1,0 @@
---- /mnt/data/AI_Bridge_v1.6_base_for_v17/dashboard.css
-+++ /mnt/data/AI_Bridge_v1.7_candidate/dashboard.css
-@@
- .runtime-card { background: var(--panel); }
-+.fresh-chat-row { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-top: 9px; }
-+.check-line { display: inline-flex; align-items: center; gap: 7px; margin: 0; color: var(--text-soft); font-size: 11px; cursor: pointer; }
-+.check-line input { width: auto; margin: 0; accent-color: var(--a); }
-+.agent-actions { display: flex; align-items: center; gap: 6px; }

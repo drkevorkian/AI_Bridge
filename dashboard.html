@@ -16,9 +16,14 @@
         </div>
         <div class="header-tools">
           <select id="themeSelect" class="theme-select" aria-label="Theme">
+            <option value="blizzard">Blizzard Blue</option>
+            <option value="ghostwhite">Ghost White</option>
             <option value="midnight">Midnight</option>
             <option value="slate">Slate</option>
             <option value="light">Light</option>
+            <option value="solarized">Solarized Light</option>
+            <option value="ocean">Ocean</option>
+            <option value="terminal">Terminal</option>
           </select>
           <div id="sessionPill" class="session-pill idle">Idle</div>
         </div>
@@ -36,6 +41,14 @@
           <button id="resume" class="resume" disabled>Resume</button>
           <button id="stop" class="danger" disabled>Stop</button>
         </div>
+        <div class="fresh-chat-row">
+          <label class="check-line" for="freshOnStart">
+            <input id="freshOnStart" type="checkbox" checked>
+            <span>Start in fresh AI chats</span>
+          </label>
+          <button id="newAllChats" class="tiny ghost" type="button">New AI chats</button>
+        </div>
+        <div class="field-help">Uses the three selected, already-open AI tabs. AI Bridge never opens replacement AI tabs for this action.</div>
       </section>
 
       <section class="panel-section">
@@ -44,7 +57,10 @@
         <article class="agent-card agent-a">
           <div class="agent-topline">
             <strong>AI A</strong>
-            <button id="resendA" class="tiny ghost" disabled>Resend</button>
+            <div class="agent-actions">
+              <button id="newChatA" class="tiny ghost" type="button">New chat</button>
+              <button id="resendA" class="tiny ghost" disabled>Resend</button>
+            </div>
           </div>
           <select id="tabA" aria-label="AI A tab"></select>
           <textarea id="jobA" rows="3" placeholder="AI A job / responsibility"></textarea>
@@ -53,7 +69,10 @@
         <article class="agent-card agent-b">
           <div class="agent-topline">
             <strong>AI B</strong>
-            <button id="resendB" class="tiny ghost" disabled>Resend</button>
+            <div class="agent-actions">
+              <button id="newChatB" class="tiny ghost" type="button">New chat</button>
+              <button id="resendB" class="tiny ghost" disabled>Resend</button>
+            </div>
           </div>
           <select id="tabB" aria-label="AI B tab"></select>
           <textarea id="jobB" rows="3" placeholder="AI B job / responsibility"></textarea>
@@ -62,7 +81,10 @@
         <article class="agent-card agent-c">
           <div class="agent-topline">
             <strong>AI C</strong>
-            <button id="resendC" class="tiny ghost" disabled>Resend</button>
+            <div class="agent-actions">
+              <button id="newChatC" class="tiny ghost" type="button">New chat</button>
+              <button id="resendC" class="tiny ghost" disabled>Resend</button>
+            </div>
           </div>
           <select id="tabC" aria-label="AI C tab"></select>
           <textarea id="jobC" rows="3" placeholder="AI C job / responsibility"></textarea>
@@ -79,7 +101,34 @@
         </div>
       </section>
 
+      <details id="vaultPanel" class="vault-panel" open>
+        <summary>
+          <span class="vault-summary-title">Shared Vault</span>
+          <span id="relaySummary" class="muted">No relayed files</span>
+        </summary>
+        <div class="vault-body">
+          <div class="field-help">AI-generated downloads are preserved here. ZIP/code text is extracted into a bounded inspection preview, while the original file is still relayed when the destination supports attachments.</div>
+          <div id="relayArtifacts" class="relay-list">
+            <div class="history-empty">No AI-generated files captured yet.</div>
+          </div>
+        </div>
+      </details>
+
       <section class="panel-section">
+        <div class="work-mode-card">
+          <div class="field-row">
+            <label for="workMode">Work strategy</label>
+            <select id="workMode">
+              <option value="relay">Relay — A → B → C</option>
+              <option value="collaborate">Collaborate — one shared deliverable</option>
+              <option value="compete">Compete — simultaneous submissions</option>
+              <option value="parallel">Parallel — simultaneous independent</option>
+              <option value="review">Review — independent + peer critique</option>
+            </select>
+          </div>
+          <div id="workModeHelp" class="field-help work-mode-help">Normal sequential relay. Each AI receives shared updates from the previous agents.</div>
+        </div>
+
         <div class="field-row">
           <label for="startSide">First speaker</label>
           <select id="startSide">
@@ -136,11 +185,11 @@
         </div>
       </section>
 
-      <section id="humanPanel" class="human-panel hidden">
-        <div class="section-heading"><span>Human input needed</span><span id="humanWho" class="muted"></span></div>
-        <div id="humanQuestion" class="human-question"></div>
-        <textarea id="humanResponse" rows="4" placeholder="Type the controller response..."></textarea>
-        <button id="sendHuman" class="human-send">Send response & continue</button>
+      <section class="human-panel interject-panel">
+        <div class="section-heading"><span>Human interjection</span><span class="muted">shared context</span></div>
+        <textarea id="interjectText" rows="3" placeholder="Add your 2 cents, correction, priority, or steering note..."></textarea>
+        <button id="sendInterject" class="human-send" type="button" disabled>Interject into team</button>
+        <div class="field-help">Safe delivery: your note is added to the shared transcript immediately and reaches the AIs on the next scheduled handoff. It will not interrupt a model while it is generating.</div>
       </section>
     </aside>
 
@@ -151,6 +200,7 @@
           <h2>Shared transcript</h2>
         </div>
         <div class="workspace-actions">
+          <button id="interjectNow" class="ghost" type="button" disabled>Interject</button>
           <button id="jumpLatest" class="ghost hidden">Jump to latest</button>
           <button id="refreshTabs" class="ghost">Refresh AI tabs</button>
         </div>
@@ -164,6 +214,24 @@
         </div>
       </div>
     </main>
+  </div>
+
+  <div id="humanModal" class="modal-backdrop hidden" aria-hidden="true">
+    <section class="human-modal" role="dialog" aria-modal="true" aria-labelledby="humanModalTitle" aria-describedby="humanModalQuestion">
+      <div class="human-modal-alert">HUMAN INTERACTION NEEDED</div>
+      <div class="human-modal-head">
+        <div>
+          <div id="humanModalTitle" class="human-modal-title">AI Bridge needs you</div>
+          <div id="humanModalWho" class="muted"></div>
+        </div>
+        <div class="human-modal-pulse" aria-hidden="true">!</div>
+      </div>
+      <div id="humanModalQuestion" class="human-question"></div>
+      <label for="humanModalResponse">Your response</label>
+      <textarea id="humanModalResponse" rows="5" placeholder="Answer the AI's question or give the needed decision..."></textarea>
+      <button id="sendHumanModal" class="human-send" type="button">Send response & continue</button>
+      <div id="humanModalQueue" class="field-help"></div>
+    </section>
   </div>
   <script src="dashboard.js"></script>
 </body>
