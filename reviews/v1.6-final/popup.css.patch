@@ -1,0 +1,13 @@
+--- a/popup.css
++++ b/popup.css
+@@ -45,6 +45,10 @@
+   --danger-bg: #fde7ea;
+   --danger-line: #e5a6ae;
+ }
++:root[data-theme="solarized"] { color-scheme: light; --bg:#fdf6e3; --panel:#fff9e8; --line:#ded3b6; --line-strong:#cbbf9f; --text:#586e75; --soft:#657b83; --muted:#839496; --primary-bg:#586e75; --primary-text:#fdf6e3; --secondary:#eee5cd; --danger-bg:#f8ded8; --danger-line:#d99a8f; }
++:root[data-theme="ocean"] { color-scheme: dark; --bg:#0f172a; --panel:#14223a; --line:#23405f; --line-strong:#2f5d81; --text:#e0f2fe; --soft:#c9e9fb; --muted:#8fb7cf; --primary-bg:#dff5ff; --primary-text:#0f172a; --secondary:#1e3a56; --danger-bg:#542337; --danger-line:#85405b; }
++:root[data-theme="terminal"] { color-scheme: dark; --bg:#000; --panel:#061006; --line:#14532d; --line-strong:#1d7a3c; --text:#4ade80; --soft:#86efac; --muted:#4f9d68; --primary-bg:#4ade80; --primary-text:#001705; --secondary:#0b2a13; --danger-bg:#361014; --danger-line:#7f1d1d; }
++:root[data-theme="terminal"] body, :root[data-theme="terminal"] button, :root[data-theme="terminal"] select { font-family: "Cascadia Mono", "SFMono-Regular", Consolas, monospace; }
+ body { margin: 0; width: 330px; background: var(--bg); color: var(--text); }
+ main { padding: 16px; }
+ .head { display: flex; justify-content: space-between; align-items: flex-start; gap: 12px; }
