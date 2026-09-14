@@ -1,0 +1,12 @@
+--- a/popup.html
++++ b/popup.html
+@@ -22,6 +22,9 @@
+       <option value="midnight">Midnight</option>
+       <option value="slate">Slate</option>
+       <option value="light">Light</option>
++      <option value="solarized">Solarized Light</option>
++      <option value="ocean">Ocean</option>
++      <option value="terminal">Terminal</option>
+     </select>
+     <button id="openDashboard" class="primary">Open Dashboard</button>
+ 
