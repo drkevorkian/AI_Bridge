@@ -1,0 +1,52 @@
+--- a/README.md
++++ b/README.md
+@@ -1,8 +1,39 @@
+-# AI Bridge 1.5 — Dashboard, Local Files, History & Themes
++# AI Bridge 1.6 — Cross-AI Artifact Relay & Shared Vault
+ 
+ AI Bridge is a Manifest V3 Chrome extension that coordinates a persistent three-AI conversation through supported AI web interfaces.
+ 
+ 
++
++## New in 1.6 — AI-to-AI file relay
++
++AI Bridge now detects downloadable files produced inside an AI response, captures supported file bytes in the originating AI tab, and makes them available to the other AI chats through a persistent **Shared Vault**. This supports workflows such as ChatGPT generating a ZIP and Grok reviewing that project without the human manually downloading and re-uploading it.
++
++The relay is hybrid by design:
++
++- AI Bridge preserves the **original file bytes** and attempts to attach the original file to the destination AI.
++- ZIP files are also inspected locally. Text/code entries using stored or DEFLATE compression are extracted into a bounded, plain-text preview.
++- Text/code artifacts receive their own bounded preview.
++- Those previews are included in the handoff as untrusted project data, so a provider UI change cannot block ZIP/code review merely because its native upload control changed.
++- Binary-only artifacts still fail closed when a destination attachment cannot be completed; AI Bridge does not pretend an unreadable binary was shared.
++
++Safety/performance limits remain bounded: up to 8 generated files per response, 12 MiB per file, 24 MiB combined per response, 24 retained vault files, and 60 MiB retained raw artifact data. ZIP extraction skips encrypted/unsupported/binary entries, caps individual extracted entries, and caps the text placed into any handoff. Artifact bytes live under a storage key separate from ordinary bridge/transcript state, so infinite sessions do not rewrite ZIP payloads on every state update.
++
++The dashboard now shows a collapsible **Shared Vault** with AI A/B/C source badges, filename, size, sequence number, and status such as `Extracted`, `Raw text`, or `Raw file`. Transcript cards that produced artifacts also show **Vault Upload** chips.
++
++ChatGPT `sandbox:/mnt/data/...` links use the authenticated conversation interpreter-download route only when the current ChatGPT conversation/message identifiers are present. Ordinary HTTP(S), blob, and data download links use direct capture.
++
++Artifact relay does **not** increment the turn counter. `-1` remains truly infinite; only completed AI responses count as turns. Resume re-shares the retained vault context with a replacement chat, while normal A → B → C routing sends each side only unseen vault files.
++
++## More themes
++
++The existing Midnight, Slate, and Light themes are joined by:
++
++- **Solarized Light** — warm sepia, low-eyestrain light palette.
++- **Ocean** — deep navy with icy blue/cyan accents.
++- **Terminal** — black/phosphor-green, sharper borders, and monospace controls.
++
++The theme selector remains a compact dropdown and the chosen theme stays synchronized between popup and dashboard through `aiBridgeTheme`.
++
+ ## New in 1.5 — wider workspace, history, and themes
+ 
+ The dashboard control column now uses **40% of the page width**, with the live transcript using the remaining 60%. This gives the job editors, objective, source-file controls, and history room to breathe on desktop displays.
+@@ -57,7 +88,7 @@
+ - Transcript rendering uses plain text (`textContent`) rather than model-controlled HTML.
+ - Manual transcript scrolling disables auto-follow until **Jump to latest** is used.
+ - Runtime status shows the active agent, completed turn count, and finite/infinite limit.
+-- Switch between Midnight, Slate, and Light themes; the popup follows the same saved theme.
++- Switch between Midnight, Slate, Light, Solarized Light, Ocean, and Terminal; the popup follows the same saved theme.
+ 
+ ## Turn limits
+ 
