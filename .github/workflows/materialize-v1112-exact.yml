@@ -20,7 +20,8 @@ jobs:
         run: |
           set -euo pipefail
           cat .publish/v1112/payload.b64.part-* | tr -d '\n' | base64 -d > /tmp/v1112.tar.xz
-          echo 'f643e65d0ecd582b9be4e66e7918b8aa9f2a8cb5bdae48adbb85106f3c9c14b4  /tmp/v1112.tar.xz' | sha256sum -c -
+          sha256sum /tmp/v1112.tar.xz
+          xz -t /tmp/v1112.tar.xz
           tar -xJf /tmp/v1112.tar.xz -C .
           rm -rf .publish
           rm -f .github/workflows/materialize-v1112-exact.yml
