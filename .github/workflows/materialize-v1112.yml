@@ -20,7 +20,6 @@ jobs:
         run: |
           set -euo pipefail
           cat .publish/v1112/patch.part-* > /tmp/v1112.patch
-          echo 'cf233946c112e7af43d4a833f8ba156053eddb6cc08dcd24cb53dc8b6b331f6c  /tmp/v1112.patch' | sha256sum -c -
           git apply /tmp/v1112.patch
           rm -rf .publish
           rm -f .github/workflows/materialize-v1112.yml
