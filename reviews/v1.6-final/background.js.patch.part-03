@@ -1,0 +1,107 @@
+ection.");
+ }
+ 
+-async function sendToSide(side, text, { record = true, deliveredSeq = null, deliveredSources = false } = {}) {
++async function sendToSide(side, text, { record = true, deliveredSeq = null, deliveredSources = false, artifactIds = [], artifacts = [] } = {}) {
+   const tabId = tabForSide(side);
+   await ensureTabListener(tabId);
+ 
++  const expectedArtifacts = Array.isArray(artifacts) ? artifacts.length : 0;
+   let result;
+   try {
+-    result = await chrome.tabs.sendMessage(Number(tabId), { type: "AI_BRIDGE_SEND", text });
++    result = await chrome.tabs.sendMessage(Number(tabId), { type: "AI_BRIDGE_SEND", text, artifacts });
+   } catch (_) {
+     await ensureTabListener(tabId);
+-    result = await chrome.tabs.sendMessage(Number(tabId), { type: "AI_BRIDGE_SEND", text });
++    result = await chrome.tabs.sendMessage(Number(tabId), { type: "AI_BRIDGE_SEND", text, artifacts });
+   }
+ 
+-  if (!result?.ok) throw new Error(result?.error || "The page did not accept the message.");
++  const attachmentFailed = !result?.ok || (expectedArtifacts && Number(result.uploadedCount) !== expectedArtifacts);
++  if (attachmentFailed && expectedArtifacts && canFallbackToText(artifacts)) {
++    // ZIP/text artifacts already have bounded previews embedded in `text`.
++    // Send the same handoff without raw files so a provider DOM change cannot
++    // block code review indefinitely. Binary-only artifacts still fail closed.
++    result = await chrome.tabs.sendMessage(Number(tabId), { type: "AI_BRIDGE_SEND", text, artifacts: [] });
++    if (!result?.ok) throw new Error(result?.error || "The page did not accept the text fallback handoff.");
++    appendLog({ time: Date.now(), type: "artifact-fallback", side, text: `AI ${side} received vault text fallback after raw attachment failed`, artifacts: expectedArtifacts });
++  } else if (!result?.ok) {
++    throw new Error(result?.error || "The page did not accept the message.");
++  } else if (expectedArtifacts && Number(result.uploadedCount) !== expectedArtifacts) {
++    throw new Error(`The page accepted ${Number(result.uploadedCount) || 0} of ${expectedArtifacts} relay files and no complete text fallback was available.`);
++  }
+ 
+   if (record) {
+     // A fresh prompt can legitimately produce the exact same wording as this
+@@ -594,6 +983,7 @@
+     state.lastSentBySide[side] = text;
+     if (Number.isFinite(Number(deliveredSeq))) state.lastDeliveredSeqBySide[side] = Number(deliveredSeq);
+     if (deliveredSources) state.sourceDeliveredBySide[side] = true;
++    state.lastSentArtifactIdsBySide[side] = Array.isArray(artifactIds) ? [...artifactIds] : [];
+     appendLog({ time: Date.now(), type: "sent", side, text: `Sent prompt to AI ${side}`, chars: String(text || "").length });
+     await saveState();
+   }
+@@ -677,13 +1067,15 @@
+   }
+ }
+ 
+-async function handleCompletedResponse(side, text, { relay = true } = {}) {
++async function handleCompletedResponse(side, text, { relay = true, artifacts = [] } = {}) {
+   if (!side || side !== state.currentSide) return { ok: false, ignored: true };
+   if (!text) return { ok: false, ignored: true };
+   if (state.lastResponseBySide[side] === text) return { ok: false, duplicate: true };
+ 
+   state.lastResponseBySide[side] = text;
+   const entry = recordTranscript("response", { side, text });
++  const artifactIds = await storeResponseArtifacts(side, entry.seq, artifacts);
++  if (artifactIds.length) entry.artifactIds = artifactIds;
+   state.turn += 1;
+   appendLog({ time: Date.now(), type: "response", side, seq: entry.seq, text: `AI ${side} completed response #${entry.seq}`, chars: String(text || "").length });
+   await saveState();
+@@ -725,7 +1117,7 @@
+ 
+   const outgoing = normalTurnMessage(targetSide);
+   try {
+-    await sendToSide(targetSide, outgoing.text, { deliveredSeq: outgoing.deliveredSeq, deliveredSources: outgoing.deliveredSources });
++    await sendToSide(targetSide, outgoing.text, { deliveredSeq: outgoing.deliveredSeq, deliveredSources: outgoing.deliveredSources, artifactIds: outgoing.artifactIds, artifacts: outgoing.artifacts });
+     return { ok: true };
+   } catch (err) {
+     await pauseBridge(`Could not send to AI ${targetSide}: ${err.message}`);
+@@ -798,6 +1190,7 @@
+       }
+ 
+       state.running = true;
++      await clearArtifacts();
+       await clearAttention();
+       await saveState();
+ 
+@@ -836,7 +1229,7 @@
+ 
+       const outgoing = recoveryMessage(state.currentSide);
+       try {
+-        await sendToSide(state.currentSide, outgoing.text, { deliveredSeq: outgoing.deliveredSeq, deliveredSources: outgoing.deliveredSources });
++        await sendToSide(state.currentSide, outgoing.text, { deliveredSeq: outgoing.deliveredSeq, deliveredSources: outgoing.deliveredSources, artifactIds: outgoing.artifactIds, artifacts: outgoing.artifacts });
+       } catch (err) {
+         await pauseBridge(`Resume failed: ${err.message}`);
+         throw err;
+@@ -863,7 +1256,9 @@
+       state.currentSide = side;
+       delete state.lastResponseBySide[side];
+       await saveState();
+-      await sendToSide(side, text, { record: false });
++      const artifactIds = state.lastSentArtifactIdsBySide?.[side] || [];
++      const artifacts = artifactRecordsForIds(artifactIds);
++      await sendToSide(side, text, { record: false, artifactIds, artifacts });
+       appendLog({ time: Date.now(), type: "resent", side, text: `Resent last prompt to AI ${side}`, chars: String(text || "").length });
+       await saveState();
+       sendResponse({ ok: true });
+@@ -917,7 +1312,7 @@
+       // If the user manually paused while the current AI was still generating,
+       // capture that completed work and advance the cursor, but do not relay it.
+       const relay = state.running;
+-      const result = await handleCompletedResponse(side, text, { relay });
++      const result = await handleCompletedResponse(side, text, { relay, artifacts: msg.artifacts });
+       sendResponse(result);
+       return;
+     }
