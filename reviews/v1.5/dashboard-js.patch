@@ -1,0 +1,242 @@
+--- /mnt/data/ai_bridge_v14_compare/AI_Bridge_dashboard_turns/dashboard.js	2026-09-14 01:01:53.000000000 +0000
++++ /mnt/data/ai_bridge_v15_work/AI_Bridge_dashboard_turns/dashboard.js	2026-09-14 01:15:29.937677964 +0000
+@@ -13,6 +13,12 @@
+ let hydrated = false;
+ let renderedSeq = 0;
+ let autoScroll = true;
++let selectedSourceFiles = [];
++const MAX_SOURCE_FILES = 100;
++const MAX_SOURCE_FILE_BYTES = 512 * 1024;
++const MAX_SOURCE_FILE_CHARS = 200000;
++const MAX_SOURCE_TOTAL_CHARS = 400000;
++const IGNORED_SOURCE_SEGMENTS = new Set([".git", "node_modules", ".venv", "venv", "__pycache__", ".next", "dist", "build"]);
+ 
+ function aiName(url) {
+   return supported.find(x => x.re.test(url || ""))?.name || "AI";
+@@ -80,6 +86,8 @@
+   if (s.startSide && SIDES.includes(s.startSide)) $("startSide").value = s.startSide;
+   if (Number.isInteger(Number(s.maxTurns))) $("maxTurns").value = String(s.maxTurns);
+   if (Number.isFinite(Number(s.delayMs))) $("delayMs").value = String(s.delayMs);
++  selectedSourceFiles = Array.isArray(s.sourceFiles) ? s.sourceFiles.map(file => ({ ...file })) : [];
++  renderSourceFiles();
+   refreshStartLabels();
+ }
+ 
+@@ -164,9 +172,9 @@
+ 
+ function renderTranscript(s) {
+   const entries = Array.isArray(s?.transcript) ? s.transcript : [];
+-  const maxSeq = entries.reduce((m, e) => Math.max(m, Number(e.seq) || 0), 0);
++  const latestKnownSeq = Math.max(0, Number(s?.nextSeq || 1) - 1);
+ 
+-  if ((entries.length === 0 && renderedSeq > 0) || (maxSeq > 0 && maxSeq < renderedSeq)) {
++  if (latestKnownSeq < renderedSeq) {
+     clearTranscript();
+   }
+ 
+@@ -188,8 +196,137 @@
+   }
+ }
+ 
++function humanFileSize(bytes) {
++  const n = Number(bytes) || 0;
++  if (n < 1024) return `${n} B`;
++  if (n < 1024 * 1024) return `${(n / 1024).toFixed(1)} KB`;
++  return `${(n / (1024 * 1024)).toFixed(1)} MB`;
++}
++
++function sourceTotalChars() {
++  return selectedSourceFiles.reduce((sum, file) => sum + String(file.content || "").length, 0);
++}
++
++function setSourceNotice(message = "", isError = false) {
++  const node = $("sourceNotice");
++  node.textContent = message;
++  node.classList.toggle("hidden", !message);
++  node.classList.toggle("error", Boolean(message && isError));
++}
++
++function pathForFile(file) {
++  return String(file.webkitRelativePath || file.name || "unnamed.txt").replace(/\\/g, "/");
++}
++
++function isIgnoredSourcePath(path) {
++  return path.split("/").some(part => IGNORED_SOURCE_SEGMENTS.has(part));
++}
++
++function renderSourceFiles() {
++  const list = $("sourceList");
++  list.textContent = "";
++  const totalChars = sourceTotalChars();
++  $("sourceSummary").textContent = selectedSourceFiles.length
++    ? `${selectedSourceFiles.length} file${selectedSourceFiles.length === 1 ? "" : "s"} · ${totalChars.toLocaleString()} chars`
++    : "No files";
++  $("clearSources").disabled = selectedSourceFiles.length === 0 || Boolean(latestState?.sessionActive);
++
++  for (const file of selectedSourceFiles) {
++    const row = document.createElement("div");
++    row.className = "source-row";
++
++    const info = document.createElement("div");
++    info.className = "source-info";
++    const name = document.createElement("div");
++    name.className = "source-path";
++    name.textContent = file.path;
++    const meta = document.createElement("div");
++    meta.className = "source-meta";
++    meta.textContent = `${humanFileSize(file.size)} · ${String(file.content || "").length.toLocaleString()} chars`;
++    info.append(name, meta);
++
++    const remove = document.createElement("button");
++    remove.type = "button";
++    remove.className = "tiny ghost source-remove";
++    remove.textContent = "Remove";
++    remove.disabled = Boolean(latestState?.sessionActive);
++    remove.addEventListener("click", () => {
++      selectedSourceFiles = selectedSourceFiles.filter(item => item.path !== file.path);
++      setSourceNotice();
++      renderSourceFiles();
++    });
++
++    row.append(info, remove);
++    list.appendChild(row);
++  }
++}
++
++async function addLocalFiles(fileList) {
++  if (latestState?.sessionActive) {
++    setSourceNotice("Stop the current session before changing local source files.", true);
++    return;
++  }
++
++  const incoming = [...(fileList || [])];
++  if (!incoming.length) return;
++
++  const byPath = new Map(selectedSourceFiles.map(file => [file.path, file]));
++  let skipped = 0;
++  const reasons = [];
++
++  for (const file of incoming) {
++    const path = pathForFile(file);
++    if (isIgnoredSourcePath(path)) { skipped++; continue; }
++    if (file.size > MAX_SOURCE_FILE_BYTES) {
++      skipped++;
++      reasons.push(`${path} is over ${humanFileSize(MAX_SOURCE_FILE_BYTES)}`);
++      continue;
++    }
++    if (!byPath.has(path) && byPath.size >= MAX_SOURCE_FILES) {
++      skipped += incoming.length - incoming.indexOf(file);
++      reasons.push(`Only the first ${MAX_SOURCE_FILES} source files can be attached`);
++      break;
++    }
++
++    const content = await file.text();
++    if (content.includes("\0")) {
++      skipped++;
++      reasons.push(`${path} appears to be binary`);
++      continue;
++    }
++    if (content.length > MAX_SOURCE_FILE_CHARS) {
++      skipped++;
++      reasons.push(`${path} exceeds ${MAX_SOURCE_FILE_CHARS.toLocaleString()} characters`);
++      continue;
++    }
++
++    const existingChars = [...byPath.values()]
++      .filter(item => item.path !== path)
++      .reduce((sum, item) => sum + String(item.content || "").length, 0);
++    if (existingChars + content.length > MAX_SOURCE_TOTAL_CHARS) {
++      skipped++;
++      reasons.push(`${path} would exceed the ${MAX_SOURCE_TOTAL_CHARS.toLocaleString()} character combined limit`);
++      continue;
++    }
++
++    byPath.set(path, { path, size: file.size, content });
++  }
++
++  selectedSourceFiles = [...byPath.values()].sort((a, b) => a.path.localeCompare(b.path));
++  const message = skipped
++    ? `Added ${selectedSourceFiles.length} total source file${selectedSourceFiles.length === 1 ? "" : "s"}; skipped ${skipped}.${reasons.length ? ` ${reasons.slice(0, 3).join("; ")}${reasons.length > 3 ? "; …" : ""}` : ""}`
++    : `${selectedSourceFiles.length} local source file${selectedSourceFiles.length === 1 ? "" : "s"} ready.`;
++  setSourceNotice(message, skipped > 0 && selectedSourceFiles.length === 0);
++  renderSourceFiles();
++}
++
+ function updateControls(s) {
+   $("start").disabled = Boolean(s.sessionActive);
++  $("pickFiles").disabled = Boolean(s.sessionActive);
++  $("pickFolder").disabled = Boolean(s.sessionActive);
++  $("sourceDropZone").classList.toggle("disabled", Boolean(s.sessionActive));
++  $("clearSources").disabled = Boolean(s.sessionActive) || selectedSourceFiles.length === 0;
++  $("sourceList").querySelectorAll(".source-remove").forEach(button => { button.disabled = Boolean(s.sessionActive); });
+   $("pause").disabled = !s.sessionActive || !s.running || s.awaitingHuman;
+   $("resume").disabled = !s.sessionActive || s.running || s.awaitingHuman;
+   $("stop").disabled = !s.sessionActive;
+@@ -218,7 +355,11 @@
+ 
+ async function refreshState() {
+   try {
+-    const res = await chrome.runtime.sendMessage({ type: "AI_BRIDGE_GET_STATE" });
++    const res = await chrome.runtime.sendMessage({
++      type: "AI_BRIDGE_GET_STATE",
++      includeSources: !hydrated,
++      afterSeq: renderedSeq
++    });
+     const s = res?.state;
+     if (!s) return;
+     latestState = s;
+@@ -285,6 +426,7 @@
+       jobB: $("jobB").value.trim(),
+       jobC: $("jobC").value.trim(),
+       initialPrompt,
++      sourceFiles: selectedSourceFiles.map(file => ({ path: file.path, size: file.size, content: file.content })),
+       maxTurns: Number($("maxTurns").value),
+       delayMs: Number($("delayMs").value)
+     });
+@@ -360,6 +502,46 @@
+   }
+ });
+ 
++$("pickFiles").addEventListener("click", () => $("sourceFileInput").click());
++$("pickFolder").addEventListener("click", () => $("sourceFolderInput").click());
++$("clearSources").addEventListener("click", () => {
++  if (latestState?.sessionActive) return;
++  selectedSourceFiles = [];
++  setSourceNotice();
++  renderSourceFiles();
++});
++$("sourceFileInput").addEventListener("change", async event => {
++  await addLocalFiles(event.target.files);
++  event.target.value = "";
++});
++$("sourceFolderInput").addEventListener("change", async event => {
++  await addLocalFiles(event.target.files);
++  event.target.value = "";
++});
++for (const type of ["dragenter", "dragover"]) {
++  $("sourceDropZone").addEventListener(type, event => {
++    event.preventDefault();
++    if (!latestState?.sessionActive) $("sourceDropZone").classList.add("dragging");
++  });
++}
++for (const type of ["dragleave", "drop"]) {
++  $("sourceDropZone").addEventListener(type, event => {
++    event.preventDefault();
++    $("sourceDropZone").classList.remove("dragging");
++  });
++}
++$("sourceDropZone").addEventListener("drop", async event => {
++  if (latestState?.sessionActive) return;
++  await addLocalFiles(event.dataTransfer?.files);
++});
++$("sourceDropZone").addEventListener("keydown", event => {
++  if (latestState?.sessionActive) return;
++  if (event.key === "Enter" || event.key === " ") {
++    event.preventDefault();
++    $("sourceFileInput").click();
++  }
++});
++
+ $("refreshTabs").addEventListener("click", async () => {
+   await loadTabs({ preserve: true });
+   await refreshState();
