@@ -39,41 +39,42 @@
 
 
 :root[data-theme="blizzard"] {
-  color-scheme: dark;
+  color-scheme: light;
   font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
-  --bg: #04111f;
-  --panel-bg: #071827;
-  --panel: #0b2032;
-  --panel-2: #102a40;
-  --panel-3: #061522;
-  --workspace-header: rgba(4, 17, 31, .88);
-  --input-bg: #071a2b;
-  --line: #18364d;
-  --line-strong: #2c5670;
-  --text: #f0f6fc;
-  --text-soft: #c8ddf0;
-  --muted: #86a6be;
-  --a: #49dfbd;
-  --b: #ffc466;
-  --c: #9daaff;
-  --human: #ffd978;
-  --danger: #ff8593;
-  --primary-bg: #ace5ee;
-  --primary-text: #04111f;
-  --secondary-bg: #12324b;
-  --resume-bg: #0f423c;
-  --resume-line: #2d7a6c;
-  --danger-bg: #4f2330;
-  --danger-line: #884154;
-  --ghost-bg: #0a1c2c;
-  --notice-bg: #0a2639;
-  --notice-line: #2e6b89;
-  --notice-text: #bdeaff;
-  --human-bg: #2b250f;
-  --human-line: #8e7528;
-  --human-question-bg: #19170d;
-  --shadow-focus: rgba(172, 229, 238, .22);
-  --radial: rgba(172, 229, 238, .16);
+  --theme-bg: #ace5ee;
+  --bg: #ace5ee;
+  --panel-bg: #d8f3f7;
+  --panel: #f8fdff;
+  --panel-2: #e8f8fb;
+  --panel-3: #d5f0f4;
+  --workspace-header: rgba(172, 229, 238, .92);
+  --input-bg: #ffffff;
+  --line: #7bbbc6;
+  --line-strong: #4f96a3;
+  --text: #0a3a44;
+  --text-soft: #174f59;
+  --muted: #4c6f76;
+  --a: #087f6f;
+  --b: #9a5a00;
+  --c: #385ac7;
+  --human: #8a5700;
+  --danger: #b32643;
+  --primary-bg: #0a3a44;
+  --primary-text: #f4fdff;
+  --secondary-bg: #d1edf2;
+  --resume-bg: #d9f4eb;
+  --resume-line: #67a790;
+  --danger-bg: #fde8ec;
+  --danger-line: #d995a2;
+  --ghost-bg: #e5f6f9;
+  --notice-bg: #d9f3f8;
+  --notice-line: #75afbc;
+  --notice-text: #174f59;
+  --human-bg: #fff5d8;
+  --human-line: #c1973e;
+  --human-question-bg: #fffaf0;
+  --shadow-focus: rgba(10, 58, 68, .18);
+  --radial: rgba(255, 255, 255, .72);
 }
 
 :root[data-theme="ghostwhite"] {
@@ -397,6 +398,8 @@ h2 { margin: 4px 0 0; font-size: 20px; }
 .human-modal .human-question { max-height: 38vh; overflow-y: auto; margin: 10px 0 14px; font-size: 13px; }
 .human-modal textarea { min-height: 110px; }
 @keyframes human-pulse { 0%, 100% { transform: scale(1); box-shadow: 0 0 0 0 rgba(240,196,107,.35); } 50% { transform: scale(1.06); box-shadow: 0 0 0 10px rgba(240,196,107,0); } }
+.human-modal-actions { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-top: 10px; }
+.human-modal-actions button { width: 100%; }
 
 
 /* v1.10 modern chrome — UI only; preserves the 40/60 layout and all control IDs */
@@ -434,9 +437,9 @@ input, select, textarea { border-radius: 12px; transition: border-color .14s eas
 .human-modal { border-radius: 20px; box-shadow: 0 32px 100px rgba(0, 0, 0, .52); }
 .vault-panel summary { padding: 13px 14px; }
 .vault-chip, .history-badge, .vault-source-badge { box-shadow: inset 0 1px 0 rgba(255,255,255,.035); }
-:root[data-theme="blizzard"] .control-panel { box-shadow: inset -1px 0 0 rgba(172,229,238,.08); }
-:root[data-theme="blizzard"] .panel-section, :root[data-theme="blizzard"] .vault-panel, :root[data-theme="blizzard"] .human-panel, :root[data-theme="blizzard"] .transcript-card { box-shadow: 0 14px 36px rgba(0, 4, 12, .28), inset 0 1px 0 rgba(240,246,252,.035); }
-:root[data-theme="blizzard"] .workspace-header { box-shadow: 0 1px 0 rgba(172,229,238,.10), 0 16px 40px rgba(0,4,12,.18); }
+:root[data-theme="blizzard"] .control-panel { box-shadow: inset -1px 0 0 rgba(10,58,68,.12); }
+:root[data-theme="blizzard"] .panel-section, :root[data-theme="blizzard"] .vault-panel, :root[data-theme="blizzard"] .human-panel, :root[data-theme="blizzard"] .transcript-card { box-shadow: 0 12px 30px rgba(10,58,68,.12), inset 0 1px 0 rgba(255,255,255,.72); }
+:root[data-theme="blizzard"] .workspace-header { box-shadow: 0 1px 0 rgba(10,58,68,.14), 0 12px 34px rgba(10,58,68,.10); }
 :root[data-theme="ghostwhite"] .panel-section, :root[data-theme="ghostwhite"] .vault-panel, :root[data-theme="ghostwhite"] .human-panel, :root[data-theme="ghostwhite"] .transcript-card { box-shadow: 0 12px 30px rgba(70, 82, 128, .09); }
 :root[data-theme="ghostwhite"] .workspace-header { box-shadow: 0 1px 0 #e4e7f5, 0 12px 34px rgba(70,82,128,.07); }
 :root[data-theme="terminal"] button, :root[data-theme="terminal"] input, :root[data-theme="terminal"] select, :root[data-theme="terminal"] textarea, :root[data-theme="terminal"] .panel-section, :root[data-theme="terminal"] .vault-panel, :root[data-theme="terminal"] .human-panel { border-radius: 0; }

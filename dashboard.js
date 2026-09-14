@@ -337,6 +337,8 @@ function setHumanModal(s) {
   const queued = Array.isArray(s.pendingHumanQueue) ? s.pendingHumanQueue.length : 0;
   $("humanModalQueue").textContent = queued ? `${queued} additional human-input request${queued === 1 ? "" : "s"} queued behind this one.` : "The bridge is paused until this request is answered.";
   $("sendHumanModal").disabled = false;
+  $("suppressHumanModal").disabled = false;
+  $("stopHumanModal").disabled = false;
   modal.classList.remove("hidden");
   modal.setAttribute("aria-hidden", "false");
 
@@ -817,6 +819,33 @@ $("humanModalResponse").addEventListener("keydown", event => {
     $("sendHumanModal").click();
   }
 });
+
+async function suppressHumanRequest(stop) {
+  const button = stop ? $("stopHumanModal") : $("suppressHumanModal");
+  const other = stop ? $("suppressHumanModal") : $("stopHumanModal");
+  const oldLabel = button.textContent;
+  $("sendHumanModal").disabled = true;
+  button.disabled = true;
+  other.disabled = true;
+  button.textContent = stop ? "Stopping…" : "Suppressing…";
+
+  try {
+    const res = await chrome.runtime.sendMessage({ type: "AI_BRIDGE_HUMAN_SUPPRESS", stop: Boolean(stop) });
+    if (!res?.ok) throw new Error(res?.error || "Could not suppress human request");
+    $("humanModalResponse").value = "";
+    $("status").textContent = stop
+      ? "Human request suppressed — session stopped. You can start fresh AI chats now."
+      : "Human request suppressed — session paused. Resume later or Stop to start a new session.";
+  } catch (err) {
+    $("status").textContent = `Suppress failed: ${err.message}`;
+  } finally {
+    button.textContent = oldLabel;
+    await refreshState();
+  }
+}
+
+$("suppressHumanModal").addEventListener("click", () => suppressHumanRequest(false));
+$("stopHumanModal").addEventListener("click", () => suppressHumanRequest(true));
 
 $("interjectNow").addEventListener("click", () => {
   $("interjectText").scrollIntoView({ behavior: "smooth", block: "center" });

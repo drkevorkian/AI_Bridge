@@ -1,10 +1,17 @@
-# AI Bridge 1.10 — Modern UI + Blizzard Blue / Ghost White
+# AI Bridge 1.10.2 — Modern UI + Human Request Suppression
 
-This UI-only release is layered on the working v1.9 runtime. It does **not** change relay, Work Mode, file vault, Gemini capture, fresh-chat, human-input, or interjection logic.
+Version 1.10.2 keeps the working relay, Work Mode, Shared Vault, Gemini capture, fresh-chat, and interjection behavior while adding an explicit escape path when an AI requests human input.
+
+## Human interaction controls
+
+- **Send response & continue** answers the requesting AI normally.
+- **Suppress request** records that the human declined to answer, closes the modal, and pauses the session without consuming an AI turn. Resume can continue later.
+- **Stop session** suppresses the request and ends the run immediately so the operator can open fresh AI chats or start a new session.
+- Suppression actions are written into the shared transcript, and the modal still has no silent dismiss/X.
 
 ## UI refresh
 
-- **Blizzard Blue** is the default for new installs: ice-navy canvas, frost-white long-form text, and Blizzard Blue `#ACE5EE` interactive accents.
+- **Blizzard Blue** is the default for new installs and now uses the actual Crayola Blizzard Blue `#ACE5EE` as the light ice canvas with dark teal `#0A3A44` body text.
 - **Ghost White** adds a low-fatigue bright workspace with deep slate body text and cool lavender/blue interactive accents.
 - Existing Midnight, Slate, Light, Solarized Light, Ocean, and Terminal themes remain.
 - Modernized 16px cards, softer elevation, pill controls, clearer focus states, smoother hover feedback, and refined transcript/vault/runtime surfaces.
