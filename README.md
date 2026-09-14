@@ -2,6 +2,8 @@
 
 **Current version: 1.11.3**
 
+> GitHub commit [`f34778f`](https://github.com/drkevorkian/AI_Bridge/commit/f34778f81f9362ef0ad2c03933011e41d3c9fe36) was accidentally titled `1.13`. That was a **label typo only**. The shipped extension version is **1.11.3**.
+
 AI Bridge is a Manifest V3 Chrome extension for coordinating three AI web apps as a team from one dashboard. It can relay work sequentially, run multiple models in parallel, let models review each other, route messages directly between specific models, pause for human decisions, and persist generated files in a shared artifact vault.
 
 ## What it does
@@ -344,7 +346,9 @@ The release contains exactly 11 extension files:
 - artifact detection now includes buttons/data-backed controls as well as anchors
 - provider-page CORS failures can retry through the extension service worker on approved hosts
 - artifact capture failures are surfaced in logs instead of silently disappearing
+- dashboard and popup show a `v1.11.3` badge so the accidental `1.13` commit title cannot be mistaken for the shipped version
 - Start / Pause / Resume / Stop use local Lucide-style SVG icons (no CDN)
+- popup Open Dashboard / Pause / Stop use matching local Lucide-style SVG icons
 - the compact popup shows live extension round clocks while an AI is generating
 
 It also retains the Direct Mesh routing, resumable suppressed human requests, universal role reuse, Main-AI deferred interjections, send-before-clear human replies, and extension-side round timers introduced in the 1.11.x series.

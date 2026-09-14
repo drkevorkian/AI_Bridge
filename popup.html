@@ -10,7 +10,7 @@
   <main>
     <div class="head">
       <div>
-        <div class="eyebrow">AI BRIDGE</div>
+        <div class="eyebrow">AI BRIDGE <span id="popupVersion" class="version-badge">v1.11.3</span></div>
         <h1>Bridge control</h1>
       </div>
       <div id="pill" class="pill idle">Idle</div>
@@ -28,11 +28,11 @@
       <option value="ocean">Ocean</option>
       <option value="terminal">Terminal</option>
     </select>
-    <button id="openDashboard" class="primary">Open Dashboard</button>
+    <button id="openDashboard" class="primary icon-btn" type="button"><svg class="btn-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="3" width="7" height="9" rx="1"/><rect x="14" y="3" width="7" height="5" rx="1"/><rect x="14" y="12" width="7" height="9" rx="1"/><rect x="3" y="16" width="7" height="5" rx="1"/></svg>Open Dashboard</button>
 
     <div class="actions">
-      <button id="pause" class="secondary" disabled>Pause</button>
-      <button id="stop" class="danger" disabled>Stop</button>
+      <button id="pause" class="secondary icon-btn" disabled type="button"><svg class="btn-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="14" y="4" width="4" height="16" rx="1"/><rect x="6" y="4" width="4" height="16" rx="1"/></svg>Pause</button>
+      <button id="stop" class="danger icon-btn" disabled type="button"><svg class="btn-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="6" y="6" width="12" height="12" rx="2"/></svg>Stop</button>
     </div>
 
     <p class="hint">The dashboard contains tab bindings, jobs, the objective, human responses, turn limits, and live AI output.</p>

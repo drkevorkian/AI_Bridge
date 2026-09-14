@@ -244,6 +244,19 @@ label { display: block; font-size: 12px; color: var(--text-soft); margin: 9px 0 
 .hidden { display: none !important; }
 .muted { color: var(--muted); }
 .eyebrow { color: var(--muted); letter-spacing: .14em; font-size: 10px; font-weight: 850; }
+.version-badge {
+  display: inline-flex;
+  align-items: center;
+  margin-left: 8px;
+  letter-spacing: .04em;
+  font-size: 9px;
+  font-weight: 800;
+  color: var(--muted);
+  border: 1px solid var(--line-strong);
+  border-radius: 999px;
+  padding: 2px 7px;
+  vertical-align: middle;
+}
 
 
 :root[data-theme="terminal"] body,
@@ -282,6 +295,8 @@ h2 { margin: 4px 0 0; font-size: 20px; }
 .section-heading, .history-heading { display: flex; justify-content: space-between; gap: 10px; align-items: center; font-size: 12px; font-weight: 800; margin-bottom: 9px; }
 .status-text { white-space: pre-wrap; color: var(--text-soft); background: var(--panel-3); border: 1px solid var(--line); border-radius: 9px; padding: 10px; min-height: 48px; font-size: 12px; line-height: 1.4; }
 .control-grid.four { display: grid; grid-template-columns: repeat(4, 1fr); gap: 7px; margin-top: 9px; }
+.icon-btn { display: inline-flex; align-items: center; justify-content: center; gap: 6px; }
+.btn-icon { width: 13px; height: 13px; flex: 0 0 auto; }
 .agent-card { border: 1px solid var(--line); background: var(--panel-2); border-radius: 10px; padding: 9px; margin-top: 9px; border-left-width: 4px; }
 .agent-card.agent-a { border-left-color: var(--a); }
 .agent-card.agent-b { border-left-color: var(--b); }
