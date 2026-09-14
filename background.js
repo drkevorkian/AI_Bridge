@@ -1,7 +1,7 @@
 const SIDES = ["A", "B", "C"];
 const STATE_VERSION = 3;
-const CONTENT_VERSION = "1.10.2";
-const WORK_MODES = new Set(["relay", "collaborate", "compete", "parallel", "review"]);
+const CONTENT_VERSION = "1.11.0";
+const WORK_MODES = new Set(["relay", "collaborate", "compete", "parallel", "review", "mesh"]);
 const INFINITE_TURNS = -1;
 const MIN_FINITE_TURNS = 1;
 const MAX_FINITE_TURNS = 10000;
@@ -54,6 +54,7 @@ const DEFAULT_STATE = {
   primaryResponseSeqBySide: { A: null, B: null, C: null },
   reviewResponseSeqBySide: { A: null, B: null, C: null },
   pendingHumanQueue: [],
+  suppressedHumanRequests: [],
   turn: 0,
   maxTurns: INFINITE_TURNS,
   delayMs: 1500,
@@ -97,6 +98,7 @@ function cloneDefaultState() {
     primaryResponseSeqBySide: { A: null, B: null, C: null },
     reviewResponseSeqBySide: { A: null, B: null, C: null },
     pendingHumanQueue: [],
+    suppressedHumanRequests: [],
     transcript: [],
     log: []
   };
@@ -109,7 +111,7 @@ function normalizeWorkMode(raw) {
 }
 
 function isSequentialWorkMode(mode = state.workMode) {
-  return mode === "relay" || mode === "collaborate";
+  return mode === "relay" || mode === "collaborate" || mode === "mesh";
 }
 
 function isBatchWorkMode(mode = state.workMode) {
@@ -128,7 +130,8 @@ function workModeLabel(mode = state.workMode) {
     collaborate: "Collaborate",
     compete: "Compete",
     parallel: "Parallel Independent",
-    review: "Peer Review"
+    review: "Peer Review",
+    mesh: "Direct Mesh"
   })[mode] || "Relay";
 }
 
@@ -599,7 +602,7 @@ function recordSessionHistory(sessionState) {
   for (const side of SIDES) {
     const job = String(sessionState[`job${side}`] || "").trim();
     if (!job) continue;
-    history.jobs = history.jobs.filter(item => !(item.side === side && item.job === job));
+    history.jobs = history.jobs.filter(item => item.job !== job);
     history.jobs.unshift({
       time: now,
       side,
@@ -650,6 +653,10 @@ function clientStateSnapshot({ includeSources = false, afterSeq = null, omitTran
     ...item,
     fullResponse: item?.fullResponse ? "[stored]" : item?.fullResponse
   }));
+  snapshot.suppressedHumanRequests = (state.suppressedHumanRequests || []).map(item => ({
+    ...item,
+    fullResponse: item?.fullResponse ? "[stored]" : item?.fullResponse
+  }));
 
   if (omitTranscript) {
     snapshot.transcript = [];
@@ -688,6 +695,27 @@ async function validateSavedBindings() {
   }
 }
 
+function migrateSuppressedHumanRequests(bridgeState) {
+  if (!bridgeState?.sessionActive) return [];
+  if (Array.isArray(bridgeState.suppressedHumanRequests)) return bridgeState.suppressedHumanRequests;
+  const transcript = Array.isArray(bridgeState.transcript) ? bridgeState.transcript : [];
+  return transcript
+    .filter(entry => entry?.type === "human" && entry?.suppressed === true && entry?.stoppedSession !== true && entry?.question)
+    .map(entry => {
+      const side = SIDES.includes(entry.requestedBySide) ? entry.requestedBySide : null;
+      return {
+        id: `legacy-suppressed-${entry.seq || entry.time || Date.now()}`,
+        requestingSide: side,
+        requestingLabel: side ? String(bridgeState[`label${side}`] || `AI ${side}`) : "AI",
+        prompt: String(entry.question || ""),
+        fullResponse: "",
+        time: Number(entry.time) || Date.now(),
+        suppressedAt: Number(entry.time) || Date.now(),
+        migratedFromTranscript: true
+      };
+    });
+}
+
 async function loadState() {
   const { bridgeState, bridgeHistory, bridgeArtifacts } = await chrome.storage.local.get(["bridgeState", "bridgeHistory", "bridgeArtifacts"]);
   history = normalizeHistory(bridgeHistory);
@@ -720,12 +748,13 @@ async function loadState() {
       primaryResponseSeqBySide: { A: null, B: null, C: null, ...(bridgeState.primaryResponseSeqBySide || {}) },
       reviewResponseSeqBySide: { A: null, B: null, C: null, ...(bridgeState.reviewResponseSeqBySide || {}) },
       pendingHumanQueue: Array.isArray(bridgeState.pendingHumanQueue) ? bridgeState.pendingHumanQueue : [],
+      suppressedHumanRequests: migrateSuppressedHumanRequests(bridgeState),
       transcript: Array.isArray(bridgeState.transcript) ? bridgeState.transcript : [],
       log: Array.isArray(bridgeState.log) ? bridgeState.log : []
     };
     state.workMode = normalizeWorkMode(state.workMode);
     if (!isBatchWorkMode(state.workMode)) {
-      state.workPhase = state.workMode === "collaborate" ? "collaborate" : "relay";
+      state.workPhase = state.workMode === "collaborate" ? "collaborate" : (state.workMode === "mesh" ? "mesh" : "relay");
       state.phasePendingSides = [];
       state.phaseSentSides = [];
       state.phaseCompletedSides = [];
@@ -803,6 +832,91 @@ function latestSeq() {
   return Math.max(0, Number(state.nextSeq || 1) - 1);
 }
 
+const LLM_COMMAND_REGISTRY = Object.freeze([
+  { id: "send-to", label: "SEND TO", modes: new Set(["mesh"]) }
+]);
+
+function cleanBridgeCommandLine(raw) {
+  return String(raw || "")
+    .trim()
+    .replace(/^`{1,3}|`{1,3}$/g, "")
+    .replace(/^\*{1,2}|\*{1,2}$/g, "")
+    .trim();
+}
+
+function normalizeTargetToken(raw) {
+  return String(raw || "")
+    .trim()
+    .replace(/[()[\]{}]/g, " ")
+    .replace(/\s+/g, " ")
+    .toLowerCase();
+}
+
+function resolveCommandTarget(raw, fromSide = null) {
+  const token = normalizeTargetToken(raw);
+  if (!token) return null;
+  const sideMatch = token.match(/(?:^|\b)ai\s*[-:]?\s*([abc])(?:\b|$)/i) || token.match(/^([abc])$/i);
+  if (sideMatch) {
+    const side = String(sideMatch[1]).toUpperCase();
+    return side === fromSide ? null : side;
+  }
+
+  for (const side of SIDES) {
+    const label = normalizeTargetToken(labelForSide(side));
+    if (!label) continue;
+    if (token === label || token.includes(label) || label.includes(token)) {
+      return side === fromSide ? null : side;
+    }
+  }
+  return null;
+}
+
+function extractRegisteredLlmCommand(text, fromSide) {
+  const registration = LLM_COMMAND_REGISTRY.find(command => command.id === "send-to" && command.modes.has(state.workMode));
+  if (!registration) return null;
+  const raw = String(text || "").replace(/\s+$/, "");
+  if (!raw) return null;
+  const lines = raw.split(/\r?\n/);
+  let index = lines.length - 1;
+  while (index >= 0 && !String(lines[index]).trim()) index -= 1;
+  if (index < 0) return null;
+
+  const fenceCount = lines.slice(0, index + 1).filter(line => String(line).trim().startsWith("```")).length;
+  if (fenceCount % 2 === 1) return null;
+
+  const finalLine = cleanBridgeCommandLine(lines[index]);
+  const match = /^SEND\s+TO\s*:\s*(.+?)\s*$/i.exec(finalLine);
+  if (!match) return null;
+
+  const targetRaw = match[1].trim();
+  const targetSide = resolveCommandTarget(targetRaw, fromSide);
+  const body = lines.slice(0, index).join("\n").replace(/\s+$/, "");
+  return {
+    id: "send-to",
+    label: "SEND TO",
+    targetRaw,
+    targetSide,
+    valid: Boolean(targetSide),
+    body
+  };
+}
+
+function bridgeCommandProtocolText() {
+  if (state.workMode !== "mesh") return "";
+  return [
+    "DIRECT-MESH COMMAND PROTOCOL:",
+    "AI Bridge recognizes registered LLM routing commands only in Direct Mesh mode.",
+    "To choose the next teammate, put exactly one routing line as the FINAL non-empty line of your response:",
+    "SEND TO: AI A",
+    "SEND TO: AI B",
+    "SEND TO: AI C",
+    "You may use the teammate's current label instead (for example SEND TO: Gemini).",
+    "Everything above the final SEND TO line is treated as your direct message to that teammate.",
+    "Do not target yourself. Do not place SEND TO as the final line when merely discussing or demonstrating the command.",
+    "If you omit SEND TO, AI Bridge falls back to the normal next-AI handoff."
+  ].join("\n");
+}
+
 function humanProtocolText() {
   return [
     "HUMAN-INPUT PROTOCOL:",
@@ -837,7 +951,8 @@ function teamContext(side) {
       ? "- Treat AI A, AI B, and AI C as competitors on the same objective during the primary pass; do not sabotage or misrepresent peer work."
       : "- Treat AI A, AI B, and AI C as collaborators on the same objective.",
     "- Do not add browser-extension meta-commentary unless it is necessary to diagnose the relay itself.",
-    humanProtocolText()
+    humanProtocolText(),
+    ...(bridgeCommandProtocolText() ? ["", bridgeCommandProtocolText()] : [])
   ].join("\n");
 }
 
@@ -864,6 +979,14 @@ function workModeInstruction(side, phase = state.workPhase) {
       "Produce a self-contained result from your assigned perspective. Do not depend on peer output during this phase."
     ].join("\n");
   }
+  if (mode === "mesh") {
+    return [
+      "WORK MODE: DIRECT MESH",
+      "Work as one member of a dynamically routed three-AI team.",
+      "You may send your completed response directly to a specific teammate with the registered final-line SEND TO command.",
+      "Use direct routing when a specific teammate should answer, verify, debug, or continue your thought. If no direct target is needed, omit the command and AI Bridge will continue to the next teammate normally."
+    ].join("\n");
+  }
   if (mode === "review" && phase === "review") {
     return [
       "WORK MODE: PEER REVIEW — CRITIQUE PHASE",
@@ -888,12 +1011,14 @@ function phaseLabel(phase = state.workPhase) {
   if (phase === "review") return "Review";
   if (phase === "primary") return "Primary";
   if (phase === "collaborate") return "Collaborate";
+  if (phase === "mesh") return "Direct Mesh";
   return "Relay";
 }
 
 function formatEntry(entry) {
   if (entry.type === "response") {
-    return `[${entry.seq}] AI ${entry.side} (${entry.label || labelForSide(entry.side)}):\n${entry.text}`;
+    const route = entry.directToSide ? ` -> AI ${entry.directToSide} (${entry.directToLabel || labelForSide(entry.directToSide)})` : "";
+    return `[${entry.seq}] AI ${entry.side} (${entry.label || labelForSide(entry.side)})${route}:\n${entry.text}`;
   }
   if (entry.type === "human") {
     return `[${entry.seq}] HUMAN CONTROLLER:\n${entry.text}`;
@@ -949,7 +1074,9 @@ function initialMessage(side) {
         ? "Begin your independent primary work now. Return one complete response when finished."
         : (state.workMode === "collaborate"
             ? "You are the first collaborator. Establish a strong shared starting point for the other two agents to improve."
-            : "You are the first speaker. Begin the work from your assigned job's perspective, and produce something useful for the next two agents to build on.")
+            : (state.workMode === "mesh"
+                ? "You are the first speaker. Work from your assigned job's perspective, then use SEND TO as your final line if a specific teammate should receive the next turn."
+                : "You are the first speaker. Begin the work from your assigned job's perspective, and produce something useful for the next two agents to build on."))
     ].join("\n")
   };
 }
@@ -983,6 +1110,37 @@ function normalTurnMessage(side) {
       context || "No new shared updates were recorded.",
       "",
       "Continue from where you left off. Perform your assigned job on the updated shared state, then hand useful conclusions to the team in your response."
+    ].join("\n")
+  };
+}
+
+function directTurnMessage(fromSide, targetSide, entry) {
+  const sourceContext = sourceSectionForSide(targetSide);
+  const artifactIds = Array.isArray(entry?.artifactIds) ? entry.artifactIds : [];
+  const artifacts = artifactRecordsForIds(artifactIds);
+  const attachmentContext = artifactNote(artifacts);
+  const recentHuman = state.transcript.filter(item => item.type === "human" && item.seq > Number(state.lastDeliveredSeqBySide[targetSide] || 0));
+  const humanContext = boundedTranscript(recentHuman, 12000);
+  return {
+    deliveredSeq: Number(entry?.seq) || latestSeq(),
+    deliveredSources: Boolean(sourceContext),
+    artifactIds,
+    artifacts,
+    text: [
+      teamContext(targetSide),
+      "",
+      workModeInstruction(targetSide, "mesh"),
+      "",
+      "PRIMARY OBJECTIVE FROM THE HUMAN CONTROLLER:",
+      state.initialPrompt,
+      ...(sourceContext ? ["", sourceContext] : []),
+      ...(attachmentContext ? ["", attachmentContext] : []),
+      ...(humanContext ? ["", "RECENT HUMAN CONTROLLER UPDATES:", humanContext] : []),
+      "",
+      `DIRECT MESSAGE FROM AI ${fromSide} (${labelForSide(fromSide)}):`,
+      String(entry?.text || "").trim() || "[The sender routed the turn to you without an additional message body.]",
+      "",
+      "The sender intentionally chose you for the next turn. Address this message from your assigned role. When finished, use SEND TO as your final line if a specific teammate should receive your response next; otherwise omit it for the normal fallback route."
     ].join("\n")
   };
 }
@@ -1428,6 +1586,7 @@ async function endBridge(reason = "Stopped") {
   state.awaitingHuman = false;
   state.pendingHuman = null;
   state.pendingHumanQueue = [];
+  state.suppressedHumanRequests = [];
   appendLog({ time: Date.now(), type: "system", text: reason });
   await clearAttention();
   await saveState();
@@ -1454,6 +1613,7 @@ async function bindTabsFromMessage(msg) {
 
 async function queueHumanRequest(side, text, humanPrompt) {
   const request = {
+    id: `human-${Date.now()}-${side}-${state.nextSeq}`,
     requestingSide: side,
     requestingLabel: labelForSide(side),
     prompt: humanPrompt,
@@ -1499,6 +1659,10 @@ async function suppressPendingHumanRequest({ stop = false } = {}) {
 
   state.awaitingHuman = false;
   state.pendingHuman = null;
+  if (!stop) {
+    state.suppressedHumanRequests = Array.isArray(state.suppressedHumanRequests) ? state.suppressedHumanRequests : [];
+    state.suppressedHumanRequests.push({ ...pending, suppressedAt: Date.now() });
+  }
   await clearAttention();
 
   if (stop) {
@@ -1511,6 +1675,24 @@ async function suppressPendingHumanRequest({ stop = false } = {}) {
   state.pauseReason = `Human input request from ${requestingLabel} suppressed. Resume when ready or Stop to start a new session.`;
   await saveState();
   return { stopped: false, queued: state.pendingHumanQueue.length };
+}
+
+async function reopenSuppressedHumanRequest(requestId) {
+  if (!state.sessionActive) throw new Error("There is no saved session containing suppressed requests.");
+  if (state.awaitingHuman) throw new Error("Answer or suppress the currently open human-input request first.");
+  const list = Array.isArray(state.suppressedHumanRequests) ? state.suppressedHumanRequests : [];
+  const index = list.findIndex(item => String(item?.id || "") === String(requestId || ""));
+  if (index < 0) throw new Error("That suppressed human-input request is no longer available.");
+  const [request] = list.splice(index, 1);
+  state.suppressedHumanRequests = list;
+  state.awaitingHuman = true;
+  state.pendingHuman = request;
+  state.running = false;
+  state.paused = true;
+  state.pauseReason = `Reopened human-input request from ${request.requestingLabel || `AI ${request.requestingSide}`}.`;
+  await showHumanAttention(request.requestingSide, request.prompt);
+  await saveState();
+  return request;
 }
 
 async function handleBatchCompletedResponse(side, text, { relay = true, artifacts = [] } = {}) {
@@ -1556,28 +1738,40 @@ async function handleCompletedResponse(side, text, { relay = true, artifacts = [
   if (!text) return { ok: false, ignored: true };
   if (state.lastResponseBySide[side] === text) return { ok: false, duplicate: true };
 
+  const command = extractRegisteredLlmCommand(text, side);
+  const entryText = command ? command.body : text;
   state.lastResponseBySide[side] = text;
-  const entry = recordTranscript("response", { side, text, workMode: state.workMode, workPhase: state.workPhase });
+  const entry = recordTranscript("response", {
+    side,
+    text: entryText,
+    workMode: state.workMode,
+    workPhase: state.workPhase,
+    ...(command ? {
+      bridgeCommand: command.id,
+      directTargetRaw: command.targetRaw,
+      commandValid: command.valid
+    } : {})
+  });
   const artifactIds = await storeResponseArtifacts(side, entry.seq, artifacts);
   if (artifactIds.length) entry.artifactIds = artifactIds;
   state.turn += 1;
-  appendLog({ time: Date.now(), type: "response", side, seq: entry.seq, text: `AI ${side} completed response #${entry.seq}`, chars: String(text || "").length });
-  await saveState();
+  appendLog({ time: Date.now(), type: "response", side, seq: entry.seq, text: `AI ${side} completed response #${entry.seq}`, chars: String(entryText || "").length });
 
-  const humanPrompt = extractHumanRequest(text);
+  const humanPrompt = extractHumanRequest(entryText);
   if (humanPrompt) {
-    state.awaitingHuman = true;
-    state.pendingHuman = {
-      requestingSide: side,
-      requestingLabel: labelForSide(side),
-      prompt: humanPrompt,
-      fullResponse: text,
-      time: Date.now()
-    };
+    await queueHumanRequest(side, entryText, humanPrompt);
     state.currentSide = side;
     await saveState();
-    await showHumanAttention(side, humanPrompt);
     return { ok: true, awaitingHuman: true };
+  }
+
+  if (command && !command.valid) {
+    state.running = false;
+    state.paused = true;
+    state.pauseReason = `AI ${side} issued SEND TO with an unknown or self target: ${command.targetRaw}.`;
+    appendLog({ time: Date.now(), type: "command-error", side, seq: entry.seq, text: state.pauseReason });
+    await saveState();
+    return { ok: false, paused: true, commandError: state.pauseReason };
   }
 
   if (hasReachedTurnLimit()) {
@@ -1585,13 +1779,20 @@ async function handleCompletedResponse(side, text, { relay = true, artifacts = [
     return { ok: true, finished: true };
   }
 
-  const targetSide = nextSide(side);
+  const targetSide = command?.targetSide || nextSide(side);
   state.currentSide = targetSide;
+  if (command?.targetSide) {
+    entry.directToSide = targetSide;
+    entry.directToLabel = labelForSide(targetSide);
+    appendLog({ time: Date.now(), type: "direct-route", side, targetSide, seq: entry.seq, text: `AI ${side} routed next turn directly to AI ${targetSide}` });
+  }
   await saveState();
 
   if (!relay || !state.running) {
     state.paused = true;
-    state.pauseReason = `Paused after AI ${side} completed. Next: AI ${targetSide}.`;
+    state.pauseReason = command?.targetSide
+      ? `Paused after AI ${side} completed. Direct next: AI ${targetSide}.`
+      : `Paused after AI ${side} completed. Next: AI ${targetSide}.`;
     await saveState();
     return { ok: true, paused: true };
   }
@@ -1599,10 +1800,12 @@ async function handleCompletedResponse(side, text, { relay = true, artifacts = [
   await new Promise(resolve => setTimeout(resolve, state.delayMs));
   if (!state.sessionActive || !state.running || state.awaitingHuman) return { ok: false, stopped: true };
 
-  const outgoing = normalTurnMessage(targetSide);
+  const outgoing = command?.targetSide
+    ? directTurnMessage(side, targetSide, entry)
+    : normalTurnMessage(targetSide);
   try {
     await sendToSide(targetSide, outgoing.text, { deliveredSeq: outgoing.deliveredSeq, deliveredSources: outgoing.deliveredSources, artifactIds: outgoing.artifactIds, artifacts: outgoing.artifacts });
-    return { ok: true };
+    return { ok: true, direct: Boolean(command?.targetSide), targetSide };
   } catch (err) {
     await pauseBridge(`Could not send to AI ${targetSide}: ${err.message}`);
     return { ok: false, error: err.message };
@@ -1657,7 +1860,7 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
       fresh.paused = false;
       fresh.startSide = SIDES.includes(msg.startSide) ? msg.startSide : "A";
       fresh.workMode = normalizeWorkMode(msg.workMode);
-      fresh.workPhase = isBatchWorkMode(fresh.workMode) ? "primary" : (fresh.workMode === "collaborate" ? "collaborate" : "relay");
+      fresh.workPhase = isBatchWorkMode(fresh.workMode) ? "primary" : (fresh.workMode === "collaborate" ? "collaborate" : (fresh.workMode === "mesh" ? "mesh" : "relay"));
       fresh.currentSide = isBatchWorkMode(fresh.workMode) ? null : fresh.startSide;
       fresh.maxTurns = normalizeMaxTurns(msg.maxTurns);
       const minimumTurns = minimumTurnsForWorkMode(fresh.workMode);
@@ -1811,6 +2014,12 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
           ? (state.workMode === "review" && state.workPhase === "primary" ? "review-phase" : "next-scheduled-handoff")
           : "next-scheduled-handoff"
       });
+      return;
+    }
+
+    if (msg.type === "AI_BRIDGE_HUMAN_REOPEN") {
+      const request = await reopenSuppressedHumanRequest(msg.requestId);
+      sendResponse({ ok: true, requestId: request.id });
       return;
     }
 

@@ -1,8 +1,8 @@
 {
   "manifest_version": 3,
   "name": "AI Bridge",
-  "version": "1.10.2",
-  "description": "Coordinate three AI agents with work modes, robust response capture, human control, file relay, and a modern multi-theme workspace.",
+  "version": "1.11.0",
+  "description": "Coordinate three AI agents with relay, direct-mesh routing, robust response capture, human control, file relay, and a modern multi-theme workspace.",
   "permissions": [
     "tabs",
     "storage",

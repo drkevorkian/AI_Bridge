@@ -1,6 +1,6 @@
 (() => {
-  if (window.__AI_BRIDGE_LOADED_V110__) return;
-  window.__AI_BRIDGE_LOADED_V110__ = true;
+  if (window.__AI_BRIDGE_LOADED_V111__) return;
+  window.__AI_BRIDGE_LOADED_V111__ = true;
 
   const host = location.hostname;
   let lastObservedText = "";
@@ -526,7 +526,7 @@
 
   chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
     if (msg.type === "AI_BRIDGE_PING") {
-      sendResponse({ ok: true, host: location.hostname, ready: true, version: "1.10.2" });
+      sendResponse({ ok: true, host: location.hostname, ready: true, version: "1.11.0" });
       return false;
     }
 

@@ -92,7 +92,7 @@
 
         <div class="history-block">
           <div class="history-heading">
-            <span>Previous jobs</span>
+            <span>Role history</span>
             <button id="clearJobHistory" class="tiny ghost" type="button">Clear</button>
           </div>
           <div id="jobHistory" class="history-list">
@@ -124,6 +124,7 @@
               <option value="compete">Compete — simultaneous submissions</option>
               <option value="parallel">Parallel — simultaneous independent</option>
               <option value="review">Review — independent + peer critique</option>
+              <option value="mesh">Direct Mesh — AI-directed routing</option>
             </select>
           </div>
           <div id="workModeHelp" class="field-help work-mode-help">Normal sequential relay. Each AI receives shared updates from the previous agents.</div>
@@ -184,6 +185,19 @@
           </div>
         </div>
       </section>
+
+      <details id="suppressedPanel" class="vault-panel suppressed-panel">
+        <summary>
+          <span class="vault-summary-title">Suppressed requests</span>
+          <span id="suppressedSummary" class="muted">None</span>
+        </summary>
+        <div class="vault-body">
+          <div class="field-help">Suppressed human-input requests stay attached to this saved session. Reopen one whenever you are ready to answer it.</div>
+          <div id="suppressedRequests" class="suppressed-list">
+            <div class="history-empty">No suppressed requests.</div>
+          </div>
+        </div>
+      </details>
 
       <section class="human-panel interject-panel">
         <div class="section-heading"><span>Human interjection</span><span class="muted">shared context</span></div>

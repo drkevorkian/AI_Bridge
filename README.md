@@ -1,6 +1,14 @@
-# AI Bridge 1.10.2 — Modern UI + Human Request Suppression
+# AI Bridge 1.11.0 — Direct Mesh + Resumable Human Requests
 
-Version 1.10.2 keeps the working relay, Work Mode, Shared Vault, Gemini capture, fresh-chat, and interjection behavior while adding an explicit escape path when an AI requests human input.
+Version 1.11.0 builds on the verified 1.10.2 release with Direct Mesh peer routing, resumable suppressed human requests, and universal role reuse.
+
+
+## 1.11.0 additions
+
+- **Direct Mesh work mode**: an AI can make a specific teammate the next speaker by ending its response with `SEND TO: AI A`, `SEND TO: AI B`, `SEND TO: AI C`, or the teammate's current label such as `SEND TO: Gemini`. Everything above that final line is the direct message. Without a routing command, Mesh falls back to the normal next-AI handoff.
+- **Registered LLM command architecture**: `SEND TO` is parsed only in Direct Mesh mode and only from the final non-empty line, avoiding accidental execution when the command is discussed in prose. Unknown/self targets pause instead of silently routing to the wrong AI.
+- **Suppressed request history**: Suppress keeps the human question in the saved session. The dashboard's Suppressed requests drawer can reopen it later and restore the normal answer modal.
+- **Universal role history**: a saved role/job can now be applied to AI A, B, or C regardless of which AI originally used it. Existing objective/command history remains reusable globally.
 
 ## Human interaction controls
 
