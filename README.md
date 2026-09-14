@@ -333,6 +333,8 @@ The release contains exactly 11 extension files:
 
 ## Current release notes — 1.11.3
 
+**This release is 1.11.3.** An earlier GitHub commit on this line was accidentally titled `1.13`; that was a label typo only. The shipped extension version is `1.11.3`.
+
 1.11.3 hardens the artifact system:
 
 - Vault artifacts now persist across new Bridge sessions instead of being erased on Start
@@ -342,5 +344,7 @@ The release contains exactly 11 extension files:
 - artifact detection now includes buttons/data-backed controls as well as anchors
 - provider-page CORS failures can retry through the extension service worker on approved hosts
 - artifact capture failures are surfaced in logs instead of silently disappearing
+- Start / Pause / Resume / Stop use local Lucide-style SVG icons (no CDN)
+- the compact popup shows live extension round clocks while an AI is generating
 
 It also retains the Direct Mesh routing, resumable suppressed human requests, universal role reuse, Main-AI deferred interjections, send-before-clear human replies, and extension-side round timers introduced in the 1.11.x series.
