@@ -269,10 +269,87 @@ label { display: block; font-size: 12px; color: var(--text-soft); margin: 9px 0 
 :root[data-theme="terminal"] .history-row,
 :root[data-theme="terminal"] .relay-row { border-radius: 0; }
 
-.app-shell { min-height: 100vh; display: grid; grid-template-columns: 40% 60%; }
-.control-panel {
-  height: 100vh; overflow-y: auto; padding: 18px; background: var(--panel-bg); border-right: 1px solid var(--line);
+.app-shell {
+  min-height: 100vh;
+  display: flex;
+  --control-pane-width: 40%;
 }
+.control-panel {
+  flex: 0 0 var(--control-pane-width);
+  width: var(--control-pane-width);
+  min-width: 0;
+  height: 100vh; overflow-y: auto; padding: 18px; background: var(--panel-bg);
+}
+.pane-splitter {
+  flex: 0 0 10px;
+  width: 10px;
+  position: relative;
+  z-index: 6;
+  cursor: col-resize;
+  touch-action: none;
+  background: transparent;
+  user-select: none;
+}
+.pane-splitter::before {
+  content: "";
+  position: absolute;
+  top: 0; bottom: 0;
+  left: 4px;
+  width: 1px;
+  background: var(--line);
+  transition: left .14s ease, width .14s ease, background .14s ease;
+}
+.pane-splitter::after {
+  content: "";
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  width: 4px;
+  height: 44px;
+  transform: translate(-50%, -50%);
+  border-radius: 999px;
+  background: var(--line-strong);
+  transition: height .14s ease, background .14s ease;
+}
+.pane-splitter-value {
+  position: absolute;
+  top: 50%;
+  left: 14px;
+  transform: translateY(-50%);
+  opacity: 0;
+  pointer-events: none;
+  font-size: 10px;
+  font-weight: 800;
+  letter-spacing: .03em;
+  padding: 3px 7px;
+  border-radius: 999px;
+  background: var(--panel);
+  border: 1px solid var(--line-strong);
+  color: var(--text);
+  white-space: nowrap;
+  box-shadow: 0 8px 20px rgba(0,0,0,.12);
+  transition: opacity .14s ease;
+}
+.pane-splitter:hover::before,
+.pane-splitter:focus-visible::before,
+.app-shell.is-resizing .pane-splitter::before {
+  left: 3px;
+  width: 3px;
+  background: var(--c);
+}
+.pane-splitter:hover::after,
+.pane-splitter:focus-visible::after,
+.app-shell.is-resizing .pane-splitter::after {
+  height: 64px;
+  background: var(--c);
+}
+.pane-splitter:hover .pane-splitter-value,
+.pane-splitter:focus-visible .pane-splitter-value,
+.app-shell.is-resizing .pane-splitter-value { opacity: 1; }
+.pane-splitter:focus-visible { outline: none; }
+body.is-resizing { cursor: col-resize; }
+body.is-resizing .control-panel,
+body.is-resizing .workspace { pointer-events: none; user-select: none; }
 .brand-block { display: flex; align-items: flex-start; justify-content: space-between; gap: 14px; margin-bottom: 16px; }
 .header-tools { display: flex; align-items: center; gap: 8px; }
 .theme-select { width: auto; min-width: 104px; padding: 6px 8px; font-size: 11px; }
@@ -358,7 +435,7 @@ h2 { margin: 4px 0 0; font-size: 20px; }
 .human-question { white-space: pre-wrap; border: 1px solid var(--human-line); background: var(--human-question-bg); padding: 10px; border-radius: 9px; font-size: 12px; line-height: 1.45; margin-bottom: 8px; }
 .human-send { width: 100%; margin-top: 8px; background: var(--human); color: #201706; }
 
-.workspace { min-width: 0; height: 100vh; display: flex; flex-direction: column; background: radial-gradient(circle at 75% 0%, var(--radial), transparent 28%), var(--bg); }
+.workspace { flex: 1 1 auto; min-width: 0; height: 100vh; display: flex; flex-direction: column; background: radial-gradient(circle at 75% 0%, var(--radial), transparent 28%), var(--bg); }
 .workspace-header { height: 78px; flex: 0 0 auto; display: flex; justify-content: space-between; align-items: center; padding: 17px 22px; border-bottom: 1px solid var(--line); background: var(--workspace-header); backdrop-filter: blur(10px); }
 .workspace-actions { display: flex; gap: 8px; }
 .transcript { flex: 1; overflow-y: auto; padding: 22px; scroll-behavior: smooth; }
@@ -410,7 +487,6 @@ h2 { margin: 4px 0 0; font-size: 20px; }
 
 @media (max-width: 1100px) {
   body { min-width: 760px; }
-  .app-shell { grid-template-columns: 40% 60%; }
   .control-grid.four { grid-template-columns: 1fr 1fr; }
   .header-tools { flex-direction: column; align-items: flex-end; }
 }
@@ -433,7 +509,7 @@ h2 { margin: 4px 0 0; font-size: 20px; }
 .human-modal-actions button { width: 100%; }
 
 
-/* v1.10 modern chrome — UI only; preserves the 40/60 layout and all control IDs */
+/* v1.10 modern chrome — UI only; 40% default, splitter-resizable panes */
 html { background: var(--bg); }
 body { background: var(--bg); }
 body, button, input, select, textarea { -webkit-font-smoothing: antialiased; }
