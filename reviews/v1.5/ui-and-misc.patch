@@ -1,0 +1,86 @@
+--- /mnt/data/ai_bridge_v14_compare/AI_Bridge_dashboard_turns/dashboard.html	2026-09-14 01:01:16.000000000 +0000
++++ /mnt/data/ai_bridge_v15_work/AI_Bridge_dashboard_turns/dashboard.html	2026-09-14 01:15:29.938139115 +0000
+@@ -75,6 +75,28 @@
+         <label for="prompt">Primary objective</label>
+         <textarea id="prompt" rows="7" placeholder="Define the objective shared by all three agents..."></textarea>
+ 
++
++        <section class="source-section" aria-labelledby="sourceHeading">
++          <div class="section-heading">
++            <span id="sourceHeading">Local code / files</span>
++            <span id="sourceSummary" class="muted">No files</span>
++          </div>
++          <div id="sourceDropZone" class="source-drop-zone" tabindex="0">
++            <strong>Drop code files here, or use Add folder</strong>
++            <span>No GitHub required. Text/code only; common dependency folders are skipped.</span>
++          </div>
++          <div class="source-actions">
++            <button id="pickFiles" class="ghost" type="button">Add files</button>
++            <button id="pickFolder" class="ghost" type="button">Add folder</button>
++            <button id="clearSources" class="ghost" type="button" disabled>Clear</button>
++          </div>
++          <input id="sourceFileInput" class="hidden" type="file" multiple>
++          <input id="sourceFolderInput" class="hidden" type="file" multiple webkitdirectory directory>
++          <div class="field-help">Up to 100 files · 200,000 chars/file · 400,000 chars combined. Files are sent once to each AI chat and again when a session is resumed.</div>
++          <div id="sourceNotice" class="source-notice hidden"></div>
++          <div id="sourceList" class="source-list"></div>
++        </section>
++
+         <div class="split-fields">
+           <div>
+             <label for="maxTurns">Max AI turns</label>
+--- /mnt/data/ai_bridge_v14_compare/AI_Bridge_dashboard_turns/dashboard.css	2026-09-14 01:01:16.000000000 +0000
++++ /mnt/data/ai_bridge_v15_work/AI_Bridge_dashboard_turns/dashboard.css	2026-09-14 01:13:59.631864382 +0000
+@@ -82,6 +82,24 @@
+ .transcript-title { font-weight: 850; font-size: 12px; }
+ .transcript-meta { color: #8290a3; font-size: 10px; white-space: nowrap; }
+ .transcript-body { white-space: pre-wrap; word-break: break-word; padding: 13px 14px 15px; font-size: 13px; line-height: 1.55; color: #eef2f7; }
++
++.source-section { margin-top: 12px; border-top: 1px solid #283140; padding-top: 12px; }
++.source-drop-zone { border: 1px dashed #46566d; border-radius: 10px; padding: 12px; background: #0d131b; display: grid; gap: 4px; cursor: pointer; transition: border-color .15s ease, background .15s ease; }
++.source-drop-zone strong { font-size: 12px; color: #e3eaf3; }
++.source-drop-zone span { font-size: 10px; line-height: 1.35; color: #8492a5; }
++.source-drop-zone.dragging { border-color: #7ea2d4; background: #111d2c; }
++.source-drop-zone.disabled { opacity: .5; cursor: default; }
++.source-actions { display: grid; grid-template-columns: 1fr 1fr .7fr; gap: 7px; margin-top: 8px; }
++.source-actions button { padding: 8px 9px; font-size: 11px; }
++.source-notice { margin-top: 8px; border: 1px solid #34465d; border-radius: 8px; padding: 8px 9px; background: #101923; color: #aec1d7; font-size: 10px; line-height: 1.4; }
++.source-notice.error { border-color: #7c3541; background: #25151a; color: #ffc8ce; }
++.source-list { display: grid; gap: 6px; margin-top: 8px; max-height: 220px; overflow-y: auto; }
++.source-row { display: flex; align-items: center; justify-content: space-between; gap: 8px; border: 1px solid #273240; border-radius: 8px; padding: 7px 8px; background: #10161f; }
++.source-info { min-width: 0; }
++.source-path { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 11px; color: #e1e8f1; }
++.source-meta { margin-top: 2px; font-size: 9px; color: #7f8da0; }
++.source-remove { flex: 0 0 auto; }
++
+ .validation-error { border-color: #a94452 !important; box-shadow: 0 0 0 3px rgba(205,77,92,.11) !important; }
+--- /mnt/data/ai_bridge_v14_compare/AI_Bridge_dashboard_turns/manifest.json	2026-09-14 01:00:13.000000000 +0000
++++ /mnt/data/ai_bridge_v15_work/AI_Bridge_dashboard_turns/manifest.json	2026-09-14 01:13:59.632082549 +0000
+@@ -1,8 +1,8 @@
+ {
+   "manifest_version": 3,
+   "name": "AI Bridge",
+-  "version": "1.4.0",
+-  "description": "Coordinate a resumable three-AI conversation with a dedicated dashboard, live transcript, and human intervention.",
++  "version": "1.5.0",
++  "description": "Coordinate a resumable three-AI conversation with a dedicated dashboard, live transcript, local file ingestion, and human intervention.",
+--- /mnt/data/ai_bridge_v14_compare/AI_Bridge_dashboard_turns/popup.js	2026-09-14 01:02:13.000000000 +0000
++++ /mnt/data/ai_bridge_v15_work/AI_Bridge_dashboard_turns/popup.js	2026-09-14 01:15:29.937808356 +0000
+@@ -24,7 +24,7 @@
+ async function refresh() {
+   try {
+-    const res = await chrome.runtime.sendMessage({ type: "AI_BRIDGE_GET_STATE" });
++    const res = await chrome.runtime.sendMessage({ type: "AI_BRIDGE_GET_STATE", omitTranscript: true });
+--- /mnt/data/ai_bridge_v14_compare/AI_Bridge_dashboard_turns/README.md	2026-09-14 01:03:10.000000000 +0000
++++ /mnt/data/ai_bridge_v15_work/AI_Bridge_dashboard_turns/README.md	2026-09-14 01:13:59.632217272 +0000
+@@ -1,7 +1,13 @@
+-# AI Bridge 1.4 — Dashboard + Infinite Turns
++# AI Bridge 1.5 — Dashboard + Infinite Turns
+ 
+ AI Bridge is a Manifest V3 Chrome extension that coordinates a persistent three-AI conversation through supported AI web interfaces.
+ 
++## New in 1.5 — local code/file input
++
++The dashboard can now attach local code without GitHub. Use **Add files**, **Add folder**, or drag files onto the Local code / files box before starting a session. AI Bridge reads text/code files locally in the extension page, stores them with the saved session, and sends the source bundle once to each AI chat. Resuming a session sends the bundle again so a replacement/new AI tab has the code context.
++
++Safety/performance limits: up to 100 files, 200,000 characters per file, and 400,000 characters combined. Binary files are rejected; common dependency/build folders such as `.git`, `node_modules`, `.venv`, `dist`, and `build` are skipped when a folder is selected. Source is rendered and relayed as plain text.
