@@ -1,0 +1,158 @@
+SuppressedHumanRequests(bridgeState),
+       transcript: Array.isArray(bridgeState.transcript) ? bridgeState.transcript : [],
+       log: Array.isArray(bridgeState.log) ? bridgeState.log : []
+     };
+     state.workMode = normalizeWorkMode(state.workMode);
++    state.mainSide = SIDES.includes(state.mainSide) ? state.mainSide : (SIDES.includes(state.startSide) ? state.startSide : "A");
+     if (!isBatchWorkMode(state.workMode)) {
+       state.workPhase = state.workMode === "collaborate" ? "collaborate" : (state.workMode === "mesh" ? "mesh" : "relay");
+       state.phasePendingSides = [];
+@@ -855,20 +872,21 @@ function normalizeTargetToken(raw) {
+ function resolveCommandTarget(raw, fromSide = null) {
+   const token = normalizeTargetToken(raw);
+   if (!token) return null;
++
+   const sideMatch = token.match(/(?:^|\b)ai\s*[-:]?\s*([abc])(?:\b|$)/i) || token.match(/^([abc])$/i);
+   if (sideMatch) {
+     const side = String(sideMatch[1]).toUpperCase();
+     return side === fromSide ? null : side;
+   }
+ 
+-  for (const side of SIDES) {
++  const matches = SIDES.filter(side => {
+     const label = normalizeTargetToken(labelForSide(side));
+-    if (!label) continue;
+-    if (token === label || token.includes(label) || label.includes(token)) {
+-      return side === fromSide ? null : side;
+-    }
+-  }
+-  return null;
++    if (!label) return false;
++    return token === label || token.includes(label) || label.includes(token);
++  });
++
++  if (matches.length !== 1) return null;
++  return matches[0] === fromSide ? null : matches[0];
+ }
+ 
+ function extractRegisteredLlmCommand(text, fromSide) {
+@@ -1055,12 +1073,90 @@ function recordTranscript(type, { side = null, text = "", ...extra } = {}) {
+   return entry;
+ }
+ 
++function beginRoundTimer(side, startedAt = Date.now()) {
++  if (!SIDES.includes(side)) return null;
++  const when = Number.isFinite(Number(startedAt)) ? Number(startedAt) : Date.now();
++  state.roundStartedAtBySide = { A: null, B: null, C: null, ...(state.roundStartedAtBySide || {}) };
++  state.roundNumberBySide = { A: 0, B: 0, C: 0, ...(state.roundNumberBySide || {}) };
++  state.roundStartedAtBySide[side] = when;
++  state.roundNumberBySide[side] = Math.max(0, Number(state.roundNumberBySide[side]) || 0) + 1;
++  return { startedAt: when, roundNumber: state.roundNumberBySide[side] };
++}
++
++function completeRoundTimer(side, completedAt = Date.now()) {
++  if (!SIDES.includes(side)) return { roundNumber: null, durationMs: null, completedAt: null };
++  state.roundStartedAtBySide = { A: null, B: null, C: null, ...(state.roundStartedAtBySide || {}) };
++  state.roundNumberBySide = { A: 0, B: 0, C: 0, ...(state.roundNumberBySide || {}) };
++  state.lastRoundDurationMsBySide = { A: null, B: null, C: null, ...(state.lastRoundDurationMsBySide || {}) };
++  state.lastRoundCompletedAtBySide = { A: null, B: null, C: null, ...(state.lastRoundCompletedAtBySide || {}) };
++
++  const start = Number(state.roundStartedAtBySide[side]);
++  const requestedEnd = Number(completedAt);
++  const end = Number.isFinite(requestedEnd) && requestedEnd > 0 ? requestedEnd : Date.now();
++  const roundNumber = Math.max(0, Number(state.roundNumberBySide[side]) || 0) || null;
++  if (!Number.isFinite(start) || start <= 0) {
++    return { roundNumber, durationMs: null, completedAt: end };
++  }
++
++  const safeEnd = Math.max(start, end);
++  const durationMs = Math.max(0, safeEnd - start);
++  state.roundStartedAtBySide[side] = null;
++  state.lastRoundDurationMsBySide[side] = durationMs;
++  state.lastRoundCompletedAtBySide[side] = safeEnd;
++  return { roundNumber, durationMs, completedAt: safeEnd };
++}
++
++function pendingMainInterjectionBundle(side) {
++  if (!SIDES.includes(side) || side !== state.mainSide) {
++    return { ids: [], text: "" };
++  }
++
++  const items = Array.isArray(state.pendingMainInterjections) ? state.pendingMainInterjections : [];
++  if (!items.length) return { ids: [], text: "" };
++
++  return {
++    ids: items.map(item => String(item.id || "")).filter(Boolean),
++    text: items.map(item => String(item.text || "").trim()).filter(Boolean).join("\n\n")
++  };
++}
++
++function consumeMainInterjections(side, ids = []) {
++  if (side !== state.mainSide || !Array.isArray(ids) || !ids.length) return 0;
++  const wanted = new Set(ids.map(String));
++  const queued = Array.isArray(state.pendingMainInterjections) ? state.pendingMainInterjections : [];
++  const consumed = queued.filter(item => wanted.has(String(item?.id || "")));
++  if (!consumed.length) return 0;
++
++  state.pendingMainInterjections = queued.filter(item => !wanted.has(String(item?.id || "")));
++  const deliveredAt = Date.now();
++  for (const item of consumed) {
++    recordTranscript("human", {
++      text: String(item.text || ""),
++      interjection: true,
++      queuedForMain: true,
++      mainSide: state.mainSide,
++      queuedAt: Number(item.time) || deliveredAt,
++      deliveredToMainAt: deliveredAt
++    });
++  }
++  state.lastDeliveredSeqBySide[state.mainSide] = latestSeq();
++  appendLog({
++    time: deliveredAt,
++    type: "human-interjection-delivered",
++    side: state.mainSide,
++    text: `Delivered ${consumed.length} queued human interjection${consumed.length === 1 ? "" : "s"} to Main AI ${state.mainSide}`
++  });
++  return consumed.length;
++}
++
+ function initialMessage(side) {
+   const sourceContext = sourceSectionForSide(side);
+   const batch = isBatchWorkMode();
++  const mainInterjections = pendingMainInterjectionBundle(side);
+   return {
+     deliveredSeq: latestSeq(),
+     deliveredSources: Boolean(sourceContext),
++    mainInterjectionIds: mainInterjections.ids,
+     text: [
+       teamContext(side),
+       "",
+@@ -1069,6 +1165,7 @@ function initialMessage(side) {
+       "PRIMARY OBJECTIVE FROM THE HUMAN CONTROLLER:",
+       state.initialPrompt,
+       ...(sourceContext ? ["", sourceContext] : []),
++      ...(mainInterjections.text ? ["", "QUEUED HUMAN INTERJECTION FOR MAIN AI:", mainInterjections.text] : []),
+       "",
+       batch
+         ? "Begin your independent primary work now. Return one complete response when finished."
+@@ -1083,19 +1180,25 @@ function initialMessage(side) {
+ 
+ function normalTurnMessage(side) {
+   const delivered = Number(state.lastDeliveredSeqBySide[side] || 0);
+-  const unseen = state.transcript.filter(entry => entry.seq > delivered && !(entry.type === "response" && entry.side === side));
++  const unseen = state.transcript.filter(entry =>
++    entry.seq > delivered &&
++    !(entry.type === "response" && entry.side === side) &&
++    !(side === state.mainSide && entry.type === "human" && entry.interjection)
++  );
+   const context = boundedTranscript(unseen);
+   const deliveredSeq = latestSeq();
+   const sourceContext = sourceSectionForSide(side);
+   const artifactIds = artifactIdsFromEntries(unseen);
+   const artifacts = artifactRecordsForIds(artifactIds);
+   const attachmentContext = artifactNote(artifacts);
++  const mainInterjections = pendingMainInterjectionBundle(side);
+ 
+   return {
+     deliveredSeq,
+     d

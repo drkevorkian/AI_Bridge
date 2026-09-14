@@ -1,0 +1,104 @@
+liveredSources) state.sourceDeliveredBySide[side] = true;
+     state.lastSentArtifactIdsBySide[side] = Array.isArray(artifactIds) ? [...artifactIds] : [];
++    if (Array.isArray(mainInterjectionIds) && mainInterjectionIds.length) {
++      consumeMainInterjections(side, mainInterjectionIds);
++    }
+     appendLog({ time: Date.now(), type: "sent", side, text: `Sent prompt to AI ${side}`, chars: String(text || "").length });
+     if (saveRecord) await saveState();
+   }
+@@ -1586,7 +1720,9 @@ async function endBridge(reason = "Stopped") {
+   state.awaitingHuman = false;
+   state.pendingHuman = null;
+   state.pendingHumanQueue = [];
++  state.pendingMainInterjections = [];
+   state.suppressedHumanRequests = [];
++  state.roundStartedAtBySide = { A: null, B: null, C: null };
+   appendLog({ time: Date.now(), type: "system", text: reason });
+   await clearAttention();
+   await saveState();
+@@ -1695,14 +1831,18 @@ async function reopenSuppressedHumanRequest(requestId) {
+   return request;
+ }
+ 
+-async function handleBatchCompletedResponse(side, text, { relay = true, artifacts = [] } = {}) {
++async function handleBatchCompletedResponse(side, text, { relay = true, artifacts = [], completedAt = null } = {}) {
+   if (!side || !state.phasePendingSides.includes(side)) return { ok: false, ignored: true };
+   if (!text) return { ok: false, ignored: true };
+   if (state.lastResponseBySide[side] === text) return { ok: false, duplicate: true };
+ 
+   state.lastResponseBySide[side] = text;
+   const phase = state.workPhase;
+-  const entry = recordTranscript("response", { side, text, workMode: state.workMode, workPhase: phase });
++  const round = completeRoundTimer(side, completedAt);
++  const entry = recordTranscript("response", {
++    side, text, workMode: state.workMode, workPhase: phase,
++    ...(round.durationMs !== null ? { roundDurationMs: round.durationMs, roundNumber: round.roundNumber, roundCompletedAt: round.completedAt } : {})
++  });
+   const artifactIds = await storeResponseArtifacts(side, entry.seq, artifacts);
+   if (artifactIds.length) entry.artifactIds = artifactIds;
+   state.turn += 1;
+@@ -1710,7 +1850,7 @@ async function handleBatchCompletedResponse(side, text, { relay = true, artifact
+   if (!state.phaseCompletedSides.includes(side)) state.phaseCompletedSides.push(side);
+   if (phase === "review") state.reviewResponseSeqBySide[side] = entry.seq;
+   else state.primaryResponseSeqBySide[side] = entry.seq;
+-  appendLog({ time: Date.now(), type: "response", side, seq: entry.seq, text: `AI ${side} completed ${phaseLabel(phase).toLowerCase()} response #${entry.seq}`, chars: String(text || "").length });
++  appendLog({ time: Date.now(), type: "response", side, seq: entry.seq, roundNumber: round.roundNumber, durationMs: round.durationMs, text: `AI ${side} completed ${phaseLabel(phase).toLowerCase()} response #${entry.seq}${round.durationMs !== null ? ` in ${round.durationMs} ms` : ""}`, chars: String(text || "").length });
+ 
+   const humanPrompt = extractHumanRequest(text);
+   if (humanPrompt) await queueHumanRequest(side, text, humanPrompt);
+@@ -1732,8 +1872,8 @@ async function handleBatchCompletedResponse(side, text, { relay = true, artifact
+   return { ok: true, ...transition };
+ }
+ 
+-async function handleCompletedResponse(side, text, { relay = true, artifacts = [] } = {}) {
+-  if (isBatchWorkMode()) return handleBatchCompletedResponse(side, text, { relay, artifacts });
++async function handleCompletedResponse(side, text, { relay = true, artifacts = [], completedAt = null } = {}) {
++  if (isBatchWorkMode()) return handleBatchCompletedResponse(side, text, { relay, artifacts, completedAt });
+   if (!side || side !== state.currentSide) return { ok: false, ignored: true };
+   if (!text) return { ok: false, ignored: true };
+   if (state.lastResponseBySide[side] === text) return { ok: false, duplicate: true };
+@@ -1741,11 +1881,13 @@ async function handleCompletedResponse(side, text, { relay = true, artifacts = [
+   const command = extractRegisteredLlmCommand(text, side);
+   const entryText = command ? command.body : text;
+   state.lastResponseBySide[side] = text;
++  const round = completeRoundTimer(side, completedAt);
+   const entry = recordTranscript("response", {
+     side,
+     text: entryText,
+     workMode: state.workMode,
+     workPhase: state.workPhase,
++    ...(round.durationMs !== null ? { roundDurationMs: round.durationMs, roundNumber: round.roundNumber, roundCompletedAt: round.completedAt } : {}),
+     ...(command ? {
+       bridgeCommand: command.id,
+       directTargetRaw: command.targetRaw,
+@@ -1755,7 +1897,7 @@ async function handleCompletedResponse(side, text, { relay = true, artifacts = [
+   const artifactIds = await storeResponseArtifacts(side, entry.seq, artifacts);
+   if (artifactIds.length) entry.artifactIds = artifactIds;
+   state.turn += 1;
+-  appendLog({ time: Date.now(), type: "response", side, seq: entry.seq, text: `AI ${side} completed response #${entry.seq}`, chars: String(entryText || "").length });
++  appendLog({ time: Date.now(), type: "response", side, seq: entry.seq, roundNumber: round.roundNumber, durationMs: round.durationMs, text: `AI ${side} completed response #${entry.seq}${round.durationMs !== null ? ` in ${round.durationMs} ms` : ""}`, chars: String(entryText || "").length });
+ 
+   const humanPrompt = extractHumanRequest(entryText);
+   if (humanPrompt) {
+@@ -1804,7 +1946,7 @@ async function handleCompletedResponse(side, text, { relay = true, artifacts = [
+     ? directTurnMessage(side, targetSide, entry)
+     : normalTurnMessage(targetSide);
+   try {
+-    await sendToSide(targetSide, outgoing.text, { deliveredSeq: outgoing.deliveredSeq, deliveredSources: outgoing.deliveredSources, artifactIds: outgoing.artifactIds, artifacts: outgoing.artifacts });
++    await sendToSide(targetSide, outgoing.text, { deliveredSeq: outgoing.deliveredSeq, deliveredSources: outgoing.deliveredSources, artifactIds: outgoing.artifactIds, artifacts: outgoing.artifacts, mainInterjectionIds: outgoing.mainInterjectionIds || [] });
+     return { ok: true, direct: Boolean(command?.targetSide), targetSide };
+   } catch (err) {
+     await pauseBridge(`Could not send to AI ${targetSide}: ${err.message}`);
+@@ -1859,6 +2001,8 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
+       fresh.running = false;
+       fresh.paused = false;
+       fresh.startSide = SIDES.includes(msg.startSide) ? msg.startSide : "A";
++      fresh.mainSide = fresh.startSide;
++      fresh.pendingMainInterjections = [];
+       fresh.workMode = normalizeWorkMode(msg.workMode);
+       fresh.workPhase = isBatchWorkMode(fresh.workMode) ? "primary" : (fresh.workMode === "collaborate" ? "collaborate" : (fresh.workMode === "mesh" ? "mesh" : "relay"));
+       fresh.currentSide = isBatchWorkMode(fresh.workMode) ? null : fresh.startSide;
+@@ -1905,7 +2049,7 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
+           await sendBatchPhase();
+         } else {
+           const o

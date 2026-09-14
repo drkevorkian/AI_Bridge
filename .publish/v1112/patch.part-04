@@ -1,0 +1,133 @@
+utgoing = initialMessage(state.startSide);
+-          await sendToSide(state.startSide, outgoing.text, { deliveredSeq: outgoing.deliveredSeq, deliveredSources: outgoing.deliveredSources });
++          await sendToSide(state.startSide, outgoing.text, { deliveredSeq: outgoing.deliveredSeq, deliveredSources: outgoing.deliveredSources, mainInterjectionIds: outgoing.mainInterjectionIds || [] });
+         }
+       } catch (err) {
+         await pauseBridge(`Initial send failed: ${err.message}`);
+@@ -1959,7 +2103,7 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
+           state.currentSide = SIDES.includes(state.currentSide) ? state.currentSide : state.startSide;
+           delete state.lastResponseBySide[state.currentSide];
+           const outgoing = recoveryMessage(state.currentSide);
+-          await sendToSide(state.currentSide, outgoing.text, { deliveredSeq: outgoing.deliveredSeq, deliveredSources: outgoing.deliveredSources, artifactIds: outgoing.artifactIds, artifacts: outgoing.artifacts });
++          await sendToSide(state.currentSide, outgoing.text, { deliveredSeq: outgoing.deliveredSeq, deliveredSources: outgoing.deliveredSources, artifactIds: outgoing.artifactIds, artifacts: outgoing.artifacts, mainInterjectionIds: outgoing.mainInterjectionIds || [] });
+         }
+       } catch (err) {
+         await pauseBridge(`Resume failed: ${err.message}`);
+@@ -2004,15 +2148,30 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
+       if (state.awaitingHuman) throw new Error("Answer the pending human-input request first; use the modal so the requesting AI receives your answer directly.");
+       const text = String(msg.text || "").trim();
+       if (!text) throw new Error("Type an interjection first.");
+-      const entry = recordTranscript("human", { text, interjection: true });
+-      appendLog({ time: Date.now(), type: "human-interjection", seq: entry.seq, text: "Human controller interjected into shared context", chars: text.length });
++
++      state.mainSide = SIDES.includes(state.mainSide) ? state.mainSide : (SIDES.includes(state.startSide) ? state.startSide : "A");
++      state.pendingMainInterjections = Array.isArray(state.pendingMainInterjections) ? state.pendingMainInterjections : [];
++      const item = {
++        id: `interjection-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`,
++        time: Date.now(),
++        text,
++        mainSide: state.mainSide
++      };
++      state.pendingMainInterjections.push(item);
++      appendLog({
++        time: item.time,
++        type: "human-interjection-queued",
++        side: state.mainSide,
++        text: `Human interjection queued for Main AI ${state.mainSide} on its next turn`,
++        chars: text.length
++      });
+       await saveState();
+       sendResponse({
+         ok: true,
+-        seq: entry.seq,
+-        delivery: isBatchWorkMode()
+-          ? (state.workMode === "review" && state.workPhase === "primary" ? "review-phase" : "next-scheduled-handoff")
+-          : "next-scheduled-handoff"
++        interjectionId: item.id,
++        mainSide: state.mainSide,
++        mainLabel: labelForSide(state.mainSide),
++        delivery: "main-next-turn"
+       });
+       return;
+     }
+@@ -2039,39 +2198,49 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
+ 
+       const pending = state.pendingHuman;
+       const requestingSide = pending.requestingSide;
++      const outgoing = humanReplyMessage(requestingSide, pending.prompt, answer);
++
++      await sendToSide(requestingSide, outgoing.text, { deliveredSeq: outgoing.deliveredSeq });
++
+       recordTranscript("human", {
+         text: answer,
+         question: pending.prompt,
+         requestedBySide: requestingSide
+       });
+-
++      // The requesting AI already received this answer in the successful direct
++      // reply, so do not echo the same human answer back on its next team turn.
++      state.lastDeliveredSeqBySide[requestingSide] = latestSeq();
+       state.awaitingHuman = false;
+       state.pendingHuman = null;
+-      delete state.lastResponseBySide[requestingSide];
+       appendLog({ time: Date.now(), type: "human", side: requestingSide, text: `Human replied to AI ${requestingSide}`, chars: answer.length });
+ 
+       if (isBatchWorkMode()) {
+         state.phaseCompletedSides = state.phaseCompletedSides.filter(side => side !== requestingSide);
+         if (!state.phasePendingSides.includes(requestingSide)) state.phasePendingSides.push(requestingSide);
+-        const outgoing = humanReplyMessage(requestingSide, pending.prompt, answer);
+-        await sendToSide(requestingSide, outgoing.text, { deliveredSeq: outgoing.deliveredSeq });
+ 
+         const nextRequest = state.pendingHumanQueue.shift() || null;
+         if (nextRequest) {
+           state.awaitingHuman = true;
+           state.pendingHuman = nextRequest;
++          state.running = false;
++          state.paused = true;
++          state.pauseReason = `Human input still pending from ${nextRequest.requestingLabel || `AI ${nextRequest.requestingSide}`}.`;
+           await showHumanAttention(nextRequest.requestingSide, nextRequest.prompt);
+         } else {
++          state.running = true;
++          state.paused = false;
++          state.pauseReason = "";
+           await clearAttention();
+         }
+-        await saveState();
+       } else {
+         state.currentSide = requestingSide;
++        state.running = true;
++        state.paused = false;
++        state.pauseReason = "";
+         await clearAttention();
+-        await saveState();
+-        const outgoing = humanReplyMessage(requestingSide, pending.prompt, answer);
+-        await sendToSide(requestingSide, outgoing.text, { deliveredSeq: outgoing.deliveredSeq });
+       }
++
++      await saveState();
+       sendResponse({ ok: true });
+       return;
+     }
+@@ -2092,7 +2261,8 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
+       // If the user manually paused while the current AI was still generating,
+       // capture that completed work and advance the cursor, but do not relay it.
+       const relay = state.running;
+-      const task = () => handleCompletedResponse(side, text, { relay, artifacts: msg.artifacts });
++      const completedAt = Number.isFinite(Number(msg.completedAt)) ? Number(msg.completedAt) : null;
++      const task = () => handleCompletedResponse(side, text, { relay, artifacts: msg.artifacts, completedAt });
+       responseCommitQueue = responseCommitQueue.catch(() => {}).then(task);
+       const result = await responseCommitQueue;
+       sendResponse(result);
+diff --git a/content.js b/content.js
+index e769da3..c1bb6f1 100644
+--- a/content.js
++++ b/content.js
+@@ -1,6 +1,6 @@
+ (() => {
+-  if (window.__AI_BRIDGE_LOADED_V111__) return;
+-  window.__AI_BRIDGE_LOADED_V111__ = true;
++  if (window.__AI_BRIDGE_LOADED_V1111__) return;
++  window.__AI_BRIDGE_LOADED_V1111__ = true;
+ 
+   const host = location.hostname;
+   let lastObservedText = 

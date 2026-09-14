@@ -1,0 +1,67 @@
+name: Materialize AI Bridge v1.11.2 review source
+
+on:
+  push:
+    branches: [ai-a/v1.11.2-round-timers]
+
+permissions:
+  contents: write
+
+jobs:
+  materialize:
+    if: ${{ !contains(github.event.head_commit.message, '[materialized-v1112]') }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ai-a/v1.11.2-round-timers
+      - name: Apply and verify exact v1.11.2 candidate
+        shell: bash
+        run: |
+          set -euo pipefail
+          cat .publish/v1112/patch.part-* > /tmp/v1112.patch
+          git apply /tmp/v1112.patch
+          rm -rf .publish
+          rm -f .github/workflows/materialize-v1112.yml
+          rmdir .github/workflows .github 2>/dev/null || true
+          node --check background.js
+          node --check content.js
+          node --check dashboard.js
+          node --check popup.js
+          python -m json.tool manifest.json >/dev/null
+          test "$(python -c 'import json; print(json.load(open("manifest.json"))["version"])')" = '1.11.2'
+          grep -q 'CONTENT_VERSION = "1.11.2"' background.js
+          grep -q 'version: "1.11.2"' content.js
+          grep -q 'roundStartedAtBySide' background.js
+          grep -q 'completeRoundTimer' background.js
+          grep -q 'completedAt = Number(lastChangeAt)' content.js
+          grep -q 'id="timerA"' dashboard.html
+          grep -q 'id="timerB"' dashboard.html
+          grep -q 'id="timerC"' dashboard.html
+          grep -q 'function updateRoundTimers' dashboard.js
+          grep -q 'pendingMainInterjections' background.js
+          grep -q 'AI_BRIDGE_HUMAN_REOPEN' background.js
+          cat > /tmp/release.sha256 <<'EOF'
+          55b97add965a185ef72d9ccd797a9b8d35918eb461ec06e19f2cf675a6f895c5  README.md
+          33fc619c2fd3fa4b7d7e1dd88aad4b94ae91d1fb7c11b3b4388c1fc046ffc624  background.js
+          030286546709f8c8017733b9bf0153e10c09507afa808da898f6eca54a2e77ff  content.js
+          33f2fe8e126203a0ee88ab309f9f01bed50b15cd87d4bc200c1617df7210f2c7  dashboard.css
+          a4c0fd7323661d3a79977ff778c27c2dc93f93cbdf58a62c996a7cc19715453e  dashboard.html
+          edfcd584494d6951ab1d943c25910b33beab9c1375c545ae00221f555d1e7c6b  dashboard.js
+          0d050875f7ae263bce9f6fc07009a8fec434a53308372817452e4e16d17f9e7b  icon128.png
+          41f8c0d3af8799089bfe086f063dbbe1a44da67e273f612f69c6a6f2a6a97a95  manifest.json
+          c40638ae18cfeefca797dc6370f2a58cbb2537a4ba1ba047b5e23c57447f3ae5  popup.css
+          3050b9bc54822742f1cb616b62a4f178715d8f02322950cf87d966e8e7d08811  popup.html
+          98eeaa834583712039a69404a4b4b3493e6084268b81b397d7b7b18303edaece  popup.js
+          EOF
+          sha256sum -c /tmp/release.sha256
+          test "$(find . -maxdepth 1 -type f | wc -l)" -eq 11
+      - name: Commit verified v1.11.2 source
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name 'AI Bridge Release Bot'
+          git config user.email 'noreply@github.com'
+          git add -A
+          git commit -m 'AI Bridge v1.11.2 round timer review source [materialized-v1112]'
+          git push origin HEAD:ai-a/v1.11.2-round-timers
