@@ -9,6 +9,10 @@ const supported = [
 
 const $ = id => document.getElementById(id);
 const THEME_KEY = "aiBridgeTheme";
+const PANE_WIDTH_KEY = "aiBridgeControlPaneWidth";
+const DEFAULT_PANE_PCT = 40;
+const MIN_PANE_PCT = 24;
+const MAX_PANE_PCT = 70;
 const THEMES = new Set(["blizzard", "ghostwhite", "midnight", "slate", "light", "solarized", "ocean", "terminal"]);
 let tabsById = new Map();
 let latestState = null;
@@ -61,6 +65,111 @@ function applyTheme(theme) {
 async function loadTheme() {
   const stored = await chrome.storage.local.get(THEME_KEY);
   applyTheme(stored?.[THEME_KEY]);
+}
+
+function clampPanePct(value) {
+  const n = Number(value);
+  if (!Number.isFinite(n)) return DEFAULT_PANE_PCT;
+  return Math.min(MAX_PANE_PCT, Math.max(MIN_PANE_PCT, Math.round(n * 10) / 10));
+}
+
+function applyPaneWidth(pct) {
+  const width = clampPanePct(pct);
+  const shell = document.querySelector(".app-shell");
+  if (shell) shell.style.setProperty("--control-pane-width", `${width}%`);
+  const splitter = $("paneSplitter");
+  const label = $("paneWidthLabel");
+  const rounded = Math.round(width);
+  if (splitter) {
+    splitter.setAttribute("aria-valuenow", String(rounded));
+    splitter.setAttribute("aria-valuetext", `${rounded} percent`);
+    splitter.title = `Control pane ${rounded}%. Drag to resize. Double-click resets to 40%.`;
+  }
+  if (label) label.textContent = `${rounded}%`;
+  return width;
+}
+
+async function loadPaneWidth() {
+  const stored = await chrome.storage.local.get(PANE_WIDTH_KEY);
+  const value = stored?.[PANE_WIDTH_KEY];
+  applyPaneWidth(value == null || value === "" ? DEFAULT_PANE_PCT : value);
+}
+
+async function persistPaneWidth(pct) {
+  await chrome.storage.local.set({ [PANE_WIDTH_KEY]: clampPanePct(pct) });
+}
+
+function initPaneSplitter() {
+  const splitter = $("paneSplitter");
+  const shell = document.querySelector(".app-shell");
+  if (!splitter || !shell) return;
+  let dragging = false;
+
+  function pctFromClientX(clientX) {
+    const rect = shell.getBoundingClientRect();
+    if (!rect.width) return DEFAULT_PANE_PCT;
+    const minPx = Math.min(280, rect.width * 0.24);
+    const minRight = Math.min(320, rect.width * 0.3);
+    const minPct = (minPx / rect.width) * 100;
+    const maxPct = 100 - (minRight / rect.width) * 100;
+    const raw = ((clientX - rect.left) / rect.width) * 100;
+    if (minPct >= maxPct) return DEFAULT_PANE_PCT;
+    return Math.min(maxPct, Math.max(minPct, raw));
+  }
+
+  function currentPct() {
+    return parseFloat(getComputedStyle(shell).getPropertyValue("--control-pane-width")) || DEFAULT_PANE_PCT;
+  }
+
+  splitter.addEventListener("pointerdown", event => {
+    if (event.button !== 0) return;
+    if (event.detail >= 2) {
+      dragging = false;
+      document.body.classList.remove("is-resizing");
+      shell.classList.remove("is-resizing");
+      applyPaneWidth(DEFAULT_PANE_PCT);
+      persistPaneWidth(DEFAULT_PANE_PCT);
+      return;
+    }
+    dragging = true;
+    splitter.setPointerCapture(event.pointerId);
+    document.body.classList.add("is-resizing");
+    shell.classList.add("is-resizing");
+    applyPaneWidth(pctFromClientX(event.clientX));
+  });
+
+  splitter.addEventListener("pointermove", event => {
+    if (!dragging) return;
+    applyPaneWidth(pctFromClientX(event.clientX));
+  });
+
+  async function endDrag(event) {
+    if (!dragging) return;
+    dragging = false;
+    document.body.classList.remove("is-resizing");
+    shell.classList.remove("is-resizing");
+    try { splitter.releasePointerCapture(event.pointerId); } catch (_) {}
+    await persistPaneWidth(currentPct());
+  }
+
+  splitter.addEventListener("pointerup", endDrag);
+  splitter.addEventListener("pointercancel", endDrag);
+  splitter.addEventListener("dblclick", async () => {
+    applyPaneWidth(DEFAULT_PANE_PCT);
+    await persistPaneWidth(DEFAULT_PANE_PCT);
+  });
+  splitter.addEventListener("keydown", async event => {
+    const current = currentPct();
+    let next = current;
+    if (event.key === "ArrowLeft") next = current - 1;
+    else if (event.key === "ArrowRight") next = current + 1;
+    else if (event.key === "Home") next = MIN_PANE_PCT;
+    else if (event.key === "End") next = MAX_PANE_PCT;
+    else if (event.key === "Enter" || event.key === " ") next = DEFAULT_PANE_PCT;
+    else return;
+    event.preventDefault();
+    await persistPaneWidth(applyPaneWidth(next));
+  });
 }
 
 function formatHistoryTime(time) {
@@ -786,7 +895,11 @@ $("themeSelect").addEventListener("change", async event => {
 });
 
 chrome.storage.onChanged.addListener((changes, area) => {
-  if (area === "local" && changes[THEME_KEY]) applyTheme(changes[THEME_KEY].newValue);
+  if (area !== "local") return;
+  if (changes[THEME_KEY]) applyTheme(changes[THEME_KEY].newValue);
+  if (Object.prototype.hasOwnProperty.call(changes, PANE_WIDTH_KEY)) {
+    applyPaneWidth(changes[PANE_WIDTH_KEY].newValue ?? DEFAULT_PANE_PCT);
+  }
 });
 
 async function openFreshChats(sides) {
@@ -1075,6 +1188,7 @@ $("jumpLatest").addEventListener("click", () => {
   $("jumpLatest").classList.add("hidden");
 });
 
-Promise.all([loadTheme(), loadTabs({ preserve: false })]).then(refreshState);
+initPaneSplitter();
+Promise.all([loadTheme(), loadPaneWidth(), loadTabs({ preserve: false })]).then(refreshState);
 setInterval(refreshState, 750);
 setInterval(() => updateRoundTimers(latestState), 100);

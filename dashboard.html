@@ -12,10 +12,10 @@
 </head>
 <body>
   <div class="app-shell">
-    <aside class="control-panel">
+    <aside id="controlPanel" class="control-panel">
       <header class="brand-block">
         <div>
-          <div class="eyebrow">AI BRIDGE <span id="versionBadge" class="version-badge">v1.11.3</span></div>
+          <div class="eyebrow">AI BRIDGE <span id="versionBadge" class="version-badge">v1.11.4</span></div>
           <h1>Three agents. One workspace.</h1>
         </div>
         <div class="header-tools">
@@ -214,6 +214,10 @@
         <div class="field-help">Safe delivery: your note is queued now, but it is not injected into the currently queued model. It is sent with the Main AI's next group turn, then becomes shared context for later teammates.</div>
       </section>
     </aside>
+
+    <div id="paneSplitter" class="pane-splitter" role="separator" aria-orientation="vertical" aria-controls="controlPanel" aria-valuemin="24" aria-valuemax="70" aria-valuenow="40" aria-valuetext="40 percent" tabindex="0" title="Drag to resize. Double-click resets to 40%.">
+      <span id="paneWidthLabel" class="pane-splitter-value">40%</span>
+    </div>
 
     <main class="workspace">
       <header class="workspace-header">

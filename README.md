@@ -1,6 +1,6 @@
 # AI Bridge
 
-**Current version: 1.11.3**
+**Current version: 1.11.4**
 
 > GitHub commit [`f34778f`](https://github.com/drkevorkian/AI_Bridge/commit/f34778f81f9362ef0ad2c03933011e41d3c9fe36) was accidentally titled `1.13`. That was a **label typo only**. The shipped extension version is **1.11.3**.
 
@@ -33,7 +33,7 @@ The AI webpages must remain open in browser tabs. AI Bridge reuses those tabs ra
 
 ## Dashboard
 
-The dashboard uses a 40% control pane and 60% live transcript pane.
+The dashboard defaults to a 40% control pane and 60% live transcript pane. Drag the divider between them to resize (for example 33% / 67%). Double-click the divider, or press Enter while it is focused, to restore 40%. The chosen width is remembered.
 
 Core controls include:
 
@@ -333,7 +333,17 @@ The release contains exactly 11 extension files:
 - `README.md`
 - `icon128.png`
 
-## Current release notes — 1.11.3
+## Current release notes — 1.11.4
+
+**This release is 1.11.4.**
+
+- Control pane and live transcript are resizable. Default remains **40% / 60%**.
+- Drag the divider, use Left/Right arrows, or double-click / Enter to reset to 40%.
+- Pane width is stored in extension local storage and restored after reload.
+
+It also retains the 1.11.3 artifact persistence work and the rest of the 1.11.x Direct Mesh / human-control series.
+
+## Release notes — 1.11.3
 
 **This release is 1.11.3.** An earlier GitHub commit on this line was accidentally titled `1.13`; that was a label typo only. The shipped extension version is `1.11.3`.
 
