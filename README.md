@@ -1,8 +1,8 @@
 # AI Bridge
 
-**Current version: 1.16.2**
+**Current version: 1.16.3**
 
-1.16.2 wraps peer-AI output, vault previews, and local source files in structural `<untrusted_peer_data>` tags, shows a keep-awake status pill, and labels transcript AI cards as data-only. 1.16.1 consumed leftover OAuth state on every callback failure. 1.16.0 added CSRF `state`, system keep-awake, and Drive 409 hardening. Chrome Sync still works without Google. Login remains optional.
+1.16.3 hardens completion detection against stale provider DOM, cancels held stale completions on Pause/Stop, verifies the content completion-guard version, turns missing Google OAuth configuration into a normal setup state instead of a background exception, keeps visible dashboard version surfaces tied to the installed manifest, and adds a cross-platform regression runner/CI matrix. Chrome Sync still works without Google. Login remains optional.
 
 AI Bridge is a Manifest V3 Chrome extension for coordinating three AI web apps as one team from a single dashboard. It supports sequential relay, parallel work, peer review, direct model-to-model routing, human intervention, persistent file relay, reusable history, optional Chrome/Google settings sync, team-cycle timing, recovery checkpoints, a `chrome.alarms` stuck watchdog, system keep-awake during active runs, and in-dashboard GitHub updates.
 
@@ -33,7 +33,7 @@ The dashboard header has **Session** and **Settings**.
 
 - **Appearance** — theme, applied immediately on this machine
 - **Account & sync** — optional Push / Pull / Link / Unlink
-- **Google Drive login** — paste a Web-application OAuth client ID
+- **Google Drive login** — paste a Web-application OAuth client ID for an unpacked build
 - **Updates** — check GitHub, download ZIP, optional daily alarm
 
 The popup **Settings** button opens `dashboard.html#settings`.
@@ -46,18 +46,22 @@ Login is **never required**. Local-only behavior is unchanged. Chrome Sync (Push
 
 **Pull settings** inspects every available copy (Chrome Sync and, when linked, Drive), sanitizes each copy, and applies the newest valid `updatedAt`. Pull refuses to run during an active Bridge session.
 
-**Link Google account** is optional. Unpacked installs have no packaged `oauth2.client_id` on purpose (a placeholder would be a security hole). To link:
+**Link Google account** is optional. Unpacked installs have no packaged `oauth2.client_id` on purpose. If no packaged OAuth client and no saved Web client ID exist, Link now returns a normal `setupRequired` state instead of throwing/logging `AI Bridge background error`.
+
+To link an unpacked build:
 
 1. Open Settings and copy the **Extension ID** and **Authorized redirect URI** (`https://<extension-id>.chromiumapp.org/`).
 2. In Google Cloud, create a **Web application** OAuth client, enable the Drive API, and add that redirect URI.
 3. Paste the client ID into Settings and click **Save client ID**. It is stored only on this machine and is never synced.
 4. Click **Link Google account**. Scope used is `drive.appdata` only.
 
-Packaged Chrome-extension client IDs still use `chrome.identity.getAuthToken`. User-supplied Web-application client IDs use `chrome.identity.launchWebAuthFlow` against `https://accounts.google.com/o/oauth2/v2/auth` with an implicit token **and a per-request cryptographically random `state`**. The returned `state` is compared in constant time against the pending value in `chrome.storage.session` (10-minute TTL, one-time use). The access token stays in `chrome.storage.session` only — never local, never sync, never Drive. CSRF state is never written to local/sync.
+A packaged release may instead supply a real Chrome-extension OAuth client and use `chrome.identity.getAuthToken`, which gives the ordinary user the expected Link → Google account/consent flow without asking them to create their own client. AI Bridge never collects a Google password.
+
+User-supplied Web-application client IDs use `chrome.identity.launchWebAuthFlow` against `https://accounts.google.com/o/oauth2/v2/auth` with an implicit token **and a per-request cryptographically random `state`**. The returned `state` is compared in constant time against the pending value in `chrome.storage.session` (10-minute TTL, one-time use). The access token stays in `chrome.storage.session` only — never local, never sync, never Drive. CSRF state is never written to local/sync.
 
 **Unlink Google account** clears the Identity cache, the session token, and the local linked flag. It does not delete the Drive app-data copy, so a later Link can recover it.
 
-Do not add a placeholder `oauth2` block to `manifest.json`. Do not add a manifest `key` (that would change the unpacked extension ID and wipe local/sync for existing installs). The only Drive scope AI Bridge will accept is `drive.appdata`. Drive API calls are hardcoded to `https://www.googleapis.com` with `redirect: "error"`. Listing uses `spaces=appDataFolder`. Creating a file uses `parents: ["appDataFolder"]`. HTTP 401 evicts the cached/session token and retries once.
+Do not add a placeholder `oauth2` block to `manifest.json`. Do not add a manifest `key` casually to an existing unpacked install because changing the extension identity can strand the current local/sync state. The only Drive scope AI Bridge will accept is `drive.appdata`. Drive API calls are hardcoded to `https://www.googleapis.com` with `redirect: "error"`. Listing uses `spaces=appDataFolder`. Creating a file uses `parents: ["appDataFolder"]`. HTTP 401 evicts the cached/session token and retries once.
 
 Synced whitelist:
 
@@ -127,6 +131,7 @@ Best for: investigations, debugging, and iterative design.
 ### Collaborate
 
 Sequential like Relay — not a live consensus discussion. Every turn revises one shared deliverable.
+Cycle: every selected LLM has participated once.
 Best for: writing one final design, spec, or codebase.
 
 ### Compete
@@ -138,6 +143,7 @@ Best for: independent solutions, avoiding anchoring.
 ### Parallel Independent
 
 A/B/C start simultaneously and execute separate assigned jobs.
+Cycle: the whole simultaneous batch. The counter ticks after every selected job finishes.
 Best for: work that decomposes into backend / frontend / research / security tracks.
 
 ### Peer Review
@@ -157,11 +163,23 @@ Best for: dynamic workflows.
 
 1. Provider Preflight / Health Check
 2. Named Team Profiles
-3. Export / Import Config JSON
+3. Config Export / Import JSON
 4. Diagnostics Report
-5. Session Checkpoints
+5. Manual Project Checkpoint / Restore Point
 
-`content.js` is on the 1.14.0 content-script protocol (`generationId`, `AI_BRIDGE_GENERATION_STATUS`, optional `AI_BRIDGE_STOP_GENERATION`). AI Bridge reloads a stale provider tab when the ping version does not match. v1.15.0 does not bump that protocol.
+The manual checkpoint is intentionally different from the existing automatic recovery checkpoint used by the stuck watchdog.
+
+`content.js` is on the 1.14.0 content-script protocol (`generationId`, `AI_BRIDGE_GENERATION_STATUS`, optional `AI_BRIDGE_STOP_GENERATION`). AI Bridge reloads a stale provider tab when the ping version does not match. v1.16.3 does not change that protocol; completion hardening is a companion isolated-world guard with its own v1.16.3 status handshake.
+
+## Completion detection
+
+Provider pages sometimes keep the previous assistant response as the newest visible response briefly after AI Bridge submits the next prompt. Relying only on text stability or a visible Stop button can therefore falsely treat the old answer as the new completion.
+
+v1.16.3 adds `content-completion-guard.js`, loaded before `content.js` in the extension's isolated content-script world. For each generation it records the pre-send response DOM identity and response text. An unchanged old response is held instead of being acknowledged. A genuinely different answer follows the normal `content.js` path. A brand-new response node with identical wording, or a reused response node whose actual response text changed during generation and later returned to the same wording, is accepted as fresh work.
+
+If a verified fresh response is text-identical to the previous answer, the held call is forwarded with a fresh completion timestamp. Artifact bytes captured from the old DOM are discarded instead of being reused; therefore an identical-text completion that also introduces a new file may require a later resend/download until provider-specific artifact preflight is implemented.
+
+Pause and Stop explicitly cancel held stale-completion promises. New generations also supersede older holds. A hold expires after 125 minutes. The service-worker fallback only rejects identical text when its `completedAt` predates the new round timer.
 
 ## Dashboard
 
@@ -182,21 +200,45 @@ The packaged extension contains:
 - `manifest.json`
 - `background-wrapper.js`
 - `background.js`
+- `completion-runtime-hardening.js`
 - `oauth-runtime-hardening.js`
 - `power.js`
+- `content-completion-guard.js`
 - `content.js`
 - `dashboard.html`
 - `dashboard.css`
 - `dashboard.js`
+- `dashboard-release.js`
 - `popup.html`
 - `popup.css`
 - `popup.js`
 - `README.md`
 - `icon128.png`
 
-Command-line tests live in `tests/`.
+Command-line tests live in `tests/`. Run the complete portable suite with:
 
-## Current release — 1.16.2
+```text
+node tests/run-all.mjs
+```
+
+GitHub Actions runs that same suite on Ubuntu, Windows, and macOS with read-only repository permissions and pinned official action commits.
+
+## Current release — 1.16.3
+
+- Stale provider DOM can no longer be accepted merely because the previous answer remains visible after a new prompt
+- Completion guard uses response DOM identity + response-text mutation evidence and preserves legitimate text-identical answers
+- Background fallback rejects only timestamps that predate the new round timer; the old arbitrary 1.2-second heuristic is gone
+- Pause/Stop cancel special held stale-response promises; a later held completion cannot advance a paused/stopped session
+- Service worker requires completion-guard status version `1.16.3`; stale guard code fails closed and asks for a provider-tab refresh
+- Repeated identical completions never reuse artifact bytes captured from the old DOM
+- Missing Google OAuth configuration returns normal `setupRequired` data rather than throwing `AI Bridge background error`
+- OAuth setup state is labeled generically as `oauth-client`, covering both unpacked user Web clients and packaged publisher clients accurately
+- Dashboard clarifies the unpacked Web-client setup when Link is pressed without configuration and reads visible version badges from the installed manifest
+- `tests/run-all.mjs` syntax-checks every JS/MJS file and runs every regression file cross-platform
+- GitHub Actions regression matrix runs on Ubuntu, Windows, and macOS with `contents: read` only and pinned official Action SHAs
+- `CONTENT_VERSION` remains 1.14.0; `STATE_VERSION` remains 3
+
+## Previous release — 1.16.2
 
 - Peer SHARED UPDATES, Direct Mesh bodies, and peer-review primaries are wrapped in `<untrusted_peer_data source="AI_A|AI_B|AI_C">`. Breakout tags inside the payload are neutralized
 - Local source files and vault text previews use the same wrapper (`source="files"` / `source="vault"`)
