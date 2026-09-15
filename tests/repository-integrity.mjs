@@ -21,6 +21,7 @@ assert.ok(size("background.js") > 150000, "background.js appears truncated");
 assert.ok(size("dashboard.js") > 60000, "dashboard.js appears truncated");
 assert.ok(size("content-completion-guard.js") > 8000, "content completion guard appears truncated");
 assert.ok(size("human-input-runtime-hardening.js") > 4000, "human-input hardening appears truncated");
+assert.ok(size("content-runtime-prelude.js") > 1000, "content runtime prelude appears truncated");
 
 const content = read("content.js");
 for (const marker of [
@@ -45,25 +46,30 @@ for (const marker of [
 }
 
 const manifest = JSON.parse(read("manifest.json"));
+assert.equal(manifest.version, "1.16.4", "runtime hardening release must remain versioned as 1.16.4");
 const scripts = manifest.content_scripts?.[0]?.js || [];
 assert.deepEqual(
   scripts,
   [
+    "content-runtime-prelude.js",
     "content-completion-guard.js",
     "content-response-delivery-hardening.js",
     "content.js"
   ],
   "manifest content-script safety stack/order changed unexpectedly"
 );
+for (const script of scripts) {
+  assert.equal(fs.existsSync(path.join(root, script)), true, `manifest content script is missing: ${script}`);
+}
 
 const reconnect = read("reconnect-runtime-hardening.js");
-for (const marker of [
-  '"content-completion-guard.js"',
-  '"content-response-delivery-hardening.js"',
-  '"content.js"'
-]) {
-  assert.ok(reconnect.includes(marker), `reconnect runtime missing required script: ${marker}`);
-}
+assert.match(reconnect, /EXPECTED_CONTENT_VERSION\s*=\s*"1\.16\.4"/, "reconnect runtime version drifted from manifest");
+assert.match(reconnect, /recovery:\s*"clean-reload"/, "reconnect must use a clean isolated-world reload strategy");
+assert.doesNotMatch(reconnect, /chrome\.scripting\.executeScript/, "reconnect must not stack content wrappers through live reinjection");
+
+const prelude = read("content-runtime-prelude.js");
+assert.match(prelude, /RUNTIME_VERSION\s*=\s*"1\.16\.4"/);
+assert.match(prelude, /__AI_BRIDGE_MONITOR_TIMER__/);
 
 const wrapper = read("background-wrapper.js");
 assert.match(
@@ -71,13 +77,18 @@ assert.match(
   /importScripts\("background\.js",\s*"completion-runtime-hardening\.js",\s*"oauth-runtime-hardening\.js",\s*"power\.js"\)/,
   "established service-worker bootstrap chain changed unexpectedly"
 );
+for (const requiredModule of [
+  "artifact-fetch-runtime-hardening.js",
+  "coordinator-generation-hardening.js",
+  "human-input-runtime-hardening.js",
+  "watchdog-runtime-hardening.js",
+  "reconnect-runtime-hardening.js"
+]) {
+  assert.ok(wrapper.includes(`importScripts("${requiredModule}")`), `service worker is not loading ${requiredModule}`);
+}
 assert.ok(
-  wrapper.includes('importScripts("human-input-runtime-hardening.js")'),
-  "human-input hardening is not loaded"
-);
-assert.ok(
-  wrapper.includes('importScripts("reconnect-runtime-hardening.js")'),
-  "reconnect hardening is not loaded"
+  wrapper.indexOf('importScripts("coordinator-mutex-prelude.js")') < wrapper.indexOf('importScripts("background.js"'),
+  "coordinator mutation prelude must load before background.js registers its message listener"
 );
 
 const textExtensions = new Set([".js", ".mjs", ".json", ".html", ".css", ".md", ".yml", ".yaml"]);
@@ -94,6 +105,11 @@ function walk(directory) {
     assert.notEqual(
       text.trim(),
       "see-local-file",
+      `${path.relative(root, absolute)} contains a placeholder instead of source code`
+    );
+    assert.notEqual(
+      text.trim(),
+      "placeholder",
       `${path.relative(root, absolute)} contains a placeholder instead of source code`
     );
   }

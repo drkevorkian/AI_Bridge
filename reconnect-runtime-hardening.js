@@ -1,15 +1,14 @@
 // AI Bridge reconnect hardening.
 //
-// background.js owns the coordination engine. This module replaces only the
-// page-listener recovery helper after background.js has loaded so reconnects
-// rebuild the same content runtime declared by manifest.json.
+// A content-script isolated world can retain patched APIs and timers after an
+// extension/service-worker restart. Recovery therefore reloads the provider tab
+// and lets manifest-declared content scripts build one clean runtime instead of
+// stacking another set of wrappers into the live world.
 (() => {
   "use strict";
 
-  const EXPECTED_CONTENT_VERSION = typeof CONTENT_VERSION !== "undefined"
-    ? CONTENT_VERSION
-    : "1.14.0";
-  const PING_ATTEMPTS = 8;
+  const EXPECTED_CONTENT_VERSION = "1.16.4";
+  const PING_ATTEMPTS = 12;
   const PING_DELAY_MS = 250;
   const RELOAD_TIMEOUT_MS = 20000;
 
@@ -31,7 +30,6 @@
   async function ping(tabId) {
     try {
       const pong = await chrome.tabs.sendMessage(tabId, { type: "AI_BRIDGE_PING" });
-      if (pong?.ok && pong.version === EXPECTED_CONTENT_VERSION) return pong;
       return pong || null;
     } catch (_) {
       return null;
@@ -45,44 +43,18 @@
         const tab = await chrome.tabs.get(tabId);
         if (tab?.status === "complete" && tab?.url) return tab;
       } catch (_) {}
-      await sleep(250);
+      await sleep(PING_DELAY_MS);
     }
     throw new Error("Timed out waiting for the AI page to finish reloading.");
   }
 
-  async function clearStaleContentBootstrapGuards(tabId) {
-    // A failed ping means the existing page runtime is unusable. Stale
-    // sentinels can otherwise make reinjection return immediately, leaving the
-    // page without a working listener or without one of the safety wrappers.
-    // Clear only AI Bridge-owned markers in the isolated content-script world.
-    await chrome.scripting.executeScript({
-      target: { tabId },
-      func: () => {
-        try {
-          delete window.__AI_BRIDGE_LOADED_V114__;
-          delete window.__AI_BRIDGE_COMPLETION_GUARD_V1163__;
-          delete window.__AI_BRIDGE_RESPONSE_DELIVERY_HARDENING_V1163__;
-          delete window.__AI_BRIDGE_RESPONSE_DELIVERY_STATUS__;
-        } catch (_) {
-          window.__AI_BRIDGE_LOADED_V114__ = false;
-          window.__AI_BRIDGE_COMPLETION_GUARD_V1163__ = false;
-          window.__AI_BRIDGE_RESPONSE_DELIVERY_HARDENING_V1163__ = false;
-          window.__AI_BRIDGE_RESPONSE_DELIVERY_STATUS__ = undefined;
-        }
-      }
-    });
-  }
-
-  async function injectCompleteContentRuntime(tabId) {
-    await clearStaleContentBootstrapGuards(tabId);
-    await chrome.scripting.executeScript({
-      target: { tabId },
-      files: [
-        "content-completion-guard.js",
-        "content-response-delivery-hardening.js",
-        "content.js"
-      ]
-    });
+  async function pingUntilCurrent(tabId) {
+    for (let attempt = 0; attempt < PING_ATTEMPTS; attempt += 1) {
+      const pong = await ping(tabId);
+      if (pong?.ok && pong.version === EXPECTED_CONTENT_VERSION) return pong;
+      if (attempt + 1 < PING_ATTEMPTS) await sleep(PING_DELAY_MS);
+    }
+    return null;
   }
 
   async function hardenedEnsureTabListener(rawTabId) {
@@ -102,39 +74,48 @@
     } catch (err) {
       throw new Error(`The assigned AI tab is no longer available (${err?.message || "tab lookup failed"}).`);
     }
-
     if (!isSupportedAiUrl(tab?.url)) {
       throw new Error(`Selected tab is not on a supported AI site: ${tab?.url || "unknown URL"}`);
     }
 
-    // If a live listener reports an older content runtime, reload the page so
-    // Chrome discards that isolated world before rebuilding it from this
-    // extension version.
-    if (existingPong?.ok && existingPong.version !== EXPECTED_CONTENT_VERSION) {
+    // Any missing/mismatched listener is recovered through a full page reload.
+    // This destroys the old isolated world, response wrappers, completion guard,
+    // and monitor interval before Chrome injects the manifest stack again.
+    try {
       await chrome.tabs.reload(tabId);
       tab = await waitForReadyTab(tabId);
-      if (!isSupportedAiUrl(tab?.url)) {
-        throw new Error(`Selected tab changed to an unsupported URL while reconnecting: ${tab?.url || "unknown URL"}`);
-      }
-    }
-
-    try {
-      await injectCompleteContentRuntime(tabId);
     } catch (err) {
-      throw new Error(`Could not reconnect to the AI page (${err?.message || "script injection failed"}). Refresh that tab and rebind it.`);
+      throw new Error(`Could not reload the AI page for reconnect (${err?.message || "reload failed"}).`);
+    }
+    if (!isSupportedAiUrl(tab?.url)) {
+      throw new Error(`Selected tab changed to an unsupported URL while reconnecting: ${tab?.url || "unknown URL"}`);
     }
 
-    // executeScript resolves when execution completes, but provider pages and
-    // extension reloads can still race message-port establishment. Probe for a
-    // bounded two-second window instead of relying on one 150 ms attempt.
-    for (let attempt = 0; attempt < PING_ATTEMPTS; attempt += 1) {
-      const pong = await ping(tabId);
-      if (pong?.ok && pong.version === EXPECTED_CONTENT_VERSION) return pong;
-      if (attempt + 1 < PING_ATTEMPTS) await sleep(PING_DELAY_MS);
+    const pong = await pingUntilCurrent(tabId);
+    if (pong) return pong;
+
+    // Do not inject over a live/partially initialized isolated world. A second
+    // reload is safer than double-wrapping chrome.runtime.sendMessage or
+    // stacking content.js polling timers.
+    try {
+      await chrome.tabs.reload(tabId);
+      tab = await waitForReadyTab(tabId);
+    } catch (err) {
+      throw new Error(`Could not complete clean reconnect (${err?.message || "reload failed"}).`);
+    }
+    if (!isSupportedAiUrl(tab?.url)) {
+      throw new Error(`Selected tab changed to an unsupported URL while reconnecting: ${tab?.url || "unknown URL"}`);
     }
 
-    throw new Error("The page listener could not be established after complete runtime reinjection.");
+    const retryPong = await pingUntilCurrent(tabId);
+    if (retryPong) return retryPong;
+    throw new Error("The page listener could not be established after clean page reloads. Reload the extension, refresh that AI tab, and rebind it.");
   }
 
   globalThis.ensureTabListener = hardenedEnsureTabListener;
+  globalThis.__AI_BRIDGE_RECONNECT_HARDENING__ = Object.freeze({
+    version: 2,
+    contentRuntimeVersion: EXPECTED_CONTENT_VERSION,
+    recovery: "clean-reload"
+  });
 })();
