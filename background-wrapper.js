@@ -9,3 +9,8 @@ importScripts("background.js", "completion-runtime-hardening.js", "oauth-runtime
 // after the established bootstrap chain so existing runtime ordering and older
 // extension/test assumptions remain backwards compatible.
 importScripts("human-input-runtime-hardening.js");
+
+// Reconnect recovery is also isolated from the coordinator. It replaces only
+// ensureTabListener() so service-worker restarts and extension reloads rebuild
+// the complete content runtime before resuming a session.
+importScripts("reconnect-runtime-hardening.js");
