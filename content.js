@@ -9,6 +9,7 @@
   let lastReportedSignature = "";
   let pendingSend = false;
   let currentGenerationId = "";
+  const responseMonitorInFlight = new Set();
   const MAX_ARTIFACTS_PER_RESPONSE = 8;
   const MAX_ARTIFACT_FILE_BYTES = 12 * 1024 * 1024;
   const MAX_ARTIFACT_TOTAL_BYTES = 24 * 1024 * 1024;
@@ -17,7 +18,6 @@
     "a[href]", "a[download]", "button", "[role='button']",
     "[data-download-url]", "[data-file-url]", "[data-url]", "[data-href]"
   ].join(",");
-
 
   const adapters = {
     chatgpt: {
@@ -256,32 +256,39 @@
     if (!input) throw new Error("Could not find the prompt box on this page.");
 
     pendingSend = true;
-    const uploadedCount = await uploadArtifacts(artifacts);
-    setNativeValue(input, text);
-    await sleep(uploadedCount ? 650 : 300);
+    try {
+      const uploadedCount = await uploadArtifacts(artifacts);
+      setNativeValue(input, text);
+      await sleep(uploadedCount ? 650 : 300);
 
-    const button = firstVisible(adapter.sendSelectors);
-    if (button && !button.disabled) {
-      button.click();
-    } else {
-      input.dispatchEvent(new KeyboardEvent("keydown", {
-        key: "Enter",
-        code: "Enter",
-        bubbles: true,
-        cancelable: true
-      }));
-      input.dispatchEvent(new KeyboardEvent("keyup", {
-        key: "Enter",
-        code: "Enter",
-        bubbles: true,
-        cancelable: true
-      }));
+      const button = firstVisible(adapter.sendSelectors);
+      if (button && !button.disabled) {
+        button.click();
+      } else {
+        input.dispatchEvent(new KeyboardEvent("keydown", {
+          key: "Enter",
+          code: "Enter",
+          bubbles: true,
+          cancelable: true
+        }));
+        input.dispatchEvent(new KeyboardEvent("keyup", {
+          key: "Enter",
+          code: "Enter",
+          bubbles: true,
+          cancelable: true
+        }));
+      }
+
+      lastObservedText = "";
+      lastChangeAt = Date.now();
+      setTimeout(() => { pendingSend = false; }, uploadedCount ? 2200 : 1200);
+      return uploadedCount;
+    } catch (error) {
+      // Upload/DOM failures happen before a model generation is established.
+      // Never leave monitoring permanently disabled after a failed send.
+      pendingSend = false;
+      throw error;
     }
-
-    lastObservedText = "";
-    lastChangeAt = Date.now();
-    setTimeout(() => { pendingSend = false; }, uploadedCount ? 2200 : 1200);
-    return uploadedCount;
   }
 
   function rawNodeText(node) {
@@ -293,8 +300,6 @@
 
   function cleanResponseText(text) {
     let value = String(text || "").replace(/\u00a0/g, " ").replace(/\r/g, "").trim();
-    // Provider accessibility headings can be included in outer-container innerText.
-    // They are labels, not the assistant's answer.
     value = value.replace(/^(?:Gemini|ChatGPT|Claude|Grok|Copilot)\s+(?:said|says)\s*[:：]?\s*(?:\n+|$)/i, "").trim();
     return value;
   }
@@ -326,8 +331,6 @@
     }
     const outer = cleanResponseText(rawNodeText(node));
     if (outer) candidates.push(outer);
-    // The real answer is normally the richest text block. This avoids Gemini's
-    // short accessibility header such as "Gemini said" winning the scrape.
     return candidates.sort((a, b) => b.length - a.length)[0] || "";
   }
 
@@ -365,8 +368,6 @@
     const primary = node?.closest?.("[data-message-author-role='assistant'], [data-message-id], article, model-response") || node;
     if (!primary) return node;
     if (primary.querySelector?.(DOWNLOAD_CANDIDATE_SELECTOR)) return primary;
-    // Some providers render a file card as a sibling of the textual response.
-    // Look one message-wrapper level up, but never scan the whole conversation.
     const parent = primary.parentElement;
     if (parent && parent !== document.body && parent.querySelector?.(DOWNLOAD_CANDIDATE_SELECTOR)) return parent;
     return primary;
@@ -501,6 +502,9 @@
     let localError = null;
     try {
       try {
+        // Same-page authenticated fetch is intentionally retained here. It is
+        // constrained by the provider page's origin/CORS policy; the privileged
+        // service-worker fallback is separately credential-stripped by PR 1.
         const response = await fetch(url, { credentials: "include", signal: controller.signal });
         if (!response.ok) throw new Error(`HTTP ${response.status}`);
         const declared = Number(response.headers.get("content-length") || 0);
@@ -511,7 +515,8 @@
           name,
           mime: blob.type || response.headers.get("content-type") || "application/octet-stream",
           size: blob.size,
-          dataBase64: await blobToBase64(blob)
+          dataBase64: await blobToBase64(blob),
+          sourceUrl: url
         };
       } catch (err) {
         localError = err;
@@ -520,8 +525,6 @@
       clearTimeout(timer);
     }
 
-    // Page-context fetch can be blocked by CORS even though the extension has
-    // permission to retrieve the file. Retry HTTP(S) downloads in the service worker.
     if (/^https?:/i.test(url)) {
       const remote = await chrome.runtime.sendMessage({
         type: "AI_BRIDGE_FETCH_ARTIFACT",
@@ -529,7 +532,7 @@
         name,
         mime: ""
       });
-      if (remote?.ok && remote.artifact?.dataBase64) return remote.artifact;
+      if (remote?.ok && remote.artifact?.dataBase64) return { ...remote.artifact, sourceUrl: url };
       throw new Error(remote?.error || localError?.message || "artifact fetch failed");
     }
     throw localError || new Error("artifact fetch failed");
@@ -544,17 +547,32 @@
     }).join("||");
   }
 
+  function artifactIdentity(artifact) {
+    const data = String(artifact?.dataBase64 || "");
+    return [
+      String(artifact?.sourceUrl || ""),
+      String(artifact?.name || ""),
+      Number(artifact?.size) || 0,
+      data.length,
+      data.slice(0, 48),
+      data.slice(-48)
+    ].join("\u0000");
+  }
+
   async function captureArtifacts(node) {
     const root = artifactRoot(node);
     const candidates = downloadCandidates(root);
     const artifacts = [];
+    const identities = new Set();
     const errors = [];
     let total = 0;
     for (let i = 0; i < candidates.length; i++) {
       try {
         const artifact = await fetchArtifact(candidates[i], i);
         if (!artifact) continue;
-        if (artifacts.some(existing => existing.name === artifact.name && existing.size === artifact.size)) continue;
+        const identity = artifactIdentity(artifact);
+        if (identities.has(identity)) continue;
+        identities.add(identity);
         total += artifact.size;
         if (total > MAX_ARTIFACT_TOTAL_BYTES) {
           errors.push("combined artifact relay limit reached");
@@ -583,6 +601,15 @@
     return false;
   }
 
+  function responseDeliveryAccepted(result) {
+    if (result && typeof result === "object" && result.ok === true) return true;
+    if (!result || typeof result !== "object" || result.ok !== false) return false;
+    return Boolean(
+      result.ignored || result.superseded || result.stale || result.staleDelivery ||
+      result.cancelled || result.expired || result.duplicate || result.stopped
+    );
+  }
+
   async function monitor() {
     const node = latestResponseNode();
     const text = latestResponseText(node);
@@ -604,11 +631,13 @@
     if (signature === lastReportedSignature || (text === lastReportedText && !linkSignature)) return;
 
     const completedAt = Number(lastChangeAt) || Date.now();
-    const captured = await captureArtifacts(node);
-    lastReportedText = text;
-    lastReportedSignature = signature;
+    const monitorKey = `${currentGenerationId}\u0000${completedAt}\u0000${signature}`;
+    if (responseMonitorInFlight.has(monitorKey)) return;
+    responseMonitorInFlight.add(monitorKey);
+
     try {
-      await chrome.runtime.sendMessage({
+      const captured = await captureArtifacts(node);
+      const result = await chrome.runtime.sendMessage({
         type: "AI_BRIDGE_RESPONSE",
         text,
         artifacts: captured.artifacts,
@@ -616,7 +645,18 @@
         completedAt,
         generationId: currentGenerationId
       });
-    } catch (_) {}
+      if (!responseDeliveryAccepted(result)) {
+        throw new Error(result?.error || "Coordinator did not accept the completed response.");
+      }
+      // Commit local suppression state only after transport/coordinator acceptance.
+      lastReportedText = text;
+      lastReportedSignature = signature;
+    } catch (_) {
+      // Leave lastReported* untouched. A later monitor tick may retry after the
+      // service worker, human gate, or transient transport failure recovers.
+    } finally {
+      responseMonitorInFlight.delete(monitorKey);
+    }
   }
 
   const observer = new MutationObserver(() => {});
