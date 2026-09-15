@@ -39,7 +39,7 @@ const WORK_MODE_INFO = {
     label: "Collaborate",
     minTurns: 1,
     help: [
-      "Timing: sequential like Relay. One AI at a time.",
+      "Timing: sequential like Relay. One AI at a time. Not a live consensus discussion.",
       "Peer visibility: every later AI sees the accumulated shared deliverable and revises that same artifact.",
       "Cycle: every selected LLM has participated once. The counter ticks only after that full lap of the shared document/design/code.",
       "Main AI: first speaker, and the recipient of queued human interjections.",
@@ -72,8 +72,8 @@ const WORK_MODE_INFO = {
     label: "Peer Review",
     minTurns: 1,
     help: [
-      "Timing: two simultaneous phases.",
-      "Peer visibility: phase 1 is independent (no peer answers). Phase 2 gives each AI the other two results and requests critique.",
+      "Timing: two simultaneous phases. All three produce independent primaries first; there is no single drafter.",
+      "Peer visibility: phase 1 is independent (no peer answers). Phase 2 gives each AI the other two results and requests critique. There is no automatic primary-revision pass after critique.",
       "Cycle: the full primary+critique pass (6 responses when A/B/C are selected). The counter ticks only after both phases finish.",
       "Main AI: recipient of queued human interjections; it is not a sequential first speaker.",
       "Best for: high-confidence validation and catching mistakes or bias."
@@ -646,6 +646,19 @@ function updateSessionPill(s) {
     pill.classList.add("idle");
     pill.textContent = "Idle";
   }
+  updatePowerPill(s);
+}
+
+function updatePowerPill(s) {
+  const pill = $("powerPill");
+  if (!pill) return;
+  const awake = Boolean(s?.sessionActive && s?.running && !s?.awaitingHuman);
+  pill.hidden = !awake;
+  pill.classList.toggle("active", awake);
+  pill.textContent = awake ? "Keep-awake on" : "Keep-awake";
+  pill.title = awake
+    ? "System keep-awake is active while this run is live. Pause, Stop, or HUMAN_INPUT releases it. The display may still dim."
+    : "System keep-awake is released.";
 }
 
 function renderSuppressedRequests(s = latestState) {
@@ -741,12 +754,20 @@ function transcriptCard(entry) {
 
   const title = document.createElement("div");
   title.className = "transcript-title";
+  const titleText = document.createElement("span");
   if (entry.type === "human") {
-    title.textContent = entry.interjection ? "Human controller · interjection" : "Human controller";
+    titleText.textContent = entry.interjection ? "Human controller · interjection" : "Human controller";
   } else if (entry.type === "checkpoint") {
-    title.textContent = `Recovery checkpoint · AI ${entry.side || "?"} · ${entry.label || "AI"}`;
+    titleText.textContent = `Recovery checkpoint · AI ${entry.side || "?"} · ${entry.label || "AI"}`;
   } else {
-    title.textContent = `AI ${entry.side || "?"} · ${entry.label || "AI"}`;
+    titleText.textContent = `AI ${entry.side || "?"} · ${entry.label || "AI"}`;
+  }
+  title.append(titleText);
+  if (entry.type === "response") {
+    const evidence = document.createElement("span");
+    evidence.className = "peer-data-pill";
+    evidence.textContent = "Peer Output — Data Only";
+    title.append(evidence);
   }
 
   const meta = document.createElement("div");
