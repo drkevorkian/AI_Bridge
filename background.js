@@ -2171,6 +2171,10 @@ const ALLOWED_CLOUD_THEMES = new Set(["blizzard", "ghostwhite", "midnight", "sla
 const CONTENT_SCRIPT_MESSAGE_TYPES = new Set(["AI_BRIDGE_FETCH_ARTIFACT", "AI_BRIDGE_RESPONSE"]);
 const SYNC_ITEM_MAX_CHARS = 7000;
 const CLOUD_SYNC_MAX_BYTES = 90000;
+const DRIVE_APP_DATA_SCOPE = "https://www.googleapis.com/auth/drive.appdata";
+const DRIVE_SETTINGS_NAME = "ai-bridge-settings.json";
+const DRIVE_LIST_URL = "https://www.googleapis.com/drive/v3/files?spaces=appDataFolder&q=name%3D%27ai-bridge-settings.json%27&fields=files(id%2Cname%2CmodifiedTime%2Csize)&pageSize=10";
+const DRIVE_CREATE_URL = "https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart";
 
 function clampCloudPane(value) {
   const n = Number(value);
@@ -2194,14 +2198,18 @@ function sanitizeHistoryForCloud(kind, items, limit) {
   })).filter(item => item.text);
 }
 
-function sanitizeCloudSettings(raw) {
-  const src = raw && typeof raw === "object" ? raw : {};
+function sanitizeCloudSettings(raw, options = {}) {
+  // Whitelist reconstruction. Anything not copied here — transcripts, Vault
+  // bytes, source files, tab IDs, tokens, live session — is dropped.
+  const src = raw && typeof raw === "object" && !Array.isArray(raw) ? raw : {};
+  const stamp = options.stamp !== false;
   let maxTurns = INFINITE_TURNS;
   try { maxTurns = normalizeMaxTurns(src.maxTurns); } catch (_) { maxTurns = INFINITE_TURNS; }
   const delay = Number(src.delayMs);
+  const incomingUpdated = Number(src.updatedAt);
   return {
     schemaVersion: CLOUD_SETTINGS_VERSION,
-    updatedAt: Date.now(),
+    updatedAt: !stamp && Number.isFinite(incomingUpdated) && incomingUpdated > 0 ? incomingUpdated : Date.now(),
     theme: ALLOWED_CLOUD_THEMES.has(src.theme) ? src.theme : "blizzard",
     paneWidth: clampCloudPane(src.paneWidth),
     workMode: normalizeWorkMode(src.workMode),
@@ -2221,10 +2229,84 @@ function sanitizeCloudSettings(raw) {
   };
 }
 
+function assertCloudSettingsSafe(settings) {
+  const json = JSON.stringify(settings);
+  if (/(ya29\.|[Aa]ccess[_-]?[Tt]oken|[Rr]efresh[_-]?[Tt]oken|Bearer\s+[A-Za-z0-9._~+/=-]+)/.test(json)) {
+    throw new Error("Refusing cloud settings that contain credential material.");
+  }
+  for (const key of Object.keys(settings || {})) {
+    if (/token|secret|password|authorization|credential/i.test(key)) {
+      throw new Error("Refusing cloud settings that contain credential fields.");
+    }
+  }
+}
+
+function parseDriveSettingsBody(text) {
+  const raw = String(text || "");
+  if (!raw.trim()) throw new Error("Google Drive settings file was empty.");
+  if (raw.length > CLOUD_SYNC_MAX_BYTES) throw new Error("Google Drive settings file is too large.");
+  let parsed;
+  try {
+    parsed = JSON.parse(raw);
+  } catch (_) {
+    throw new Error("Google Drive settings file is not valid JSON.");
+  }
+  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+    throw new Error("Google Drive settings file is malformed.");
+  }
+  const settings = sanitizeCloudSettings(parsed, { stamp: false });
+  assertCloudSettingsSafe(settings);
+  return settings;
+}
+
+function pickNewestCloudCopy(candidates) {
+  const list = (Array.isArray(candidates) ? candidates : []).filter(item => item?.settings && Number(item.settings.updatedAt) > 0);
+  let best = null;
+  for (const item of list) {
+    if (!best || Number(item.settings.updatedAt) > Number(best.settings.updatedAt)) {
+      best = item;
+      continue;
+    }
+    if (Number(item.settings.updatedAt) === Number(best.settings.updatedAt) && item.via === "google-drive") {
+      best = item;
+    }
+  }
+  return best;
+}
+
 function googleOauthConfigured() {
   const oauth = chrome.runtime.getManifest()?.oauth2;
   const clientId = String(oauth?.client_id || "");
-  return clientId.includes(".apps.googleusercontent.com") && !/UNCONFIGURED|YOUR_|PLACEHOLDER/i.test(clientId);
+  if (!clientId.includes(".apps.googleusercontent.com")) return false;
+  if (/UNCONFIGURED|YOUR_|PLACEHOLDER|EXAMPLE/i.test(clientId)) return false;
+  const scopes = Array.isArray(oauth?.scopes) ? oauth.scopes.map(String) : [];
+  // Fail closed if the packaged manifest requests any Drive scope broader than appdata.
+  if (scopes.some(scope => scope !== DRIVE_APP_DATA_SCOPE)) return false;
+  return true;
+}
+
+function driveUrlAllowed(rawUrl) {
+  try {
+    const url = new URL(String(rawUrl || ""));
+    if (url.protocol !== "https:") return false;
+    if (url.username || url.password) return false;
+    if (url.hostname !== "www.googleapis.com") return false;
+    const path = url.pathname;
+    if (path === "/drive/v3/files") return true;
+    if (path === "/upload/drive/v3/files") return true;
+    if (/^\/drive\/v3\/files\/[a-zA-Z0-9_-]+$/.test(path)) return true;
+    if (/^\/upload\/drive\/v3\/files\/[a-zA-Z0-9_-]+$/.test(path)) return true;
+    return false;
+  } catch (_) {
+    return false;
+  }
+}
+
+function assertDriveFileId(id) {
+  if (!/^[a-zA-Z0-9_-]{8,256}$/.test(String(id || ""))) {
+    throw new Error("Drive file id rejected.");
+  }
+  return String(id);
 }
 
 function splitCloudSyncChunks(json) {
@@ -2292,6 +2374,146 @@ async function readChromeSyncSettings() {
   return metaPack?.[CLOUD_SYNC_KEY] || null;
 }
 
+async function isGoogleLinked() {
+  if (!googleOauthConfigured()) return false;
+  const local = await chrome.storage.local.get(GOOGLE_LINKED_KEY);
+  return Boolean(local?.[GOOGLE_LINKED_KEY]);
+}
+
+async function getGoogleAccessToken({ interactive = false } = {}) {
+  if (!googleOauthConfigured()) {
+    throw new Error("Google Drive login needs a Google Cloud OAuth client ID in the extension manifest. Until then, use Chrome Sync (Push / Pull). Login remains optional.");
+  }
+  const result = await chrome.identity.getAuthToken({
+    interactive: Boolean(interactive),
+    scopes: [DRIVE_APP_DATA_SCOPE]
+  });
+  const token = typeof result === "string" ? result : result?.token;
+  if (!token || typeof token !== "string") throw new Error("Google sign-in did not return a token.");
+  return token;
+}
+
+async function googleApiFetch(url, options = {}) {
+  const token = options.token || await getGoogleAccessToken({ interactive: false });
+  return googleApiFetchAttempt(url, { ...options, token, attempt: 0 });
+}
+
+async function googleApiFetchAttempt(url, { method = "GET", headers = {}, body, token, attempt }) {
+  // Hardcoded www.googleapis.com only. redirect:"error" so an Authorization
+  // header can never be forwarded to an unexpected Location.
+  if (!driveUrlAllowed(url)) throw new Error("Google API URL is not permitted.");
+  const accessToken = String(token || "");
+  if (!accessToken) throw new Error("Google API request is missing a token.");
+  let response;
+  try {
+    response = await fetch(url, {
+      method,
+      headers: { ...headers, Authorization: `Bearer ${accessToken}` },
+      body: body || undefined,
+      redirect: "error",
+      credentials: "omit",
+      cache: "no-store"
+    });
+  } catch (err) {
+    throw new Error(`Google API request failed: ${err.message}`);
+  }
+  if (response.status !== 401) return response;
+  try { await chrome.identity.removeCachedAuthToken({ token: accessToken }); } catch (_) {}
+  // 401 retry is bounded to one attempt. A second 401 clears the linked flag.
+  if (attempt >= 1) {
+    await chrome.storage.local.set({ [GOOGLE_LINKED_KEY]: false });
+    throw new Error("Google sign-in expired. Use Link Google account again.");
+  }
+  let fresh;
+  try {
+    fresh = await getGoogleAccessToken({ interactive: false });
+  } catch (err) {
+    await chrome.storage.local.set({ [GOOGLE_LINKED_KEY]: false });
+    throw err;
+  }
+  return googleApiFetchAttempt(url, { method, headers, body, token: fresh, attempt: attempt + 1 });
+}
+
+async function driveResponseJson(response, action) {
+  const text = await response.text();
+  if (!response.ok) throw new Error(`${action} failed (HTTP ${response.status}).`);
+  if (!text) return {};
+  try {
+    return JSON.parse(text);
+  } catch (_) {
+    throw new Error(`${action} returned invalid JSON.`);
+  }
+}
+
+async function findDriveSettingsFile() {
+  const response = await googleApiFetch(DRIVE_LIST_URL, { method: "GET" });
+  const data = await driveResponseJson(response, "Drive settings list");
+  const files = Array.isArray(data.files) ? data.files : [];
+  return files.find(file => file && file.name === DRIVE_SETTINGS_NAME && file.id) || null;
+}
+
+function buildDriveMultipart(settings) {
+  const boundary = `bridge_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 10)}`;
+  const meta = JSON.stringify({
+    name: DRIVE_SETTINGS_NAME,
+    parents: ["appDataFolder"],
+    mimeType: "application/json"
+  });
+  const media = JSON.stringify(settings);
+  const body = [
+    `--${boundary}`,
+    "Content-Type: application/json; charset=UTF-8",
+    "",
+    meta,
+    `--${boundary}`,
+    "Content-Type: application/json",
+    "",
+    media,
+    `--${boundary}--`,
+    ""
+  ].join("\r\n");
+  return { boundary, body };
+}
+
+async function writeDriveSettings(settings) {
+  const json = JSON.stringify(settings);
+  if (json.length > CLOUD_SYNC_MAX_BYTES) {
+    throw new Error("Cloud settings exceeded the Google Drive size budget. Trim history and retry.");
+  }
+  const existing = await findDriveSettingsFile();
+  if (existing?.id) {
+    const fileId = assertDriveFileId(existing.id);
+    const url = `https://www.googleapis.com/upload/drive/v3/files/${encodeURIComponent(fileId)}?uploadType=media`;
+    const response = await googleApiFetch(url, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json; charset=UTF-8" },
+      body: json
+    });
+    await driveResponseJson(response, "Drive settings update");
+    return { id: fileId, updated: true };
+  }
+  const { boundary, body } = buildDriveMultipart(settings);
+  const response = await googleApiFetch(DRIVE_CREATE_URL, {
+    method: "POST",
+    headers: { "Content-Type": `multipart/related; boundary=${boundary}` },
+    body
+  });
+  const created = await driveResponseJson(response, "Drive settings create");
+  return { id: created.id || null, created: true };
+}
+
+async function readDriveSettings() {
+  const existing = await findDriveSettingsFile();
+  if (!existing?.id) return null;
+  const fileId = assertDriveFileId(existing.id);
+  const url = `https://www.googleapis.com/drive/v3/files/${encodeURIComponent(fileId)}?alt=media`;
+  const response = await googleApiFetch(url, { method: "GET" });
+  if (response.status === 404) return null;
+  const text = await response.text();
+  if (!response.ok) throw new Error(`Drive settings download failed (HTTP ${response.status}).`);
+  return parseDriveSettingsBody(text);
+}
+
 async function cloudStatus() {
   const local = await chrome.storage.local.get([THEME_STORAGE_KEY, PANE_WIDTH_STORAGE_KEY, FRESH_ON_START_KEY, CLOUD_SYNC_KEY, GOOGLE_LINKED_KEY]);
   let chromeSyncHasCopy = false;
@@ -2300,15 +2522,17 @@ async function cloudStatus() {
   } catch (_) {
     chromeSyncHasCopy = false;
   }
+  const googleLinked = Boolean(local?.[GOOGLE_LINKED_KEY]) && googleOauthConfigured();
   return {
     googleConfigured: googleOauthConfigured(),
-    googleLinked: Boolean(local?.[GOOGLE_LINKED_KEY]) && googleOauthConfigured(),
+    googleLinked,
     chromeSyncAvailable: Boolean(chrome.storage?.sync),
     chromeSyncHasCopy,
     lastPushAt: Number(local?.[CLOUD_SYNC_KEY]?.updatedAt) || null,
     theme: local?.[THEME_STORAGE_KEY] || "blizzard",
     paneWidth: local?.[PANE_WIDTH_STORAGE_KEY],
-    freshOnStart: local?.[FRESH_ON_START_KEY] !== false
+    freshOnStart: local?.[FRESH_ON_START_KEY] !== false,
+    driveScope: DRIVE_APP_DATA_SCOPE
   };
 }
 
@@ -2329,44 +2553,111 @@ async function applyIdleCloudSettings(settings) {
 }
 
 async function pushCloudSettings(raw) {
-  const settings = sanitizeCloudSettings(raw);
+  const settings = sanitizeCloudSettings(raw, { stamp: true });
+  assertCloudSettingsSafe(settings);
   await chrome.storage.local.set({ [CLOUD_SYNC_KEY]: settings });
+  const via = [];
+  let syncError = "";
+  let driveError = "";
   try {
-    const written = await writeChromeSyncSettings(settings);
-    return { ok: true, bytes: written.bytes, chunks: written.chunks, updatedAt: settings.updatedAt, via: "chrome-sync" };
+    await writeChromeSyncSettings(settings);
+    via.push("chrome-sync");
   } catch (err) {
-    throw new Error(`Saved locally, but Chrome Sync write failed. Sign into Chrome Sync and retry. ${err.message}`);
+    syncError = err.message;
   }
+  if (await isGoogleLinked()) {
+    try {
+      await writeDriveSettings(settings);
+      via.push("google-drive");
+    } catch (err) {
+      driveError = err.message;
+    }
+  }
+  if (!via.length) {
+    throw new Error(`Saved locally, but cloud write failed. ${syncError || driveError || ""}`.trim());
+  }
+  return {
+    ok: true,
+    via: via.join("+"),
+    bytes: JSON.stringify(settings).length,
+    updatedAt: settings.updatedAt,
+    syncError: syncError || null,
+    driveError: driveError || null
+  };
 }
 
 async function pullCloudSettings() {
-  const packed = await readChromeSyncSettings();
-  if (!packed) throw new Error("No AI Bridge settings were found in Chrome Sync yet. Push from this profile first.");
-  const settings = sanitizeCloudSettings(packed);
-  await applyIdleCloudSettings(settings);
+  if (state.sessionActive) {
+    throw new Error("Stop the active Bridge session before pulling cloud settings into this profile.");
+  }
+  const candidates = [];
+  let syncError = "";
+  let driveError = "";
+  try {
+    const packed = await readChromeSyncSettings();
+    if (packed) {
+      const settings = sanitizeCloudSettings(packed, { stamp: false });
+      assertCloudSettingsSafe(settings);
+      candidates.push({ via: "chrome-sync", settings });
+    }
+  } catch (err) {
+    syncError = err.message;
+  }
+  if (await isGoogleLinked()) {
+    try {
+      const packed = await readDriveSettings();
+      if (packed) candidates.push({ via: "google-drive", settings: packed });
+    } catch (err) {
+      driveError = err.message;
+    }
+  }
+  const winner = pickNewestCloudCopy(candidates);
+  if (!winner) {
+    throw new Error(syncError || driveError || "No AI Bridge settings were found in Chrome Sync or Google Drive yet. Push from this profile first.");
+  }
+  await applyIdleCloudSettings(winner.settings);
   await chrome.storage.local.set({
-    [CLOUD_SYNC_KEY]: settings,
-    [THEME_STORAGE_KEY]: settings.theme,
-    [PANE_WIDTH_STORAGE_KEY]: settings.paneWidth,
-    [FRESH_ON_START_KEY]: settings.freshOnStart
+    [CLOUD_SYNC_KEY]: winner.settings,
+    [THEME_STORAGE_KEY]: winner.settings.theme,
+    [PANE_WIDTH_STORAGE_KEY]: winner.settings.paneWidth,
+    [FRESH_ON_START_KEY]: winner.settings.freshOnStart
   });
-  if (Array.isArray(settings.history?.jobs)) history.jobs = settings.history.jobs;
-  if (Array.isArray(settings.history?.commands)) history.commands = settings.history.commands;
-  if (Array.isArray(settings.history?.rules)) history.rules = settings.history.rules;
+  if (Array.isArray(winner.settings.history?.jobs)) history.jobs = winner.settings.history.jobs;
+  if (Array.isArray(winner.settings.history?.commands)) history.commands = winner.settings.history.commands;
+  if (Array.isArray(winner.settings.history?.rules)) history.rules = winner.settings.history.rules;
   await saveHistory();
-  return { ok: true, settings };
+  return {
+    ok: true,
+    settings: winner.settings,
+    via: winner.via,
+    considered: candidates.map(item => ({ via: item.via, updatedAt: item.settings.updatedAt })),
+    syncError: syncError || null,
+    driveError: driveError || null
+  };
 }
 
 async function connectGoogleAccount() {
   if (!googleOauthConfigured()) {
-    throw new Error("Google Drive login needs a Google Cloud OAuth client ID in the extension manifest. Until then, use Chrome Sync (Push / Pull) to copy settings across your signed-in Chrome profiles. Login remains optional.");
+    throw new Error("Google Drive login needs a Google Cloud OAuth client ID in the extension manifest, scoped only to https://www.googleapis.com/auth/drive.appdata. Until then, use Chrome Sync (Push / Pull) to copy settings across signed-in Chrome profiles. Login remains optional.");
   }
-  const result = await chrome.identity.getAuthToken({ interactive: true });
-  const token = typeof result === "string" ? result : result?.token;
-  if (!token) throw new Error("Google sign-in did not return a token.");
-  // Tokens stay in Chrome's identity cache only. Persist a boolean linked flag, never the token.
+  // Interactive token request only from the explicit Link button.
+  await getGoogleAccessToken({ interactive: true });
+  // Probe appDataFolder with the cached token. Do not persist the token.
+  await findDriveSettingsFile();
   await chrome.storage.local.set({ [GOOGLE_LINKED_KEY]: true });
-  return { ok: true, googleLinked: true };
+  return { ok: true, googleLinked: true, driveScope: DRIVE_APP_DATA_SCOPE };
+}
+
+async function unlinkGoogleAccount() {
+  // App-side revoke only. Drive's hidden appDataFolder copy is left in place so
+  // a later Link can recover it. Tokens stay out of extension storage.
+  try {
+    if (chrome.identity?.clearAllCachedAuthTokens) {
+      await chrome.identity.clearAllCachedAuthTokens();
+    }
+  } catch (_) {}
+  await chrome.storage.local.set({ [GOOGLE_LINKED_KEY]: false });
+  return { ok: true, googleLinked: false };
 }
 
 chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
@@ -2473,6 +2764,13 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
     if (msg.type === "AI_BRIDGE_CLOUD_CONNECT") {
       requireExtensionPage(sender, "Link Google account");
       const result = await connectGoogleAccount();
+      sendResponse({ ok: true, ...result });
+      return;
+    }
+
+    if (msg.type === "AI_BRIDGE_CLOUD_UNLINK") {
+      requireExtensionPage(sender, "Unlink Google account");
+      const result = await unlinkGoogleAccount();
       sendResponse({ ok: true, ...result });
       return;
     }

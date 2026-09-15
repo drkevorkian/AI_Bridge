@@ -902,6 +902,7 @@ function updateControls(s) {
   if ($("cloudPull")) $("cloudPull").disabled = Boolean(s.sessionActive);
   if ($("cloudPush")) $("cloudPush").disabled = false;
   if ($("cloudConnect")) $("cloudConnect").disabled = false;
+  if ($("cloudUnlink")) $("cloudUnlink").disabled = false;
   $("sendInterject").disabled = !s.sessionActive || s.awaitingHuman;
   $("interjectText").disabled = !s.sessionActive || s.awaitingHuman;
   $("interjectNow").disabled = !s.sessionActive || s.awaitingHuman;
@@ -1414,8 +1415,9 @@ async function refreshCloudStatus() {
       pill.textContent = label;
       pill.dataset.state = state;
     }
+    if ($("cloudUnlink")) $("cloudUnlink").disabled = !res.googleLinked;
     if (!res.googleConfigured && $("cloudConnect")) {
-      $("cloudConnect").title = "Needs a Google Cloud OAuth client ID in the packaged manifest. Push/Pull still work through Chrome Sync.";
+      $("cloudConnect").title = "Needs a Google Cloud OAuth client ID in the packaged manifest, scoped only to drive.appdata. Push/Pull still work through Chrome Sync.";
     }
   } catch (err) {
     if (pill) {
@@ -1437,14 +1439,17 @@ async function runCloudAction(button, type, extra = {}) {
     if (!res?.ok) throw new Error(res?.error || "Cloud action failed");
     if (res.settings) applyCloudSettingsToForm(res.settings);
     if (type === "AI_BRIDGE_CLOUD_PUSH") {
-      showCloudNotice(`Settings pushed through Chrome Sync (${res.bytes || 0} bytes). Transcripts, Vault files, and tokens were not included.`);
+      const via = res.via || "chrome-sync";
+      showCloudNotice(`Settings pushed (${via}, ${res.bytes || 0} bytes). Transcripts, Vault files, and tokens were not included.`);
     } else if (type === "AI_BRIDGE_CLOUD_PULL") {
-      showCloudNotice("Settings pulled from Chrome Sync. Transcripts and Vault files stayed local.");
+      showCloudNotice(`Settings pulled from ${res.via || "cloud"} (newest valid copy). Transcripts and Vault files stayed local.`);
       await refreshState();
     } else if (type === "AI_BRIDGE_CLOUD_CONNECT") {
       showCloudNotice(res.googleLinked
-        ? "Google account linked. Tokens stay in Chrome's identity cache and are never stored by AI Bridge."
+        ? "Google account linked. Settings will use the private Drive appDataFolder plus Chrome Sync. Tokens stay in Chrome's identity cache."
         : "Google login is not configured yet.");
+    } else if (type === "AI_BRIDGE_CLOUD_UNLINK") {
+      showCloudNotice("Google account unlinked on this extension. Chrome Sync still works. Drive app data was not deleted.");
     }
     await refreshCloudStatus();
   } catch (err) {
@@ -1465,6 +1470,9 @@ if ($("cloudPull")) {
 }
 if ($("cloudConnect")) {
   $("cloudConnect").addEventListener("click", () => runCloudAction($("cloudConnect"), "AI_BRIDGE_CLOUD_CONNECT"));
+}
+if ($("cloudUnlink")) {
+  $("cloudUnlink").addEventListener("click", () => runCloudAction($("cloudUnlink"), "AI_BRIDGE_CLOUD_UNLINK"));
 }
 
 initPaneSplitter();
