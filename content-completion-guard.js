@@ -8,8 +8,9 @@
   const baselineByGeneration = new Map();
   const waiterByGeneration = new Map();
   const MAX_BASELINES = 8;
-  const WAITER_POLL_MS = 100;
+  const WAITER_POLL_MS = 500;
   const REPEATED_FORWARD_GRACE_MS = 1400;
+  const MAX_HOLD_MS = 125 * 60 * 1000;
   let patched = false;
   let patchError = "";
   let baseSendMessage = null;
@@ -29,7 +30,7 @@
 
   function candidateSelectors() {
     if (host === "chatgpt.com" || host === "chat.openai.com") {
-      return ["[data-message-author-role='assistant']"];
+      return ["[data-message-author-role='assistant'] .markdown", "[data-message-author-role='assistant']"];
     }
     if (host === "gemini.google.com") {
       return ["model-response", ".model-response", "[data-test-id='model-response']"];
@@ -46,11 +47,43 @@
     return [];
   }
 
+  function responseText(node) {
+    if (!node) return "";
+    if (host !== "gemini.google.com") return cleanText(node.innerText || node.textContent);
+
+    const selectors = [
+      "message-content.model-response-text div.markdown.markdown-main-panel",
+      "message-content.model-response-text .markdown",
+      ".model-response-text .markdown.markdown-main-panel",
+      ".model-response-text .markdown",
+      "div.response-content message-content.model-response-text",
+      "message-content.model-response-text",
+      ".model-response-text",
+      ".response-content .markdown",
+      ".response-content",
+      ".markdown.markdown-main-panel",
+      ".markdown"
+    ];
+    const candidates = [];
+    const seen = new Set();
+    for (const selector of selectors) {
+      for (const candidate of node.querySelectorAll?.(selector) || []) {
+        if (seen.has(candidate)) continue;
+        seen.add(candidate);
+        const text = cleanText(candidate.innerText || candidate.textContent);
+        if (text) candidates.push(text);
+      }
+    }
+    const outer = cleanText(node.innerText || node.textContent);
+    if (outer) candidates.push(outer);
+    return candidates.sort((a, b) => b.length - a.length)[0] || "";
+  }
+
   function latestResponseNode() {
     for (const selector of candidateSelectors()) {
       const nodes = [...document.querySelectorAll(selector)].filter(visible);
       for (let i = nodes.length - 1; i >= 0; i--) {
-        if (cleanText(nodes[i].innerText || nodes[i].textContent).length >= 2) return nodes[i];
+        if (responseText(nodes[i]).length >= 2) return nodes[i];
       }
     }
     return null;
@@ -63,9 +96,13 @@
     ) || node;
   }
 
-  function baselineText(node) {
-    if (!node) return "";
-    return cleanText(node.innerText || node.textContent);
+  function currentResponseSnapshot() {
+    const node = latestResponseNode();
+    return {
+      node,
+      identity: responseIdentity(node),
+      text: responseText(node)
+    };
   }
 
   function settleWaiter(generationId, value, error = null) {
@@ -90,10 +127,10 @@
     const id = String(generationId || "");
     if (!id) return;
     supersedeOlderGenerations(id);
-    const node = latestResponseNode();
+    const snapshot = currentResponseSnapshot();
     baselineByGeneration.set(id, {
-      node: responseIdentity(node),
-      text: baselineText(node),
+      node: snapshot.identity,
+      text: snapshot.text,
       changed: false,
       createdAt: Date.now()
     });
@@ -105,16 +142,18 @@
   }
 
   function markChangedBaselines() {
+    const snapshot = currentResponseSnapshot();
     for (const baseline of baselineByGeneration.values()) {
       if (baseline.changed || !baseline.node) continue;
-      if (baselineText(baseline.node) !== baseline.text) baseline.changed = true;
+      if (snapshot.identity === baseline.node && snapshot.text !== baseline.text) {
+        baseline.changed = true;
+      }
     }
   }
 
   // Some providers reuse one response container throughout generation. Track
-  // whether that baseline container ever actually changes so a deterministic
-  // answer that eventually returns to the same wording is still recognized as
-  // fresh work rather than the pre-send response.
+  // whether the actual response text changes, not incidental controls in an
+  // outer message shell, so UI chrome cannot masquerade as model progress.
   if (typeof MutationObserver === "function") {
     const mutationObserver = new MutationObserver(() => markChangedBaselines());
     mutationObserver.observe(document.documentElement, {
@@ -131,8 +170,8 @@
     if (!baseline) return false;
 
     markChangedBaselines();
-    const currentNode = responseIdentity(latestResponseNode());
-    const sameNode = Boolean(baseline.node && currentNode === baseline.node);
+    const snapshot = currentResponseSnapshot();
+    const sameNode = Boolean(baseline.node && snapshot.identity === baseline.node);
     const sameText = Boolean(baseline.text && String(message.text || "").trim() === baseline.text);
     return sameNode && sameText && !baseline.changed;
   }
@@ -168,13 +207,17 @@
           settleWaiter(id, { ok: false, ignored: true, superseded: true });
           return;
         }
+        if (Date.now() - Number(baseline.createdAt || 0) > MAX_HOLD_MS) {
+          baselineByGeneration.delete(id);
+          settleWaiter(id, { ok: false, ignored: true, expired: true });
+          return;
+        }
 
         markChangedBaselines();
-        const currentNode = responseIdentity(latestResponseNode());
-        const currentText = baselineText(currentNode);
-        const freshIdentity = Boolean(currentNode && currentNode !== baseline.node);
+        const snapshot = currentResponseSnapshot();
+        const freshIdentity = Boolean(snapshot.identity && snapshot.identity !== baseline.node);
         const freshEvidence = freshIdentity || baseline.changed;
-        const repeatedText = Boolean(baseline.text && currentText === baseline.text);
+        const repeatedText = Boolean(baseline.text && snapshot.text === baseline.text);
 
         // Different text will be reported by content.js through its normal path.
         // Keep this stale call pending until that newer call supersedes it.
@@ -196,13 +239,16 @@
         baselineByGeneration.delete(id);
         waiterByGeneration.delete(id);
         if (active.timer) clearInterval(active.timer);
+        const discardedArtifacts = Array.isArray(message.artifacts) ? message.artifacts.length : 0;
         const forwarded = {
           ...message,
           completedAt: Date.now(),
           artifacts: [],
           artifactDiagnostics: {
             candidateCount: 0,
-            errors: ["Repeated response verified by fresh DOM evidence; pre-send artifact payload was discarded."]
+            errors: discardedArtifacts
+              ? ["Repeated response verified by fresh DOM evidence; pre-send artifact payload was discarded."]
+              : []
           }
         };
         try {
