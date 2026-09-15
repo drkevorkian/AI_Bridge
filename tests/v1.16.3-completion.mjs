@@ -41,7 +41,9 @@ assert.match(hardening, /completed < start/);
 assert.match(hardening, /state\?\.lastResponseBySide/);
 assert.match(hardening, /baseHandleCompletedResponse/);
 assert.match(hardening, /staleBaseline: true/);
+assert.match(guard, /holdStaleResponse/);
 assert.match(guard, /sameNode && sameText && !baseline\.changed/);
+assert.match(guard, /artifacts: \[\]/);
 assert.match(guard, /MutationObserver/);
 assert.match(guard, /AI_BRIDGE_COMPLETION_GUARD_STATUS/);
 assert.doesNotMatch(`${hardening}\n${guard}`, /innerHTML|eval\s*\(|new Function/);
@@ -115,9 +117,14 @@ result = await runtimeSandbox.handleCompletedResponse("A", "previous answer", {
 assert.equal(result.ok, true);
 assert.equal(accepted.length, 1);
 
+// Content-guard integration exercises the async hold path using deterministic
+// fake timers, avoiding slow wall-clock sleeps in the regression suite.
 const listeners = [];
 const outbound = [];
+const timers = new Map();
 let observerCallback = null;
+let nextTimerId = 1;
+let fakeNow = 100_000;
 function makeNode(text) {
   const node = {
     innerText: text,
@@ -127,19 +134,38 @@ function makeNode(text) {
   };
   return node;
 }
-let currentNode = makeNode("identical answer");
+function setIntervalFake(callback) {
+  const id = nextTimerId++;
+  timers.set(id, callback);
+  return id;
+}
+function clearIntervalFake(id) {
+  timers.delete(id);
+}
+async function tickOnlyTimer() {
+  assert.equal(timers.size, 1, "exactly one held stale-response waiter expected");
+  const callback = [...timers.values()][0];
+  await callback();
+}
 class FakeMutationObserver {
   constructor(callback) { observerCallback = callback; }
   observe() {}
 }
+class FakeDate extends Date {
+  static now() { return fakeNow; }
+}
+
+let currentNode = makeNode("identical answer");
 const contentSandbox = {
   window: {},
   location: { hostname: "chatgpt.com" },
-  Date,
+  Date: FakeDate,
   Map,
   Promise,
   String,
   MutationObserver: FakeMutationObserver,
+  setInterval: setIntervalFake,
+  clearInterval: clearIntervalFake,
   document: {
     documentElement: {},
     querySelectorAll: () => [currentNode]
@@ -149,7 +175,7 @@ const contentSandbox = {
     runtime: {
       sendMessage: async msg => {
         outbound.push(msg);
-        return { ok: true };
+        return { ok: true, accepted: true };
       },
       onMessage: { addListener: fn => listeners.push(fn) }
     }
@@ -159,36 +185,80 @@ vm.runInNewContext(guard, contentSandbox);
 assert.equal(listeners.length, 1);
 assert.equal(typeof observerCallback, "function");
 
+// 1) Unchanged old node/text is held rather than falsely acknowledged.
 listeners[0]({ type: "AI_BRIDGE_SEND", generationId: "gen-1" }, {}, () => {});
-result = await contentSandbox.chrome.runtime.sendMessage({
+const heldNewNode = contentSandbox.chrome.runtime.sendMessage({
   type: "AI_BRIDGE_RESPONSE",
   text: "identical answer",
-  generationId: "gen-1"
+  artifacts: [{ name: "old.bin", dataBase64: "c3RhbGU=" }],
+  generationId: "gen-1",
+  completedAt: 99_000
 });
-assert.equal(result.staleBaseline, true);
 assert.equal(outbound.length, 0);
+assert.equal(timers.size, 1);
 
+// 2) A brand-new response node with identical text is valid. After the grace
+// window the held call is forwarded with a fresh timestamp and no stale bytes.
 currentNode = makeNode("identical answer");
-result = await contentSandbox.chrome.runtime.sendMessage({
+await tickOnlyTimer();
+fakeNow += 1_401;
+await tickOnlyTimer();
+result = await heldNewNode;
+assert.equal(result.accepted, true);
+assert.equal(outbound.length, 1);
+assert.equal(outbound[0].text, "identical answer");
+assert.equal(outbound[0].completedAt, fakeNow);
+assert.equal(outbound[0].artifacts.length, 0);
+assert.equal(timers.size, 0);
+
+// 3) A provider may reuse the same response container. Mutation evidence makes
+// a repeated final answer valid even when identity and final text match baseline.
+listeners[0]({ type: "AI_BRIDGE_SEND", generationId: "gen-2" }, {}, () => {});
+const heldReusedNode = contentSandbox.chrome.runtime.sendMessage({
   type: "AI_BRIDGE_RESPONSE",
   text: "identical answer",
-  generationId: "gen-1"
+  generationId: "gen-2",
+  completedAt: fakeNow - 1
 });
-assert.equal(result.ok, true);
-assert.equal(outbound.length, 1);
-
-listeners[0]({ type: "AI_BRIDGE_SEND", generationId: "gen-2" }, {}, () => {});
 currentNode.innerText = "streaming intermediate text";
 currentNode.textContent = "streaming intermediate text";
 observerCallback();
 currentNode.innerText = "identical answer";
 currentNode.textContent = "identical answer";
-result = await contentSandbox.chrome.runtime.sendMessage({
+await tickOnlyTimer();
+fakeNow += 1_401;
+await tickOnlyTimer();
+result = await heldReusedNode;
+assert.equal(result.accepted, true);
+assert.equal(outbound.length, 2);
+assert.equal(outbound[1].text, "identical answer");
+assert.equal(outbound[1].artifacts.length, 0);
+
+// 4) If the real response text differs, content.js sends its normal newer call.
+// That call supersedes the held stale one; only the real text goes to background.
+listeners[0]({ type: "AI_BRIDGE_SEND", generationId: "gen-3" }, {}, () => {});
+const heldDifferent = contentSandbox.chrome.runtime.sendMessage({
   type: "AI_BRIDGE_RESPONSE",
   text: "identical answer",
-  generationId: "gen-2"
+  generationId: "gen-3",
+  completedAt: fakeNow - 1
 });
-assert.equal(result.ok, true);
-assert.equal(outbound.length, 2);
+currentNode.innerText = "different real answer";
+currentNode.textContent = "different real answer";
+observerCallback();
+const freshDifferent = contentSandbox.chrome.runtime.sendMessage({
+  type: "AI_BRIDGE_RESPONSE",
+  text: "different real answer",
+  artifacts: [],
+  generationId: "gen-3",
+  completedAt: fakeNow + 10
+});
+const heldResult = await heldDifferent;
+result = await freshDifferent;
+assert.equal(heldResult.superseded, true);
+assert.equal(result.accepted, true);
+assert.equal(outbound.length, 3);
+assert.equal(outbound[2].text, "different real answer");
+assert.equal(timers.size, 0);
 
 console.log("v1.16.3 completion identity + stale-baseline regression ok");
