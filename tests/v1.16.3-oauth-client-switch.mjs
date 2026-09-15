@@ -70,14 +70,16 @@ assert.equal(result.relinkRequired, undefined);
 assert.equal(tokenClearCount, 1);
 assert.equal(stateClearCount, 1);
 
-// Missing publisher OAuth configuration is a normal setup state, not an
-// exception. It must not call the underlying interactive auth path.
+// Missing OAuth configuration is a normal setup state, not an exception. It
+// must not call the underlying interactive auth path.
 oauthReady = false;
 result = await sandbox.connectGoogleAccount();
 assert.equal(result.googleLinked, false);
 assert.equal(result.googleConfigured, false);
 assert.equal(result.setupRequired, true);
-assert.equal(result.setupKind, "publisher-oauth");
+assert.equal(result.setupKind, "oauth-client");
+assert.match(result.setupMessage, /Web OAuth client ID/);
+assert.match(result.setupMessage, /Chrome Sync/);
 assert.equal(result.driveScope, "https://www.googleapis.com/auth/drive.appdata");
 assert.equal(connectCallCount, 0);
 

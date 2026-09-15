@@ -65,13 +65,11 @@
     };
   }
 
-  // Missing publisher OAuth configuration is an installation/deployment state,
-  // not a runtime crash. The old connectGoogleAccount() deliberately threw so
-  // the feature failed closed, but the top-level message handler logged that
-  // expected condition as "AI Bridge background error" and exposed a stack
-  // trace to the user. Preserve fail-closed behavior without treating it as an
-  // exception: no token is requested, no Drive call occurs, and the dashboard
-  // receives a normal unlinked/setupRequired result.
+  // Missing OAuth configuration is an installation/deployment state, not a
+  // runtime crash. For an unpacked build this usually means no user-supplied
+  // Web OAuth client ID has been saved yet; a packaged build may instead use a
+  // publisher-provided Chrome-extension OAuth client. Preserve fail-closed
+  // behavior without logging the expected setup state as a background error.
   if (typeof connectGoogleAccount === "function" &&
       typeof googleOauthReady === "function") {
     const baseConnectGoogleAccount = connectGoogleAccount;
@@ -81,7 +79,8 @@
           googleLinked: false,
           googleConfigured: false,
           setupRequired: true,
-          setupKind: "publisher-oauth",
+          setupKind: "oauth-client",
+          setupMessage: "Google Drive login is optional. In Settings, configure a Web OAuth client ID for this unpacked extension, or use Chrome Sync without Google Drive.",
           driveScope: typeof DRIVE_APP_DATA_SCOPE === "string" ? DRIVE_APP_DATA_SCOPE : ""
         };
       }
