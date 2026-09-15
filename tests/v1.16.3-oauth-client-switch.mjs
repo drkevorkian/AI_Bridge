@@ -1,0 +1,65 @@
+import assert from "node:assert/strict";
+import fs from "node:fs";
+import path from "node:path";
+import vm from "node:vm";
+import { fileURLToPath } from "node:url";
+
+const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
+const hardening = fs.readFileSync(path.join(root, "oauth-runtime-hardening.js"), "utf8");
+
+let clientId = "111-old.apps.googleusercontent.com";
+let tokenClearCount = 0;
+let stateClearCount = 0;
+let linkedValue = true;
+
+const sandbox = {
+  console: { warn() {} },
+  Date,
+  Number,
+  GOOGLE_LINKED_KEY: "bridgeGoogleLinked",
+  chrome: {
+    storage: {
+      local: {
+        set: async payload => {
+          if (Object.prototype.hasOwnProperty.call(payload, "bridgeGoogleLinked")) {
+            linkedValue = Boolean(payload.bridgeGoogleLinked);
+          }
+        }
+      }
+    }
+  },
+  launchGoogleWebAuth: async () => "token-ok",
+  consumePendingOauthState: async () => ({ createdAt: Date.now() - 1000 }),
+  clearPendingOauthState: async () => { stateClearCount += 1; },
+  clearSessionGoogleToken: async () => { tokenClearCount += 1; },
+  readUserOauthClientId: async () => clientId,
+  saveUserOauthClientId: async raw => {
+    clientId = String(raw || "").trim();
+    return { saved: Boolean(clientId), googleConfigured: Boolean(clientId) };
+  }
+};
+
+vm.runInNewContext(hardening, sandbox);
+
+// Saving the same non-empty client must preserve the current session.
+let result = await sandbox.saveUserOauthClientId("111-old.apps.googleusercontent.com");
+assert.equal(result.relinkRequired, undefined);
+assert.equal(tokenClearCount, 0);
+assert.equal(stateClearCount, 0);
+assert.equal(linkedValue, true);
+
+// Switching client IDs invalidates the old token/state and forces re-link.
+result = await sandbox.saveUserOauthClientId("222-new.apps.googleusercontent.com");
+assert.equal(result.relinkRequired, true);
+assert.equal(result.googleLinked, false);
+assert.equal(tokenClearCount, 1);
+assert.equal(stateClearCount, 1);
+assert.equal(linkedValue, false);
+
+// A subsequent save of the same new ID must not repeatedly clear state.
+result = await sandbox.saveUserOauthClientId("222-new.apps.googleusercontent.com");
+assert.equal(result.relinkRequired, undefined);
+assert.equal(tokenClearCount, 1);
+assert.equal(stateClearCount, 1);
+
+console.log("v1.16.3 OAuth client-switch invalidation regression ok");
