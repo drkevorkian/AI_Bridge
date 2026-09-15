@@ -10,8 +10,8 @@ const hardening = fs.readFileSync(path.join(root, "oauth-runtime-hardening.js"),
 
 assert.match(
   wrapper,
-  /importScripts\("background\.js",\s*"oauth-runtime-hardening\.js",\s*"power\.js"\)/,
-  "OAuth hardening must load after the core runtime and before the power helper"
+  /importScripts\("background\.js",\s*"completion-runtime-hardening\.js",\s*"oauth-runtime-hardening\.js",\s*"power\.js"\)/,
+  "OAuth hardening must load after completion hardening and before the power helper"
 );
 assert.match(hardening, /clearPendingOauthState/);
 assert.match(hardening, /createdAt > Date\.now\(\)/);
