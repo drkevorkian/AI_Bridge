@@ -1,0 +1,60 @@
+(() => {
+  "use strict";
+
+  const RUNTIME_VERSION = "1.16.4";
+  const FLAG = "__AI_BRIDGE_CONTENT_RUNTIME_PRELUDE__";
+  if (window[FLAG]?.version === RUNTIME_VERSION) return;
+
+  // If an older in-page runtime was reinjected, stop its polling loop before
+  // the new content.js creates another one. A normal page reload starts with no
+  // handle, so this is a no-op in the common case.
+  try {
+    if (window.__AI_BRIDGE_MONITOR_TIMER__) {
+      clearInterval(window.__AI_BRIDGE_MONITOR_TIMER__);
+      window.__AI_BRIDGE_MONITOR_TIMER__ = null;
+    }
+  } catch (_) {}
+
+  const nativeSetInterval = window.setInterval.bind(window);
+  let monitorCaptured = false;
+  window.setInterval = function hardenedSetInterval(callback, delay, ...args) {
+    const handle = nativeSetInterval(callback, delay, ...args);
+    if (!monitorCaptured && Number(delay) === 650 && typeof callback === "function" && callback.name === "monitor") {
+      monitorCaptured = true;
+      try {
+        if (window.__AI_BRIDGE_MONITOR_TIMER__ && window.__AI_BRIDGE_MONITOR_TIMER__ !== handle) {
+          clearInterval(window.__AI_BRIDGE_MONITOR_TIMER__);
+        }
+      } catch (_) {}
+      window.__AI_BRIDGE_MONITOR_TIMER__ = handle;
+      // Restore the native API immediately; only AI Bridge's monitor interval
+      // needs ownership tracking.
+      window.setInterval = nativeSetInterval;
+    }
+    return handle;
+  };
+
+  // content.js historically replies with its source-era version string. Rewrite
+  // only AI_BRIDGE_PING responses so the service worker can verify the actual
+  // injected runtime stack rather than one legacy file's internal label.
+  const nativeAddListener = chrome.runtime.onMessage.addListener.bind(chrome.runtime.onMessage);
+  chrome.runtime.onMessage.addListener = function versionedAddListener(listener) {
+    if (typeof listener !== "function") return nativeAddListener(listener);
+    return nativeAddListener((message, sender, sendResponse) => {
+      if (message?.type !== "AI_BRIDGE_PING") return listener(message, sender, sendResponse);
+      const versionedResponse = value => {
+        if (value && typeof value === "object") {
+          sendResponse({ ...value, version: RUNTIME_VERSION, runtimeVersion: RUNTIME_VERSION });
+        } else {
+          sendResponse(value);
+        }
+      };
+      return listener(message, sender, versionedResponse);
+    });
+  };
+
+  window[FLAG] = Object.freeze({
+    version: RUNTIME_VERSION,
+    monitorTimerOwned: true
+  });
+})();
