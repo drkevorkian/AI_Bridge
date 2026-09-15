@@ -8,7 +8,16 @@ const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const hardening = fs.readFileSync(path.join(root, "human-input-runtime-hardening.js"), "utf8");
 const wrapper = fs.readFileSync(path.join(root, "background-wrapper.js"), "utf8");
 
-assert.match(wrapper, /"background\.js",\s*"human-input-runtime-hardening\.js",\s*"completion-runtime-hardening\.js"/);
+assert.match(
+  wrapper,
+  /importScripts\("background\.js",\s*"completion-runtime-hardening\.js",\s*"oauth-runtime-hardening\.js",\s*"power\.js"\)/,
+  "established service-worker bootstrap chain must remain intact"
+);
+assert.match(
+  wrapper,
+  /importScripts\("human-input-runtime-hardening\.js"\)/,
+  "human-input control-plane hardening must be loaded by the service worker"
+);
 assert.doesNotMatch(hardening, /eval\s*\(|new Function|innerHTML/);
 assert.match(hardening, /<untrusted_peer_data/);
 assert.match(hardening, /EXPLICIT_MARKER_TAIL_LINES = 4/);
