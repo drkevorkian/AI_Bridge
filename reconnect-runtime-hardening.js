@@ -50,29 +50,38 @@
     throw new Error("Timed out waiting for the AI page to finish reloading.");
   }
 
-  async function clearStaleContentBootstrapGuard(tabId) {
-    // A failed ping means the existing page runtime is unusable. A stale
-    // content.js sentinel can otherwise make reinjection return immediately,
-    // leaving the page with no AI_BRIDGE_PING listener after an extension
-    // reload/update. Clear only content.js's bootstrap flag; the completion
-    // guard remains idempotent through its own versioned sentinel.
+  async function clearStaleContentBootstrapGuards(tabId) {
+    // A failed ping means the existing page runtime is unusable. Stale
+    // sentinels can otherwise make reinjection return immediately, leaving the
+    // page without a working listener or without one of the safety wrappers.
+    // Clear only AI Bridge-owned markers in the isolated content-script world.
     await chrome.scripting.executeScript({
       target: { tabId },
       func: () => {
         try {
           delete window.__AI_BRIDGE_LOADED_V114__;
+          delete window.__AI_BRIDGE_COMPLETION_GUARD_V1163__;
+          delete window.__AI_BRIDGE_RESPONSE_DELIVERY_HARDENING_V1163__;
+          delete window.__AI_BRIDGE_RESPONSE_DELIVERY_STATUS__;
         } catch (_) {
           window.__AI_BRIDGE_LOADED_V114__ = false;
+          window.__AI_BRIDGE_COMPLETION_GUARD_V1163__ = false;
+          window.__AI_BRIDGE_RESPONSE_DELIVERY_HARDENING_V1163__ = false;
+          window.__AI_BRIDGE_RESPONSE_DELIVERY_STATUS__ = undefined;
         }
       }
     });
   }
 
   async function injectCompleteContentRuntime(tabId) {
-    await clearStaleContentBootstrapGuard(tabId);
+    await clearStaleContentBootstrapGuards(tabId);
     await chrome.scripting.executeScript({
       target: { tabId },
-      files: ["content-completion-guard.js", "content.js"]
+      files: [
+        "content-completion-guard.js",
+        "content-response-delivery-hardening.js",
+        "content.js"
+      ]
     });
   }
 
