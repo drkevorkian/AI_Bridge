@@ -103,13 +103,22 @@ assert.match(
   /Please approve/i
 );
 
-// Optional offers and peer-directed questions must continue through the team.
+// Optional offers and every form of peer-directed request must continue through
+// the team rather than switching the Bridge into operator-input mode.
 assert.equal(
   detect("I can continue without your input; this choice is optional."),
   null
 );
 assert.equal(
   detect("AI B, which option should I use?"),
+  null
+);
+assert.equal(
+  detect("AI B, I need you to choose the backend approach before your next pass."),
+  null
+);
+assert.equal(
+  detect("Grok: I need you to confirm whether the endpoint mapping is correct."),
   null
 );
 assert.equal(
