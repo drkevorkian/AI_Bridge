@@ -53,21 +53,17 @@
   async function clearStaleContentBootstrapGuards(tabId) {
     // A failed ping means the existing page runtime is unusable. Stale
     // sentinels can otherwise make reinjection return immediately, leaving the
-    // page without a working listener or without one of the safety wrappers.
-    // Clear only AI Bridge-owned markers in the isolated content-script world.
+    // page without a working listener or completion guard. Clear only markers
+    // owned by content scripts that actually exist in this repository.
     await chrome.scripting.executeScript({
       target: { tabId },
       func: () => {
         try {
           delete window.__AI_BRIDGE_LOADED_V114__;
           delete window.__AI_BRIDGE_COMPLETION_GUARD_V1163__;
-          delete window.__AI_BRIDGE_RESPONSE_DELIVERY_HARDENING_V1163__;
-          delete window.__AI_BRIDGE_RESPONSE_DELIVERY_STATUS__;
         } catch (_) {
           window.__AI_BRIDGE_LOADED_V114__ = false;
           window.__AI_BRIDGE_COMPLETION_GUARD_V1163__ = false;
-          window.__AI_BRIDGE_RESPONSE_DELIVERY_HARDENING_V1163__ = false;
-          window.__AI_BRIDGE_RESPONSE_DELIVERY_STATUS__ = undefined;
         }
       }
     });
@@ -75,13 +71,12 @@
 
   async function injectCompleteContentRuntime(tabId) {
     await clearStaleContentBootstrapGuards(tabId);
+    // Keep this list exactly aligned with manifest.json content_scripts[].js.
+    // Do not reference optional or planned files here: executeScript rejects the
+    // whole injection when any file in the list is missing.
     await chrome.scripting.executeScript({
       target: { tabId },
-      files: [
-        "content-completion-guard.js",
-        "content-response-delivery-hardening.js",
-        "content.js"
-      ]
+      files: ["content-completion-guard.js", "content.js"]
     });
   }
 
