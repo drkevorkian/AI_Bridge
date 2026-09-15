@@ -55,6 +55,7 @@
         "https://copilot.microsoft.com/*"
       ],
       "js": [
+        "content-completion-guard.js",
         "content.js"
       ],
       "run_at": "document_idle"
