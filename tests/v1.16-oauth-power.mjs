@@ -58,7 +58,7 @@ assert.match(background, /pickDriveSettingsFile/);
 assert.match(background, /HTTP 409/);
 assert.match(background, /driveWriteChain/);
 assert.match(background, /enqueueGoogleAuth/);
-assert.match(wrapper, /importScripts\("background\.js",\s*"oauth-runtime-hardening\.js",\s*"power\.js"\)/);
+assert.match(wrapper, /importScripts\("background\.js",\s*"completion-runtime-hardening\.js",\s*"oauth-runtime-hardening\.js",\s*"power\.js"\)/);
 assert.match(power, /requestKeepAwake\("system"\)/);
 assert.doesNotMatch(power, /requestKeepAwake\("display"\)/);
 assert.match(power, /awaitingHuman/);
@@ -129,7 +129,7 @@ assert.equal(sandbox.oauthStateMatches(stateA, stolen.state), false);
 const newest = sandbox.pickDriveSettingsFile([
   { id: "oldFileId12", name: "ai-bridge-settings.json", modifiedTime: "2026-01-01T00:00:00.000Z" },
   { id: "newFileId12", name: "ai-bridge-settings.json", modifiedTime: "2026-09-15T00:00:00.000Z" },
-  { id: "otherFile12", name: "not-settings.json", modifiedTime: "2026-12-01T00:00:00.000Z" }
+  { id: "otherFileId12", name: "not-settings.json", modifiedTime: "2026-12-01T00:00:00.000Z" }
 ]);
 assert.equal(newest.id, "newFileId12");
 assert.equal(sandbox.pickDriveSettingsFile([]), null);
