@@ -9,9 +9,9 @@
   // record, leaving it resident until a later login overwrites it or its TTL
   // becomes irrelevant.
   //
-  // This runtime shim is intentionally tiny and loaded immediately after
-  // background.js. A later refactor should fold the same invariants directly
-  // into launchGoogleWebAuth(), then remove this file.
+  // This runtime shim is intentionally small and loaded immediately after the
+  // core coordination/completion runtime. A later refactor can fold the same
+  // invariants directly into background.js without changing behavior.
 
   if (typeof launchGoogleWebAuth !== "function" ||
       typeof clearPendingOauthState !== "function" ||
@@ -46,4 +46,30 @@
       throw err;
     }
   };
+
+  // A cached user-client token is bound to the OAuth client that issued it.
+  // Replacing one non-empty client ID with another must invalidate that token
+  // and the local linked flag. Reusing the old token with a new client ID is
+  // both confusing and an avoidable cross-configuration trust bug.
+  if (typeof saveUserOauthClientId === "function" &&
+      typeof readUserOauthClientId === "function" &&
+      typeof clearSessionGoogleToken === "function") {
+    const baseSaveUserOauthClientId = saveUserOauthClientId;
+    saveUserOauthClientId = async function hardenedSaveUserOauthClientId(raw) {
+      const previousId = await readUserOauthClientId();
+      const result = await baseSaveUserOauthClientId(raw);
+      const nextId = await readUserOauthClientId();
+
+      if (previousId && nextId && previousId !== nextId) {
+        await clearSessionGoogleToken();
+        await clearPendingOauthState();
+        try {
+          await chrome.storage.local.set({ [GOOGLE_LINKED_KEY]: false });
+        } catch (_) {}
+        return { ...result, googleLinked: false, relinkRequired: true };
+      }
+
+      return result;
+    };
+  }
 })();
