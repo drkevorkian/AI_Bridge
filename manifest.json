@@ -56,6 +56,7 @@
       ],
       "js": [
         "content-completion-guard.js",
+        "content-response-delivery-hardening.js",
         "content.js"
       ],
       "run_at": "document_idle"

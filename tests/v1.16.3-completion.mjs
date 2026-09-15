@@ -32,8 +32,8 @@ assert.match(
 );
 assert.deepEqual(
   manifest.content_scripts?.[0]?.js,
-  ["content-completion-guard.js", "content.js"],
-  "DOM completion guard must load before the provider runtime"
+  ["content-completion-guard.js", "content-response-delivery-hardening.js", "content.js"],
+  "DOM completion guard and delivery hardening must load before the provider runtime"
 );
 assert.match(hardening, /GUARD_FILE = "content-completion-guard\.js"/);
 assert.match(hardening, /GUARD_VERSION = "1\.16\.3"/);
