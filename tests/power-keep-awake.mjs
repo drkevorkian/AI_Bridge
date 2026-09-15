@@ -13,9 +13,14 @@ assert.equal(manifest.background?.service_worker, "background-wrapper.js");
 assert.match(wrapper, /importScripts\("background\.js",\s*"power\.js"\)/);
 assert.match(power, /chrome\.power\.requestKeepAwake\("system"\)/);
 assert.match(power, /chrome\.power\.releaseKeepAwake\(\)/);
-assert.match(power, /sessionActive\s*&&\s*bridgeState\?\.running|bridgeState\?\.sessionActive\s*&&\s*bridgeState\?\.running/);
+assert.match(power, /sessionActive/);
+assert.match(power, /bridgeState\?\.running/);
+assert.match(power, /awaitingHuman/);
 assert.match(power, /chrome\.storage\.onChanged\.addListener/);
 assert.match(power, /syncPowerStateFromStorage\(\)/);
+assert.match(power, /chrome\.alarms\?\.onAlarm/);
+assert.match(power, /chrome\.runtime\?\.onStartup/);
+assert.match(power, /Always re-request|Idempotent/);
 assert.doesNotMatch(power, /requestKeepAwake\("display"\)/);
 
 console.log("power keep-awake regression ok");

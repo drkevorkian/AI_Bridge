@@ -2,31 +2,37 @@
   "use strict";
 
   // Keep the computer awake only while AI Bridge is actively running.
-  // `system` prevents inactivity sleep without unnecessarily forcing the
-  // monitor to stay lit; Pause/Stop releases the request through the persisted
-  // bridgeState transition.
+  // `system` prevents inactivity sleep without forcing the monitor to stay
+  // lit. Pause, Stop, and HUMAN_INPUT release the request via persisted
+  // bridgeState. Manifest V3 service workers are disposable: Chrome may drop
+  // a keep-awake when the worker is killed, so this module re-asserts on
+  // every worker start, storage change, alarm, and browser startup.
   const BRIDGE_STATE_KEY = "bridgeState";
   let keepAwakeRequested = false;
 
   function shouldKeepSystemAwake(bridgeState) {
-    return Boolean(bridgeState?.sessionActive && bridgeState?.running);
+    return Boolean(
+      bridgeState?.sessionActive &&
+      bridgeState?.running &&
+      !bridgeState?.awaitingHuman
+    );
   }
 
   function applyPowerState(bridgeState) {
+    if (!chrome.power?.requestKeepAwake || !chrome.power?.releaseKeepAwake) return;
     const shouldStayAwake = shouldKeepSystemAwake(bridgeState);
-    if (shouldStayAwake === keepAwakeRequested) return;
-
     try {
       if (shouldStayAwake) {
+        // Idempotent. Always re-request so a silent drop after service-worker
+        // eviction cannot leave a live session sleep-prone.
         chrome.power.requestKeepAwake("system");
         keepAwakeRequested = true;
-      } else {
-        chrome.power.releaseKeepAwake();
-        keepAwakeRequested = false;
+        return;
       }
+      chrome.power.releaseKeepAwake();
+      keepAwakeRequested = false;
     } catch (err) {
       // Power management failure must never break the Bridge session itself.
-      // Log it so Diagnostics can surface the failure later.
       console.warn("AI Bridge could not update system-awake state", err);
     }
   }
@@ -45,8 +51,17 @@
     applyPowerState(changes[BRIDGE_STATE_KEY].newValue);
   });
 
-  // Manifest V3 service workers are disposable. Reconstruct the power request
-  // whenever Chrome starts this worker again so an active long-running Bridge
-  // session does not become sleep-prone after worker suspension/restart.
+  if (chrome.alarms?.onAlarm) {
+    chrome.alarms.onAlarm.addListener(() => {
+      syncPowerStateFromStorage();
+    });
+  }
+
+  if (chrome.runtime?.onStartup) {
+    chrome.runtime.onStartup.addListener(() => {
+      syncPowerStateFromStorage();
+    });
+  }
+
   syncPowerStateFromStorage();
 })();

@@ -1,10 +1,10 @@
 # AI Bridge
 
-**Current version: 1.15.0**
+**Current version: 1.16.0**
 
-1.15.0 adds a Settings tab, GitHub update checks, and Google Drive login via a user-supplied Web-application OAuth client ID. Chrome Sync still works without Google. Login remains optional. 1.14.0 session timers, team cycles, and stuck recovery remain in this build.
+1.16.0 hardens Google login with a cryptographically random OAuth `state`, keeps the host system awake during active runs, and labels peer-AI output as untrusted evidence. Chrome Sync still works without Google. Login remains optional.
 
-AI Bridge is a Manifest V3 Chrome extension for coordinating three AI web apps as one team from a single dashboard. It supports sequential relay, parallel work, peer review, direct model-to-model routing, human intervention, persistent file relay, reusable history, optional Chrome/Google settings sync, team-cycle timing, recovery checkpoints, a `chrome.alarms` stuck watchdog, and in-dashboard GitHub updates.
+AI Bridge is a Manifest V3 Chrome extension for coordinating three AI web apps as one team from a single dashboard. It supports sequential relay, parallel work, peer review, direct model-to-model routing, human intervention, persistent file relay, reusable history, optional Chrome/Google settings sync, team-cycle timing, recovery checkpoints, a `chrome.alarms` stuck watchdog, system keep-awake during active runs, and in-dashboard GitHub updates.
 
 ## Supported providers
 
@@ -53,7 +53,7 @@ Login is **never required**. Local-only behavior is unchanged. Chrome Sync (Push
 3. Paste the client ID into Settings and click **Save client ID**. It is stored only on this machine and is never synced.
 4. Click **Link Google account**. Scope used is `drive.appdata` only.
 
-Packaged Chrome-extension client IDs still use `chrome.identity.getAuthToken`. User-supplied Web-application client IDs use `chrome.identity.launchWebAuthFlow` against `https://accounts.google.com/o/oauth2/v2/auth` with an implicit token. That token stays in `chrome.storage.session` only — never local, never sync, never Drive.
+Packaged Chrome-extension client IDs still use `chrome.identity.getAuthToken`. User-supplied Web-application client IDs use `chrome.identity.launchWebAuthFlow` against `https://accounts.google.com/o/oauth2/v2/auth` with an implicit token **and a per-request cryptographically random `state`**. The returned `state` is compared in constant time against the pending value in `chrome.storage.session` (10-minute TTL, one-time use). The access token stays in `chrome.storage.session` only — never local, never sync, never Drive. CSRF state is never written to local/sync.
 
 **Unlink Google account** clears the Identity cache, the session token, and the local linked flag. It does not delete the Drive app-data copy, so a later Link can recover it.
 
@@ -179,7 +179,9 @@ Session state remains in `chrome.storage.local`. Optional configuration copies u
 The packaged extension contains:
 
 - `manifest.json`
+- `background-wrapper.js`
 - `background.js`
+- `power.js`
 - `content.js`
 - `dashboard.html`
 - `dashboard.css`
@@ -192,7 +194,15 @@ The packaged extension contains:
 
 Command-line tests live in `tests/`.
 
-## Current release — 1.15.0
+## Current release — 1.16.0
+
+- `chrome.power.requestKeepAwake("system")` while a session is active and running; Pause / Stop / HUMAN_INPUT release it. Monitor may still dim. Re-asserted after MV3 service-worker restart, alarms, and browser startup
+- User-supplied Google OAuth now binds a 256-bit `crypto.getRandomValues` `state` to each `launchWebAuthFlow` request. Mismatch or expiry refuses the token
+- Drive settings write is serialized; 409/404 races re-list and PATCH the newest `ai-bridge-settings.json`
+- Peer SHARED UPDATES, Direct Mesh messages, and peer-review text are labeled untrusted evidence and cannot override Human Controller / Team Rules / job / working protocol
+- `CONTENT_VERSION` stays 1.14.0; `STATE_VERSION` stays 3
+
+## Previous release — 1.15.0
 
 - Session / Settings view tabs on the dashboard; popup Settings opens `#settings`
 - Google Drive login works for unpacked installs: paste a Web-application OAuth client ID, then Link. Packaged `oauth2.client_id` is still supported and still not shipped
