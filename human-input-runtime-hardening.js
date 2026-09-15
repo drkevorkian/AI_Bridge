@@ -72,6 +72,15 @@
       .trim();
   }
 
+  function aiBridgeLooksPeerDirected(text) {
+    // Team members commonly address one another explicitly. Those sentences
+    // belong to the relay data plane, even when they contain language such as
+    // "I need you to choose..." that would otherwise resemble an operator
+    // request. Keep provider names here as aliases because the UI labels can
+    // vary while the provider identity remains recognizable in responses.
+    return /^(?:AI\s*[ABC]|ChatGPT|Grok|Gemini|Claude|Copilot)\s*[:,]/i.test(String(text || "").trim());
+  }
+
   function aiBridgeNaturalHumanRequest(lines) {
     const tailLines = lines.slice(-NATURAL_LANGUAGE_TAIL_LINES);
     if (!tailLines.length) return null;
@@ -92,7 +101,7 @@
 
     for (let i = sentences.length - 1; i >= 0; i -= 1) {
       const sentence = sentences[i].trim();
-      if (!sentence || nonBlocking.test(sentence) || metaLead.test(sentence)) continue;
+      if (!sentence || nonBlocking.test(sentence) || metaLead.test(sentence) || aiBridgeLooksPeerDirected(sentence)) continue;
       if (strongPatterns.some(pattern => pattern.test(sentence))) {
         return sentence.slice(0, MAX_HUMAN_PROMPT_CHARS);
       }
@@ -100,11 +109,11 @@
 
     // Preserve a narrow convenience fallback for a direct final question or
     // imperative. Unlike the old detector, this only considers the final
-    // non-quoted line and rejects protocol/app-command discussion.
+    // non-quoted line and rejects protocol/app-command/peer discussion.
     const finalLine = aiBridgeStripInlineExamples(tailLines[tailLines.length - 1]);
     if (!finalLine || nonBlocking.test(finalLine) || metaLead.test(finalLine)) return null;
     if (/\b(?:protocol|marker|app command|bridge command|human-input|human input protocol)\b/i.test(finalLine)) return null;
-    if (/^(?:AI\s*[ABC]|ChatGPT|Grok|Gemini|Claude|Copilot)\s*[:,]/i.test(finalLine)) return null;
+    if (aiBridgeLooksPeerDirected(finalLine)) return null;
 
     const directQuestion = /^(?:which|what)\s+(?:option|approach|version|path|scope|priority|choice)\s+(?:do\s+you\s+(?:want|prefer)|should\s+(?:i|we))\b.*\?\s*$/i;
     const directImperative = /^please\s+(?:choose|select|confirm|approve|decide|clarify|provide|authorize)\b.+[.?!]?$/i;
