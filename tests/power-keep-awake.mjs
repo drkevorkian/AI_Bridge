@@ -10,7 +10,7 @@ const power = fs.readFileSync(path.join(root, "power.js"), "utf8");
 
 assert.ok(manifest.permissions.includes("power"), "manifest must request chrome.power permission");
 assert.equal(manifest.background?.service_worker, "background-wrapper.js");
-assert.match(wrapper, /importScripts\("background\.js",\s*"oauth-runtime-hardening\.js",\s*"power\.js"\)/);
+assert.match(wrapper, /importScripts\("background\.js",\s*"completion-runtime-hardening\.js",\s*"oauth-runtime-hardening\.js",\s*"power\.js"\)/);
 assert.match(power, /chrome\.power\.requestKeepAwake\("system"\)/);
 assert.match(power, /chrome\.power\.releaseKeepAwake\(\)/);
 assert.match(power, /sessionActive/);
