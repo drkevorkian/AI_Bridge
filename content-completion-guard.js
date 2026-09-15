@@ -6,9 +6,13 @@
 
   const host = location.hostname;
   const baselineByGeneration = new Map();
+  const waiterByGeneration = new Map();
   const MAX_BASELINES = 8;
+  const WAITER_POLL_MS = 100;
+  const REPEATED_FORWARD_GRACE_MS = 1400;
   let patched = false;
   let patchError = "";
+  let baseSendMessage = null;
 
   function visible(el) {
     if (!el) return false;
@@ -64,9 +68,28 @@
     return cleanText(node.innerText || node.textContent);
   }
 
+  function settleWaiter(generationId, value, error = null) {
+    const id = String(generationId || "");
+    const waiter = waiterByGeneration.get(id);
+    if (!waiter) return;
+    waiterByGeneration.delete(id);
+    if (waiter.timer) clearInterval(waiter.timer);
+    if (error) waiter.reject(error);
+    else waiter.resolve(value);
+  }
+
+  function supersedeOlderGenerations(keepId) {
+    for (const id of [...baselineByGeneration.keys()]) {
+      if (id === keepId) continue;
+      baselineByGeneration.delete(id);
+      settleWaiter(id, { ok: false, ignored: true, superseded: true });
+    }
+  }
+
   function rememberBaseline(generationId) {
     const id = String(generationId || "");
     if (!id) return;
+    supersedeOlderGenerations(id);
     const node = latestResponseNode();
     baselineByGeneration.set(id, {
       node: responseIdentity(node),
@@ -75,7 +98,9 @@
       createdAt: Date.now()
     });
     while (baselineByGeneration.size > MAX_BASELINES) {
-      baselineByGeneration.delete(baselineByGeneration.keys().next().value);
+      const oldestId = baselineByGeneration.keys().next().value;
+      baselineByGeneration.delete(oldestId);
+      settleWaiter(oldestId, { ok: false, ignored: true, superseded: true });
     }
   }
 
@@ -88,7 +113,8 @@
 
   // Some providers reuse one response container throughout generation. Track
   // whether that baseline container ever actually changes so a deterministic
-  // answer that eventually returns to the same wording is not suppressed.
+  // answer that eventually returns to the same wording is still recognized as
+  // fresh work rather than the pre-send response.
   if (typeof MutationObserver === "function") {
     const mutationObserver = new MutationObserver(() => markChangedBaselines());
     mutationObserver.observe(document.documentElement, {
@@ -98,7 +124,7 @@
     });
   }
 
-  function shouldSuppressResponse(message) {
+  function isUnchangedBaselineResponse(message) {
     if (!message || message.type !== "AI_BRIDGE_RESPONSE") return false;
     const id = String(message.generationId || "");
     const baseline = baselineByGeneration.get(id);
@@ -108,23 +134,104 @@
     const currentNode = responseIdentity(latestResponseNode());
     const sameNode = Boolean(baseline.node && currentNode === baseline.node);
     const sameText = Boolean(baseline.text && String(message.text || "").trim() === baseline.text);
+    return sameNode && sameText && !baseline.changed;
+  }
 
-    // The exact old response node and old response text are stale only if that
-    // container never changed after the new prompt. A new node is allowed even
-    // with identical wording, and a reused node that visibly changed is also a
-    // legitimate generation.
-    if (sameNode && sameText && !baseline.changed) return true;
+  function holdStaleResponse(message) {
+    const id = String(message?.generationId || "");
+    const existing = waiterByGeneration.get(id);
+    if (existing) return existing.promise;
 
-    baselineByGeneration.delete(id);
-    return false;
+    let resolvePromise;
+    let rejectPromise;
+    const promise = new Promise((resolve, reject) => {
+      resolvePromise = resolve;
+      rejectPromise = reject;
+    });
+    const waiter = {
+      promise,
+      resolve: resolvePromise,
+      reject: rejectPromise,
+      timer: null,
+      checking: false,
+      evidenceAt: 0
+    };
+    waiterByGeneration.set(id, waiter);
+
+    waiter.timer = setInterval(async () => {
+      const active = waiterByGeneration.get(id);
+      if (!active || active.checking) return;
+      active.checking = true;
+      try {
+        const baseline = baselineByGeneration.get(id);
+        if (!baseline) {
+          settleWaiter(id, { ok: false, ignored: true, superseded: true });
+          return;
+        }
+
+        markChangedBaselines();
+        const currentNode = responseIdentity(latestResponseNode());
+        const currentText = baselineText(currentNode);
+        const freshIdentity = Boolean(currentNode && currentNode !== baseline.node);
+        const freshEvidence = freshIdentity || baseline.changed;
+        const repeatedText = Boolean(baseline.text && currentText === baseline.text);
+
+        // Different text will be reported by content.js through its normal path.
+        // Keep this stale call pending until that newer call supersedes it.
+        if (!freshEvidence || !repeatedText) {
+          active.evidenceAt = 0;
+          return;
+        }
+
+        if (!active.evidenceAt) {
+          active.evidenceAt = Date.now();
+          return;
+        }
+        if (Date.now() - active.evidenceAt < REPEATED_FORWARD_GRACE_MS) return;
+
+        // A genuinely new response can legally be text-identical. content.js
+        // already marked the stale attempt as reported before awaiting us, so it
+        // will not issue another text-only send for this case. Forward the held
+        // response now, but never reuse artifacts captured from the old DOM.
+        baselineByGeneration.delete(id);
+        waiterByGeneration.delete(id);
+        if (active.timer) clearInterval(active.timer);
+        const forwarded = {
+          ...message,
+          completedAt: Date.now(),
+          artifacts: [],
+          artifactDiagnostics: {
+            candidateCount: 0,
+            errors: ["Repeated response verified by fresh DOM evidence; pre-send artifact payload was discarded."]
+          }
+        };
+        try {
+          const result = await baseSendMessage(forwarded);
+          active.resolve(result);
+        } catch (err) {
+          active.reject(err);
+        }
+      } finally {
+        const remaining = waiterByGeneration.get(id);
+        if (remaining) remaining.checking = false;
+      }
+    }, WAITER_POLL_MS);
+
+    return promise;
   }
 
   try {
-    const baseSendMessage = chrome.runtime.sendMessage.bind(chrome.runtime);
+    baseSendMessage = chrome.runtime.sendMessage.bind(chrome.runtime);
     chrome.runtime.sendMessage = function guardedSendMessage(...args) {
       const message = args.length === 1 && args[0] && typeof args[0] === "object" ? args[0] : null;
-      if (shouldSuppressResponse(message)) {
-        return Promise.resolve({ ok: false, ignored: true, staleBaseline: true });
+      if (isUnchangedBaselineResponse(message)) {
+        return holdStaleResponse(message);
+      }
+
+      const id = message?.type === "AI_BRIDGE_RESPONSE" ? String(message.generationId || "") : "";
+      if (id) {
+        baselineByGeneration.delete(id);
+        settleWaiter(id, { ok: false, ignored: true, superseded: true });
       }
       return baseSendMessage(...args);
     };
