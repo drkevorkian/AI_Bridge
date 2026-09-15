@@ -30,11 +30,11 @@ function extractFunction(src, name) {
   throw new Error(`${name} unclosed`);
 }
 
-assert.equal(manifest.version, "1.16.2");
+assert.equal(manifest.version, "1.16.3");
 assert.equal(manifest.oauth2, undefined);
-assert.match(html, /v1\.16\.2/);
-assert.match(popupHtml, /v1\.16\.2/);
-assert.match(readme, /Current version: 1\.16\.2/);
+assert.match(html, /v1\.16\.3/);
+assert.match(popupHtml, /v1\.16\.3/);
+assert.match(readme, /Current version: 1\.16\.3/);
 assert.match(background, /CONTENT_VERSION = "1\.14\.0"/);
 assert.match(background, /STATE_VERSION = 3/);
 assert.match(content, /version: "1\.14\.0"/);
