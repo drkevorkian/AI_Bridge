@@ -393,7 +393,12 @@ h2 { margin: 4px 0 0; font-size: 20px; }
 .agent-topline { display: flex; align-items: center; justify-content: space-between; margin-bottom: 7px; font-size: 12px; }
 .agent-card textarea { min-height: 64px; margin-top: 7px; }
 .work-mode-card { border: 1px solid var(--line); border-radius: 10px; background: var(--panel-3); padding: 9px; margin-bottom: 10px; }
-.work-mode-help { margin-top: 7px; padding-left: 2px; }
+.work-mode-help { margin-top: 7px; padding-left: 2px; white-space: pre-wrap; line-height: 1.45; }
+.account-section { margin-top: 0; }
+.account-actions { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
+.account-actions .ghost { min-height: 32px; }
+#cloudStatusPill[data-state="sync"],
+#cloudStatusPill[data-state="google"] { color: var(--a); }
 .field-row { display: grid; grid-template-columns: 100px 1fr; gap: 9px; align-items: end; }
 .field-row label { margin-bottom: 10px; }
 .split-fields { display: grid; grid-template-columns: 1fr 1fr; gap: 9px; }

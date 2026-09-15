@@ -92,6 +92,27 @@ let artifactStore = {};
 let responseCommitQueue = Promise.resolve();
 let stateReady = loadState();
 
+async function lockStorageToExtensionPages() {
+  // chrome.storage.local / .sync default to content-script access. Provider-page
+  // XSS could otherwise read transcripts, Vault binaries, jobs, and Team rules.
+  // TRUSTED_CONTEXTS = extension pages + this service worker only.
+  const trusted = { accessLevel: "TRUSTED_CONTEXTS" };
+  try {
+    if (chrome.storage?.local?.setAccessLevel) {
+      await chrome.storage.local.setAccessLevel(trusted);
+    }
+  } catch (err) {
+    console.warn("AI Bridge could not lock chrome.storage.local", err);
+  }
+  try {
+    if (chrome.storage?.sync?.setAccessLevel) {
+      await chrome.storage.sync.setAccessLevel(trusted);
+    }
+  } catch (err) {
+    console.warn("AI Bridge could not lock chrome.storage.sync", err);
+  }
+}
+
 function cloneDefaultState() {
   return {
     ...DEFAULT_STATE,
@@ -258,13 +279,17 @@ function bytesToBase64(bytes) {
 function artifactFetchHostAllowed(rawUrl) {
   try {
     const url = new URL(String(rawUrl || ""));
-    if (url.protocol !== "https:" && url.protocol !== "http:") return false;
+    // Fail closed: HTTPS only. http: is never an allowed artifact origin,
+    // even if a future host_permission were added by mistake.
+    if (url.protocol !== "https:") return false;
+    if (url.username || url.password) return false;
     const host = url.hostname.toLowerCase();
+    if (!host || host.includes("..")) return false;
     return host === "chatgpt.com" || host === "chat.openai.com" || host === "grok.com" ||
       host === "assets.grok.com" || host === "claude.ai" || host === "gemini.google.com" ||
       host === "copilot.microsoft.com" || host.endsWith(".oaiusercontent.com") ||
       host === "x.ai" || host === "api.x.ai" || host.endsWith(".x.ai") || host.endsWith(".googleusercontent.com") ||
-      host.endsWith(".anthropic.com") || host.endsWith(".microsoft.com");
+      host.endsWith(".anthropic.com") || host === "www.microsoft.com" || host.endsWith(".microsoft.com");
   } catch (_) {
     return false;
   }
@@ -276,6 +301,8 @@ async function fetchArtifactInBackground(rawUrl, name = "artifact.bin", mime = "
   const timer = setTimeout(() => controller.abort(), 20000);
   try {
     const response = await fetch(String(rawUrl), { credentials: "include", redirect: "follow", signal: controller.signal });
+    // Re-validate the final URL. redirect:follow must not land on HTTP or a non-allowlisted host.
+    if (!artifactFetchHostAllowed(response.url)) throw new Error("Artifact fetch redirected off the HTTPS allowlist.");
     if (!response.ok) throw new Error(`Artifact fetch failed with HTTP ${response.status}.`);
     const declared = Number(response.headers.get("content-length") || 0);
     if (declared > MAX_ARTIFACT_FILE_BYTES) throw new Error("Artifact exceeds the per-file relay limit.");
@@ -857,6 +884,9 @@ function migrateSuppressedHumanRequests(bridgeState) {
 }
 
 async function loadState() {
+  // Lock storage before the first read so a compromised provider page cannot
+  // enumerate transcripts, Vault bytes, or synced settings via chrome.storage.
+  await lockStorageToExtensionPages();
   const { bridgeState, bridgeHistory, bridgeArtifacts } = await chrome.storage.local.get(["bridgeState", "bridgeHistory", "bridgeArtifacts"]);
   history = normalizeHistory(bridgeHistory);
   artifactStore = bridgeArtifacts && typeof bridgeArtifacts === "object" ? bridgeArtifacts : {};
@@ -967,6 +997,32 @@ function tabForSide(side) {
 
 function sideForTab(tabId) {
   return SIDES.find(side => Number(tabForSide(side)) === Number(tabId)) || null;
+}
+
+function isExtensionPageSender(sender) {
+  const prefix = chrome.runtime.getURL("");
+  const url = String(sender?.url || "");
+  const origin = String(sender?.origin || "");
+  return Boolean(url.startsWith(prefix) || origin === `chrome-extension://${chrome.runtime.id}`);
+}
+
+function boundSideFromSender(sender) {
+  const tabId = Number(sender?.tab?.id);
+  if (!Number.isInteger(tabId) || tabId <= 0) return null;
+  return sideForTab(tabId);
+}
+
+function requireBoundSessionTab(sender, action) {
+  if (!state.sessionActive) throw new Error(`${action} requires an active Bridge session.`);
+  const side = boundSideFromSender(sender);
+  if (!side) throw new Error(`${action} is only allowed from a currently bound AI A/B/C tab.`);
+  return side;
+}
+
+function requireExtensionPage(sender, action) {
+  if (!isExtensionPageSender(sender)) {
+    throw new Error(`${action} is only available from the AI Bridge dashboard or popup.`);
+  }
 }
 
 function labelForSide(side) {
@@ -2103,11 +2159,227 @@ async function handleCompletedResponse(side, text, { relay = true, artifacts = [
   }
 }
 
+const CLOUD_SETTINGS_VERSION = 1;
+const CLOUD_SYNC_KEY = "bridgeCloudSettings";
+const CLOUD_SYNC_PREFIX = "bridgeCloudSettings";
+const CLOUD_SYNC_META_KEY = "bridgeCloudSettings.meta";
+const THEME_STORAGE_KEY = "aiBridgeTheme";
+const PANE_WIDTH_STORAGE_KEY = "aiBridgeControlPaneWidth";
+const FRESH_ON_START_KEY = "aiBridgeFreshOnStart";
+const GOOGLE_LINKED_KEY = "bridgeGoogleLinked";
+const ALLOWED_CLOUD_THEMES = new Set(["blizzard", "ghostwhite", "midnight", "slate", "light", "solarized", "ocean", "terminal"]);
+const CONTENT_SCRIPT_MESSAGE_TYPES = new Set(["AI_BRIDGE_FETCH_ARTIFACT", "AI_BRIDGE_RESPONSE"]);
+const SYNC_ITEM_MAX_CHARS = 7000;
+const CLOUD_SYNC_MAX_BYTES = 90000;
+
+function clampCloudPane(value) {
+  const n = Number(value);
+  if (!Number.isFinite(n)) return 40;
+  return Math.min(70, Math.max(24, Math.round(n * 10) / 10));
+}
+
+function sanitizeHistoryForCloud(kind, items, limit) {
+  const list = Array.isArray(items) ? items : [];
+  if (kind === "jobs") {
+    return list.slice(0, limit).map(item => ({
+      time: Number(item?.time) || Date.now(),
+      side: SIDES.includes(item?.side) ? item.side : "A",
+      label: String(item?.label || "AI").slice(0, 80),
+      job: String(item?.job || "").trim().slice(0, 4000)
+    })).filter(item => item.job);
+  }
+  return list.slice(0, limit).map(item => ({
+    time: Number(item?.time) || Date.now(),
+    text: String(item?.text || "").trim().slice(0, 12000)
+  })).filter(item => item.text);
+}
+
+function sanitizeCloudSettings(raw) {
+  const src = raw && typeof raw === "object" ? raw : {};
+  let maxTurns = INFINITE_TURNS;
+  try { maxTurns = normalizeMaxTurns(src.maxTurns); } catch (_) { maxTurns = INFINITE_TURNS; }
+  const delay = Number(src.delayMs);
+  return {
+    schemaVersion: CLOUD_SETTINGS_VERSION,
+    updatedAt: Date.now(),
+    theme: ALLOWED_CLOUD_THEMES.has(src.theme) ? src.theme : "blizzard",
+    paneWidth: clampCloudPane(src.paneWidth),
+    workMode: normalizeWorkMode(src.workMode),
+    startSide: SIDES.includes(src.startSide) ? src.startSide : "A",
+    maxTurns,
+    delayMs: Math.max(0, Math.min(30000, Number.isFinite(delay) ? delay : 1500)),
+    freshOnStart: Boolean(src.freshOnStart),
+    jobA: String(src.jobA || "").trim().slice(0, 4000),
+    jobB: String(src.jobB || "").trim().slice(0, 4000),
+    jobC: String(src.jobC || "").trim().slice(0, 4000),
+    teamRules: String(src.teamRules || "").trim().slice(0, 12000),
+    history: {
+      jobs: sanitizeHistoryForCloud("jobs", src.history?.jobs, 20),
+      commands: sanitizeHistoryForCloud("commands", src.history?.commands, 15),
+      rules: sanitizeHistoryForCloud("rules", src.history?.rules, 15)
+    }
+  };
+}
+
+function googleOauthConfigured() {
+  const oauth = chrome.runtime.getManifest()?.oauth2;
+  const clientId = String(oauth?.client_id || "");
+  return clientId.includes(".apps.googleusercontent.com") && !/UNCONFIGURED|YOUR_|PLACEHOLDER/i.test(clientId);
+}
+
+function splitCloudSyncChunks(json) {
+  const text = String(json || "");
+  const chunks = [];
+  for (let i = 0; i < text.length; i += SYNC_ITEM_MAX_CHARS) {
+    chunks.push(text.slice(i, i + SYNC_ITEM_MAX_CHARS));
+  }
+  return chunks.length ? chunks : [""];
+}
+
+async function readSyncSafe(keys) {
+  if (!chrome.storage?.sync?.get) return {};
+  try {
+    return await chrome.storage.sync.get(keys);
+  } catch (_) {
+    return {};
+  }
+}
+
+async function writeChromeSyncSettings(settings) {
+  // chrome.storage.sync is 8 KB per item / 100 KB total. Chunk JSON so a single
+  // settings object cannot blow QUOTA_BYTES_PER_ITEM.
+  const json = JSON.stringify(settings);
+  if (json.length > CLOUD_SYNC_MAX_BYTES) {
+    throw new Error("Cloud settings exceeded the Chrome Sync size budget. Trim history and retry.");
+  }
+  const chunks = splitCloudSyncChunks(json);
+  const previous = await readSyncSafe([CLOUD_SYNC_META_KEY, CLOUD_SYNC_KEY]);
+  const previousChunks = Number(previous?.[CLOUD_SYNC_META_KEY]?.chunks) || 0;
+  const payload = {
+    [CLOUD_SYNC_META_KEY]: {
+      schemaVersion: CLOUD_SETTINGS_VERSION,
+      updatedAt: settings.updatedAt,
+      chunks: chunks.length,
+      bytes: json.length
+    }
+  };
+  chunks.forEach((chunk, index) => {
+    payload[`${CLOUD_SYNC_PREFIX}.${index}`] = chunk;
+  });
+  await chrome.storage.sync.set(payload);
+  const stale = [];
+  if (previous?.[CLOUD_SYNC_KEY]) stale.push(CLOUD_SYNC_KEY);
+  for (let i = chunks.length; i < previousChunks; i++) stale.push(`${CLOUD_SYNC_PREFIX}.${i}`);
+  if (stale.length) await chrome.storage.sync.remove(stale);
+  return { bytes: json.length, chunks: chunks.length };
+}
+
+async function readChromeSyncSettings() {
+  const metaPack = await readSyncSafe([CLOUD_SYNC_META_KEY, CLOUD_SYNC_KEY]);
+  const meta = metaPack?.[CLOUD_SYNC_META_KEY];
+  const chunkCount = Number(meta?.chunks);
+  if (meta && Number.isInteger(chunkCount) && chunkCount > 0) {
+    const keys = [];
+    for (let i = 0; i < chunkCount; i++) keys.push(`${CLOUD_SYNC_PREFIX}.${i}`);
+    const parts = await readSyncSafe(keys);
+    const json = keys.map(key => {
+      const piece = parts?.[key];
+      if (typeof piece !== "string") throw new Error("Chrome Sync copy is incomplete. Push settings again from the original profile.");
+      return piece;
+    }).join("");
+    return JSON.parse(json);
+  }
+  return metaPack?.[CLOUD_SYNC_KEY] || null;
+}
+
+async function cloudStatus() {
+  const local = await chrome.storage.local.get([THEME_STORAGE_KEY, PANE_WIDTH_STORAGE_KEY, FRESH_ON_START_KEY, CLOUD_SYNC_KEY, GOOGLE_LINKED_KEY]);
+  let chromeSyncHasCopy = false;
+  try {
+    chromeSyncHasCopy = Boolean(await readChromeSyncSettings());
+  } catch (_) {
+    chromeSyncHasCopy = false;
+  }
+  return {
+    googleConfigured: googleOauthConfigured(),
+    googleLinked: Boolean(local?.[GOOGLE_LINKED_KEY]) && googleOauthConfigured(),
+    chromeSyncAvailable: Boolean(chrome.storage?.sync),
+    chromeSyncHasCopy,
+    lastPushAt: Number(local?.[CLOUD_SYNC_KEY]?.updatedAt) || null,
+    theme: local?.[THEME_STORAGE_KEY] || "blizzard",
+    paneWidth: local?.[PANE_WIDTH_STORAGE_KEY],
+    freshOnStart: local?.[FRESH_ON_START_KEY] !== false
+  };
+}
+
+async function applyIdleCloudSettings(settings) {
+  if (state.sessionActive) {
+    throw new Error("Stop the active Bridge session before pulling cloud settings into this profile.");
+  }
+  state.jobA = settings.jobA;
+  state.jobB = settings.jobB;
+  state.jobC = settings.jobC;
+  state.teamRules = settings.teamRules;
+  state.workMode = settings.workMode;
+  state.startSide = settings.startSide;
+  state.mainSide = settings.startSide;
+  state.maxTurns = settings.maxTurns;
+  state.delayMs = settings.delayMs;
+  await saveState();
+}
+
+async function pushCloudSettings(raw) {
+  const settings = sanitizeCloudSettings(raw);
+  await chrome.storage.local.set({ [CLOUD_SYNC_KEY]: settings });
+  try {
+    const written = await writeChromeSyncSettings(settings);
+    return { ok: true, bytes: written.bytes, chunks: written.chunks, updatedAt: settings.updatedAt, via: "chrome-sync" };
+  } catch (err) {
+    throw new Error(`Saved locally, but Chrome Sync write failed. Sign into Chrome Sync and retry. ${err.message}`);
+  }
+}
+
+async function pullCloudSettings() {
+  const packed = await readChromeSyncSettings();
+  if (!packed) throw new Error("No AI Bridge settings were found in Chrome Sync yet. Push from this profile first.");
+  const settings = sanitizeCloudSettings(packed);
+  await applyIdleCloudSettings(settings);
+  await chrome.storage.local.set({
+    [CLOUD_SYNC_KEY]: settings,
+    [THEME_STORAGE_KEY]: settings.theme,
+    [PANE_WIDTH_STORAGE_KEY]: settings.paneWidth,
+    [FRESH_ON_START_KEY]: settings.freshOnStart
+  });
+  if (Array.isArray(settings.history?.jobs)) history.jobs = settings.history.jobs;
+  if (Array.isArray(settings.history?.commands)) history.commands = settings.history.commands;
+  if (Array.isArray(settings.history?.rules)) history.rules = settings.history.rules;
+  await saveHistory();
+  return { ok: true, settings };
+}
+
+async function connectGoogleAccount() {
+  if (!googleOauthConfigured()) {
+    throw new Error("Google Drive login needs a Google Cloud OAuth client ID in the extension manifest. Until then, use Chrome Sync (Push / Pull) to copy settings across your signed-in Chrome profiles. Login remains optional.");
+  }
+  const result = await chrome.identity.getAuthToken({ interactive: true });
+  const token = typeof result === "string" ? result : result?.token;
+  if (!token) throw new Error("Google sign-in did not return a token.");
+  // Tokens stay in Chrome's identity cache only. Persist a boolean linked flag, never the token.
+  await chrome.storage.local.set({ [GOOGLE_LINKED_KEY]: true });
+  return { ok: true, googleLinked: true };
+}
+
 chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   (async () => {
     await stateReady;
 
+    if (!msg || typeof msg.type !== "string") throw new Error("Malformed AI Bridge message.");
+    if (!isExtensionPageSender(sender) && !CONTENT_SCRIPT_MESSAGE_TYPES.has(msg.type)) {
+      throw new Error("This AI Bridge command is only available from the dashboard or popup.");
+    }
+
     if (msg.type === "AI_BRIDGE_GET_STATE") {
+      requireExtensionPage(sender, "Read bridge state");
       sendResponse({
         ok: true,
         state: clientStateSnapshot({
@@ -2120,19 +2392,21 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
     }
 
     if (msg.type === "AI_BRIDGE_OPEN_DASHBOARD") {
+      requireExtensionPage(sender, "Open dashboard");
       const tabId = await openDashboard();
       sendResponse({ ok: true, tabId });
       return;
     }
 
     if (msg.type === "AI_BRIDGE_FETCH_ARTIFACT") {
-      if (!sender.tab) throw new Error("Artifact fetch must originate from a supported AI tab.");
+      requireBoundSessionTab(sender, "Artifact fetch");
       const artifact = await fetchArtifactInBackground(msg.url, msg.name, msg.mime);
       sendResponse({ ok: true, artifact });
       return;
     }
 
     if (msg.type === "AI_BRIDGE_DOWNLOAD_ARTIFACT") {
+      requireExtensionPage(sender, "Vault download");
       const id = String(msg.id || "");
       const record = artifactStore[id];
       if (!record?.dataBase64) throw new Error("That Vault file is no longer available.");
@@ -2149,6 +2423,7 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
     }
 
     if (msg.type === "AI_BRIDGE_CLEAR_ARTIFACTS") {
+      requireExtensionPage(sender, "Clear vault");
       if (state.sessionActive) throw new Error("Stop the active Bridge session before clearing the persistent Vault.");
       await clearArtifacts();
       await saveState();
@@ -2157,6 +2432,7 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
     }
 
     if (msg.type === "AI_BRIDGE_CLEAR_HISTORY") {
+      requireExtensionPage(sender, "Clear history");
       const kind = String(msg.kind || "all");
       if (kind === "jobs" || kind === "all") history.jobs = [];
       if (kind === "commands" || kind === "all") history.commands = [];
@@ -2168,12 +2444,41 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
     }
 
     if (msg.type === "AI_BRIDGE_SET_TEAM_RULES") {
+      requireExtensionPage(sender, "Apply team rules");
       const result = await applyTeamRules(msg.teamRules);
       sendResponse({ ok: true, ...result });
       return;
     }
 
+    if (msg.type === "AI_BRIDGE_CLOUD_STATUS") {
+      requireExtensionPage(sender, "Cloud status");
+      sendResponse({ ok: true, ...(await cloudStatus()) });
+      return;
+    }
+
+    if (msg.type === "AI_BRIDGE_CLOUD_PUSH") {
+      requireExtensionPage(sender, "Push settings");
+      const result = await pushCloudSettings(msg.settings);
+      sendResponse({ ok: true, ...result });
+      return;
+    }
+
+    if (msg.type === "AI_BRIDGE_CLOUD_PULL") {
+      requireExtensionPage(sender, "Pull settings");
+      const result = await pullCloudSettings();
+      sendResponse({ ok: true, ...result });
+      return;
+    }
+
+    if (msg.type === "AI_BRIDGE_CLOUD_CONNECT") {
+      requireExtensionPage(sender, "Link Google account");
+      const result = await connectGoogleAccount();
+      sendResponse({ ok: true, ...result });
+      return;
+    }
+
     if (msg.type === "AI_BRIDGE_NEW_CHATS") {
+      requireExtensionPage(sender, "Reset AI chats");
       const sides = Array.isArray(msg.sides) ? msg.sides : SIDES;
       const resetSides = await resetSelectedChats(msg, sides);
       sendResponse({ ok: true, sides: resetSides });
@@ -2181,6 +2486,7 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
     }
 
     if (msg.type === "AI_BRIDGE_START") {
+      requireExtensionPage(sender, "Start");
       if (state.sessionActive) throw new Error("A saved session already exists. Resume it or Stop it before starting a new one.");
 
       const fresh = cloneDefaultState();
@@ -2253,6 +2559,7 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
     }
 
     if (msg.type === "AI_BRIDGE_PAUSE") {
+      requireExtensionPage(sender, "Pause");
       if (!state.sessionActive) throw new Error("There is no active session to pause.");
       await pauseBridge("Paused by user");
       sendResponse({ ok: true });
@@ -2260,6 +2567,7 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
     }
 
     if (msg.type === "AI_BRIDGE_RESUME") {
+      requireExtensionPage(sender, "Resume");
       if (!state.sessionActive) throw new Error("There is no saved session to resume.");
       if (state.awaitingHuman) throw new Error("Answer or suppress the pending human-input request before resuming.");
 
@@ -2305,12 +2613,14 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
     }
 
     if (msg.type === "AI_BRIDGE_STOP") {
+      requireExtensionPage(sender, "Stop");
       await endBridge("Stopped by user");
       sendResponse({ ok: true });
       return;
     }
 
     if (msg.type === "AI_BRIDGE_RESEND") {
+      requireExtensionPage(sender, "Resend");
       if (!state.sessionActive || !state.running) throw new Error("Start or resume the bridge session first.");
       if (state.awaitingHuman) throw new Error("Answer the pending human-input request before resending.");
       const side = String(msg.side || "").toUpperCase();
@@ -2335,6 +2645,7 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
     }
 
     if (msg.type === "AI_BRIDGE_INTERJECT") {
+      requireExtensionPage(sender, "Interject");
       if (!state.sessionActive) throw new Error("Start or resume a bridge session before interjecting.");
       if (state.awaitingHuman) throw new Error("Answer the pending human-input request first; use the modal so the requesting AI receives your answer directly.");
       const text = String(msg.text || "").trim();
@@ -2368,18 +2679,21 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
     }
 
     if (msg.type === "AI_BRIDGE_HUMAN_REOPEN") {
+      requireExtensionPage(sender, "Reopen human request");
       const request = await reopenSuppressedHumanRequest(msg.requestId);
       sendResponse({ ok: true, requestId: request.id });
       return;
     }
 
     if (msg.type === "AI_BRIDGE_HUMAN_SUPPRESS") {
+      requireExtensionPage(sender, "Suppress human request");
       const result = await suppressPendingHumanRequest({ stop: Boolean(msg.stop) });
       sendResponse({ ok: true, ...result });
       return;
     }
 
     if (msg.type === "AI_BRIDGE_HUMAN_REPLY") {
+      requireExtensionPage(sender, "Human reply");
       if (!state.sessionActive || !state.awaitingHuman || !state.pendingHuman) {
         throw new Error("There is no pending human-input request.");
       }
@@ -2437,12 +2751,15 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
     }
 
     if (msg.type === "AI_BRIDGE_RESPONSE") {
-      if (!state.sessionActive || !sender.tab) {
+      if (!state.sessionActive) {
         sendResponse({ ok: false, ignored: true });
         return;
       }
-
-      const side = sideForTab(sender.tab.id);
+      const side = boundSideFromSender(sender);
+      if (!side) {
+        sendResponse({ ok: false, ignored: true, error: "Response did not come from a bound AI A/B/C tab." });
+        return;
+      }
       if (state.awaitingHuman && !isBatchWorkMode()) {
         sendResponse({ ok: false, awaitingHuman: true });
         return;

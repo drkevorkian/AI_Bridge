@@ -10,6 +10,7 @@ const supported = [
 const $ = id => document.getElementById(id);
 const THEME_KEY = "aiBridgeTheme";
 const PANE_WIDTH_KEY = "aiBridgeControlPaneWidth";
+const FRESH_KEY = "aiBridgeFreshOnStart";
 const DEFAULT_PANE_PCT = 40;
 const MIN_PANE_PCT = 24;
 const MAX_PANE_PCT = 70;
@@ -22,12 +23,72 @@ let autoScroll = true;
 let selectedSourceFiles = [];
 let activeHumanModalKey = "";
 const WORK_MODE_INFO = {
-  relay: { label: "Relay", minTurns: 1, help: "Normal sequential A → B → C relay. Each AI receives shared updates from the previous agents." },
-  collaborate: { label: "Collaborate", minTurns: 1, help: "Sequential shared-deliverable mode. Each AI improves one common result using its assigned specialty." },
-  compete: { label: "Compete", minTurns: 3, help: "All three AIs receive the same objective simultaneously and submit independently. They do not see competitor answers during the pass." },
-  parallel: { label: "Parallel Independent", minTurns: 3, help: "All three AIs work simultaneously and independently on complementary versions of the same objective." },
-  review: { label: "Peer Review", minTurns: 6, help: "Phase 1: all three answer independently. Phase 2: each AI receives the other two answers and critiques them simultaneously." },
-  mesh: { label: "Direct Mesh", minTurns: 1, help: "One AI speaks at a time, but each model can route its completed response directly to a specific teammate with a final-line SEND TO command. Without a command, routing falls back to the next AI." }
+  relay: {
+    label: "Relay",
+    minTurns: 1,
+    help: [
+      "Timing: sequential A → B → C. One AI at a time.",
+      "Peer visibility: every later AI sees accumulated shared updates before it responds, and continues the same problem.",
+      "Cycle: 3 responses (A, then B, then C) make one lap.",
+      "Main AI: first speaker, and the recipient of queued human interjections.",
+      "Best for: investigations, debugging, and iterative design where each specialist builds on prior work."
+    ].join("\n")
+  },
+  collaborate: {
+    label: "Collaborate",
+    minTurns: 1,
+    help: [
+      "Timing: sequential like Relay. One AI at a time.",
+      "Peer visibility: every later AI sees the accumulated shared deliverable and revises that same artifact.",
+      "Cycle: 3 responses make one lap of the shared document/design/code.",
+      "Main AI: first speaker, and the recipient of queued human interjections.",
+      "Best for: writing one final design, spec, or codebase where each specialist improves the same artifact."
+    ].join("\n")
+  },
+  compete: {
+    label: "Compete",
+    minTurns: 3,
+    help: [
+      "Timing: A, B, and C start simultaneously.",
+      "Peer visibility: they do not see each other's answers during the primary pass.",
+      "Cycle: 3 independent submissions make one compete pass.",
+      "Main AI: still the recipient of queued human interjections; it is not a sequential first speaker in this mode.",
+      "Best for: independent solutions, avoiding anchoring, then comparing results."
+    ].join("\n")
+  },
+  parallel: {
+    label: "Parallel Independent",
+    minTurns: 3,
+    help: [
+      "Timing: A, B, and C start simultaneously.",
+      "Peer visibility: they work independently on their assigned jobs rather than solving the identical problem three times.",
+      "Cycle: 3 parallel job completions make one pass.",
+      "Main AI: recipient of queued human interjections; all three still start together.",
+      "Best for: work that decomposes into backend / frontend / research / security tracks."
+    ].join("\n")
+  },
+  review: {
+    label: "Peer Review",
+    minTurns: 6,
+    help: [
+      "Timing: two simultaneous phases.",
+      "Peer visibility: phase 1 is independent (no peer answers). Phase 2 gives each AI the other two results and requests critique.",
+      "Cycle: 6 responses (3 primary + 3 critiques) make one complete review.",
+      "Main AI: recipient of queued human interjections; it is not a sequential first speaker.",
+      "Best for: high-confidence validation and catching mistakes or bias."
+    ].join("\n")
+  },
+  mesh: {
+    label: "Direct Mesh",
+    minTurns: 1,
+    help: [
+      "Timing: one AI at a time.",
+      "Peer visibility: the responding AI sees accumulated shared updates, then can choose the next teammate.",
+      "Cycle: 1 response per handoff. Put SEND TO: AI A|B|C (or an unambiguous label) on the final non-empty line. Without a valid target, normal next-agent routing applies.",
+      "Main AI: first speaker unless a prior handoff changed the cursor, and the recipient of queued human interjections.",
+      "Best for: dynamic workflows where the right next specialist depends on what was just discovered."
+    ].join("\n")
+  }
 };
 
 function selectedWorkMode() {
@@ -46,7 +107,11 @@ function updateWorkModeUI() {
     : "Choose the first speaker and Main AI for queued human interjections.";
   const maxHelp = $("maxTurns")?.parentElement?.querySelector(".field-help");
   if (maxHelp) {
-    maxHelp.innerHTML = `<strong>-1 = Infinite</strong> · ${info.minTurns > 1 ? `${info.minTurns}–10000 for this mode` : "1–10000 = finite"}`;
+    maxHelp.replaceChildren();
+    const strong = document.createElement("strong");
+    strong.textContent = "-1 = Infinite";
+    const suffix = info.minTurns > 1 ? ` · ${info.minTurns}–10000 for this mode` : " · 1–10000 = finite";
+    maxHelp.append(strong, document.createTextNode(suffix));
   }
 }
 
@@ -834,6 +899,9 @@ function updateControls(s) {
   $("workMode").disabled = Boolean(s.sessionActive);
   if ($("teamRules")) $("teamRules").disabled = false;
   if ($("applyTeamRules")) $("applyTeamRules").disabled = false;
+  if ($("cloudPull")) $("cloudPull").disabled = Boolean(s.sessionActive);
+  if ($("cloudPush")) $("cloudPush").disabled = false;
+  if ($("cloudConnect")) $("cloudConnect").disabled = false;
   $("sendInterject").disabled = !s.sessionActive || s.awaitingHuman;
   $("interjectText").disabled = !s.sessionActive || s.awaitingHuman;
   $("interjectNow").disabled = !s.sessionActive || s.awaitingHuman;
@@ -944,6 +1012,9 @@ chrome.storage.onChanged.addListener((changes, area) => {
   if (Object.prototype.hasOwnProperty.call(changes, PANE_WIDTH_KEY)) {
     applyPaneWidth(changes[PANE_WIDTH_KEY].newValue ?? DEFAULT_PANE_PCT);
   }
+  if (Object.prototype.hasOwnProperty.call(changes, FRESH_KEY) && $("freshOnStart")) {
+    $("freshOnStart").checked = changes[FRESH_KEY].newValue !== false;
+  }
 });
 
 async function openFreshChats(sides) {
@@ -1025,6 +1096,11 @@ $("workMode").addEventListener("change", () => {
   $("maxTurns").classList.remove("validation-error");
 });
 $("maxTurns").addEventListener("input", () => $("maxTurns").classList.remove("validation-error"));
+if ($("freshOnStart")) {
+  $("freshOnStart").addEventListener("change", async () => {
+    await chrome.storage.local.set({ [FRESH_KEY]: $("freshOnStart").checked });
+  });
+}
 
 $("start").addEventListener("click", async () => {
   const tabError = validateThreeTabs();
@@ -1256,7 +1332,145 @@ $("jumpLatest").addEventListener("click", () => {
   $("jumpLatest").classList.add("hidden");
 });
 
+async function loadFreshOnStart() {
+  const stored = await chrome.storage.local.get(FRESH_KEY);
+  if (Object.prototype.hasOwnProperty.call(stored, FRESH_KEY) && $("freshOnStart")) {
+    $("freshOnStart").checked = stored[FRESH_KEY] !== false;
+  }
+}
+
+function currentPanePct() {
+  const shell = document.querySelector(".app-shell");
+  const raw = shell ? parseFloat(getComputedStyle(shell).getPropertyValue("--control-pane-width")) : DEFAULT_PANE_PCT;
+  return clampPanePct(raw);
+}
+
+function showCloudNotice(text, isError = false) {
+  const el = $("cloudNotice");
+  if (!el) return;
+  if (!text) {
+    el.classList.add("hidden");
+    el.textContent = "";
+    el.classList.remove("error");
+    return;
+  }
+  el.classList.remove("hidden");
+  el.classList.toggle("error", Boolean(isError));
+  el.textContent = text;
+}
+
+function collectCloudSettings() {
+  return {
+    theme: document.documentElement.dataset.theme || "blizzard",
+    paneWidth: currentPanePct(),
+    workMode: selectedWorkMode(),
+    startSide: $("startSide")?.value || "A",
+    maxTurns: Number($("maxTurns")?.value),
+    delayMs: Number($("delayMs")?.value),
+    freshOnStart: Boolean($("freshOnStart")?.checked),
+    jobA: $("jobA")?.value || "",
+    jobB: $("jobB")?.value || "",
+    jobC: $("jobC")?.value || "",
+    teamRules: $("teamRules")?.value || "",
+    history: latestState?.history || { jobs: [], commands: [], rules: [] }
+  };
+}
+
+function applyCloudSettingsToForm(settings) {
+  if (!settings || typeof settings !== "object") return;
+  if (settings.theme) applyTheme(settings.theme);
+  if (settings.paneWidth != null) applyPaneWidth(settings.paneWidth);
+  if ($("freshOnStart")) $("freshOnStart").checked = settings.freshOnStart !== false;
+  if ($("workMode") && WORK_MODE_INFO[settings.workMode]) $("workMode").value = settings.workMode;
+  if ($("startSide") && SIDES.includes(settings.startSide)) $("startSide").value = settings.startSide;
+  if (Number.isInteger(Number(settings.maxTurns))) $("maxTurns").value = String(settings.maxTurns);
+  if (Number.isFinite(Number(settings.delayMs))) $("delayMs").value = String(settings.delayMs);
+  if (typeof settings.jobA === "string") $("jobA").value = settings.jobA;
+  if (typeof settings.jobB === "string") $("jobB").value = settings.jobB;
+  if (typeof settings.jobC === "string") $("jobC").value = settings.jobC;
+  if (typeof settings.teamRules === "string") $("teamRules").value = settings.teamRules;
+  if (settings.history) renderHistory(settings.history);
+  updateWorkModeUI();
+}
+
+async function refreshCloudStatus() {
+  const pill = $("cloudStatusPill");
+  try {
+    const res = await chrome.runtime.sendMessage({ type: "AI_BRIDGE_CLOUD_STATUS" });
+    if (!res?.ok) throw new Error(res?.error || "Cloud status unavailable");
+    let label = "Local only";
+    let state = "local";
+    if (res.googleLinked) {
+      label = "Google linked";
+      state = "google";
+    } else if (res.chromeSyncHasCopy) {
+      label = "Chrome Sync copy";
+      state = "sync";
+    } else if (res.chromeSyncAvailable) {
+      label = "Local · Sync optional";
+      state = "local";
+    }
+    if (pill) {
+      pill.textContent = label;
+      pill.dataset.state = state;
+    }
+    if (!res.googleConfigured && $("cloudConnect")) {
+      $("cloudConnect").title = "Needs a Google Cloud OAuth client ID in the packaged manifest. Push/Pull still work through Chrome Sync.";
+    }
+  } catch (err) {
+    if (pill) {
+      pill.textContent = "Sync unavailable";
+      pill.dataset.state = "local";
+    }
+    showCloudNotice(err.message, true);
+  }
+}
+
+async function runCloudAction(button, type, extra = {}) {
+  if (!button) return;
+  const old = button.textContent;
+  button.disabled = true;
+  button.textContent = "Working…";
+  showCloudNotice();
+  try {
+    const res = await chrome.runtime.sendMessage({ type, ...extra });
+    if (!res?.ok) throw new Error(res?.error || "Cloud action failed");
+    if (res.settings) applyCloudSettingsToForm(res.settings);
+    if (type === "AI_BRIDGE_CLOUD_PUSH") {
+      showCloudNotice(`Settings pushed through Chrome Sync (${res.bytes || 0} bytes). Transcripts, Vault files, and tokens were not included.`);
+    } else if (type === "AI_BRIDGE_CLOUD_PULL") {
+      showCloudNotice("Settings pulled from Chrome Sync. Transcripts and Vault files stayed local.");
+      await refreshState();
+    } else if (type === "AI_BRIDGE_CLOUD_CONNECT") {
+      showCloudNotice(res.googleLinked
+        ? "Google account linked. Tokens stay in Chrome's identity cache and are never stored by AI Bridge."
+        : "Google login is not configured yet.");
+    }
+    await refreshCloudStatus();
+  } catch (err) {
+    showCloudNotice(err.message, true);
+    $("status").textContent = err.message;
+  } finally {
+    button.textContent = old;
+    button.disabled = false;
+    if (latestState) updateControls(latestState);
+  }
+}
+
+if ($("cloudPush")) {
+  $("cloudPush").addEventListener("click", () => runCloudAction($("cloudPush"), "AI_BRIDGE_CLOUD_PUSH", { settings: collectCloudSettings() }));
+}
+if ($("cloudPull")) {
+  $("cloudPull").addEventListener("click", () => runCloudAction($("cloudPull"), "AI_BRIDGE_CLOUD_PULL"));
+}
+if ($("cloudConnect")) {
+  $("cloudConnect").addEventListener("click", () => runCloudAction($("cloudConnect"), "AI_BRIDGE_CLOUD_CONNECT"));
+}
+
 initPaneSplitter();
-Promise.all([loadTheme(), loadPaneWidth(), loadTabs({ preserve: false })]).then(refreshState);
+Promise.all([loadTheme(), loadPaneWidth(), loadFreshOnStart(), loadTabs({ preserve: false })]).then(async () => {
+  await refreshState();
+  await refreshCloudStatus();
+});
 setInterval(refreshState, 750);
 setInterval(() => updateRoundTimers(latestState), 100);
