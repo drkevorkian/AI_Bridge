@@ -213,6 +213,7 @@ const cloudSandbox = {
   INFINITE_TURNS: -1,
   WORK_MODES: new Set(["relay", "collaborate", "compete", "parallel", "review", "mesh"]),
   ALLOWED_CLOUD_THEMES: new Set(["blizzard", "ghostwhite", "midnight", "slate", "light", "solarized", "ocean", "terminal"]),
+  ALLOWED_CLOUD_LAYOUTS: new Set(["studio", "classic"]),
   CLOUD_SETTINGS_VERSION: 1,
   DEFAULT_CHECKPOINT_EVERY: 5,
   DEFAULT_STUCK_MINUTES: 30

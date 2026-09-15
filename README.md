@@ -31,7 +31,7 @@ Unpacked Chrome extensions cannot overwrite themselves. After the first install,
 
 The dashboard header has **Session** and **Settings**.
 
-- **Appearance** — theme, applied immediately on this machine
+- **Appearance** — Studio/Classic layout and theme, applied immediately on this machine
 - **Account & sync** — optional Push / Pull / Link / Unlink
 - **Google Drive login** — paste a Web-application OAuth client ID for an unpacked build
 - **Updates** — check GitHub, download ZIP, optional daily alarm
@@ -66,6 +66,7 @@ Do not add a placeholder `oauth2` block to `manifest.json`. Do not add a manifes
 Synced whitelist:
 
 - theme
+- dashboard layout (Studio / Classic)
 - pane width
 - work strategy
 - Main AI preference
@@ -183,9 +184,9 @@ Pause and Stop explicitly cancel held stale-completion promises. New generations
 
 ## Dashboard
 
-The dashboard uses a resizable control/transcript split. Default is **40% / 60%**.
+The dashboard has two layouts. **Studio** is the default for new installs: a transcript-first workspace with the team on the left, live output in the center, tools on the right, and the objective / human interjection composer along the bottom. **Classic** is the original resizable control/transcript split (default **40% / 60%**). Switch from the header chips or **Settings → Dashboard layout**. The choice is stored locally and is included in Push/Pull.
 
-Core controls include bind A/B/C, jobs, Team rules, work strategy, Main AI, objective, **Max team cycles**, recovery-summary interval, stuck timeout, Start/Pause/Resume/Stop/Resend, fresh chats, human interjection, Suppressed Requests, Shared Vault, history, dual Total/Current timers per LLM, and a **Settings** tab for theme, Google login, Chrome Sync, and GitHub updates.
+Core controls include bind A/B/C, jobs, Team rules, work strategy, Main AI, objective, **Max team cycles**, recovery-summary interval, stuck timeout, Start/Pause/Resume/Stop/Resend, fresh chats, human interjection, Suppressed Requests, Shared Vault, history, dual Total/Current timers per LLM, and a **Settings** tab for layout, theme, Google login, Chrome Sync, and GitHub updates.
 
 The runtime header shows `Cycle X / Y`. Each AI card shows **Total** (session working time, including aborted/stuck attempts) and **Current** (the live turn, or the last completed duration when idle).
 

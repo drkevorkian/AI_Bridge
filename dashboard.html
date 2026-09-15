@@ -1,5 +1,5 @@
 <!doctype html>
-<html lang="en">
+<html lang="en" data-layout="studio">
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width,initial-scale=1">
@@ -9,51 +9,67 @@
     .icon-btn { display: inline-flex; align-items: center; justify-content: center; gap: 6px; }
     .btn-icon { width: 13px; height: 13px; flex: 0 0 auto; }
   </style>
+  <script>
+    (function () {
+      try {
+        var hint = localStorage.getItem("aiBridgeLayoutHint");
+        document.documentElement.dataset.layout = hint === "classic" ? "classic" : "studio";
+      } catch (_) {
+        document.documentElement.dataset.layout = "studio";
+      }
+    })();
+  </script>
 </head>
 <body>
   <div class="app-shell">
     <aside id="controlPanel" class="control-panel">
-      <header class="brand-block">
-        <div>
-          <div class="eyebrow">AI BRIDGE <span id="versionBadge" class="version-badge">v1.16.3</span></div>
-          <h1>Three agents. One workspace.</h1>
-        </div>
-        <div class="header-tools">
-          <div class="view-tabs" role="tablist" aria-label="Dashboard views">
-            <button id="viewSessionBtn" class="view-tab active" type="button" role="tab" aria-selected="true" aria-controls="sessionView">Session</button>
-            <button id="viewSettingsBtn" class="view-tab" type="button" role="tab" aria-selected="false" aria-controls="settingsView">Settings</button>
+      <div class="studio-slot-topbar">
+        <header class="brand-block">
+          <div>
+            <div class="eyebrow">AI BRIDGE <span id="versionBadge" class="version-badge">v1.16.3</span></div>
+            <h1>Three agents. One workspace.</h1>
           </div>
-          <div class="session-status-group">
-            <div id="sessionPill" class="session-pill idle">Idle</div>
-            <div id="powerPill" class="power-pill" hidden title="System keep-awake is released.">Keep-awake</div>
+          <div class="header-tools">
+            <div class="view-tabs" role="tablist" aria-label="Dashboard views">
+              <button id="viewSessionBtn" class="view-tab active" type="button" role="tab" aria-selected="true" aria-controls="sessionView">Session</button>
+              <button id="viewSettingsBtn" class="view-tab" type="button" role="tab" aria-selected="false" aria-controls="settingsView">Settings</button>
+            </div>
+            <div class="layout-switch" role="group" aria-label="Dashboard layout">
+              <button id="layoutStudioBtn" class="layout-chip active" type="button" aria-pressed="true">Studio</button>
+              <button id="layoutClassicBtn" class="layout-chip" type="button" aria-pressed="false">Classic</button>
+            </div>
+            <div class="session-status-group">
+              <div id="sessionPill" class="session-pill idle">Idle</div>
+              <div id="powerPill" class="power-pill" hidden title="System keep-awake is released.">Keep-awake</div>
+            </div>
           </div>
-        </div>
-      </header>
+        </header>
+
+        <section class="panel-section runtime-card">
+          <div class="section-heading">
+            <span>Runtime</span>
+            <span id="turnCounter" class="muted">0 / ∞</span>
+          </div>
+          <div id="status" class="status-text">Idle</div>
+          <div class="control-grid four">
+            <button id="start" class="primary icon-btn" type="button"><svg class="btn-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polygon points="6 3 20 12 6 21 6 3"/></svg>Start</button>
+            <button id="pause" class="secondary icon-btn" disabled type="button"><svg class="btn-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="14" y="4" width="4" height="16" rx="1"/><rect x="6" y="4" width="4" height="16" rx="1"/></svg>Pause</button>
+            <button id="resume" class="resume icon-btn" disabled type="button"><svg class="btn-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polygon points="6 3 20 12 6 21 6 3"/></svg>Resume</button>
+            <button id="stop" class="danger icon-btn" disabled type="button"><svg class="btn-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="6" y="6" width="12" height="12" rx="2"/></svg>Stop</button>
+          </div>
+          <div class="fresh-chat-row">
+            <label class="check-line" for="freshOnStart">
+              <input id="freshOnStart" type="checkbox" checked>
+              <span>Start in fresh AI chats</span>
+            </label>
+            <button id="newAllChats" class="tiny ghost" type="button">New AI chats</button>
+          </div>
+          <div class="field-help">Uses the three selected, already-open AI tabs. AI Bridge never opens replacement AI tabs for this action.</div>
+        </section>
+      </div>
 
       <div id="sessionView">
-      <section class="panel-section runtime-card">
-        <div class="section-heading">
-          <span>Runtime</span>
-          <span id="turnCounter" class="muted">0 / ∞</span>
-        </div>
-        <div id="status" class="status-text">Idle</div>
-        <div class="control-grid four">
-          <button id="start" class="primary icon-btn" type="button"><svg class="btn-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polygon points="6 3 20 12 6 21 6 3"/></svg>Start</button>
-          <button id="pause" class="secondary icon-btn" disabled type="button"><svg class="btn-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="14" y="4" width="4" height="16" rx="1"/><rect x="6" y="4" width="4" height="16" rx="1"/></svg>Pause</button>
-          <button id="resume" class="resume icon-btn" disabled type="button"><svg class="btn-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polygon points="6 3 20 12 6 21 6 3"/></svg>Resume</button>
-          <button id="stop" class="danger icon-btn" disabled type="button"><svg class="btn-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="6" y="6" width="12" height="12" rx="2"/></svg>Stop</button>
-        </div>
-        <div class="fresh-chat-row">
-          <label class="check-line" for="freshOnStart">
-            <input id="freshOnStart" type="checkbox" checked>
-            <span>Start in fresh AI chats</span>
-          </label>
-          <button id="newAllChats" class="tiny ghost" type="button">New AI chats</button>
-        </div>
-        <div class="field-help">Uses the three selected, already-open AI tabs. AI Bridge never opens replacement AI tabs for this action.</div>
-      </section>
-
-      <section class="panel-section">
+      <section class="panel-section team-section studio-slot-team">
         <div class="section-heading"><span>Team</span><span class="muted">A → B → C</span></div>
 
         <article class="agent-card agent-a">
@@ -121,6 +137,7 @@
         </div>
       </section>
 
+      <div class="studio-slot-tools">
       <details id="vaultPanel" class="vault-panel" open>
         <summary>
           <span class="vault-summary-title">Shared Vault</span>
@@ -137,7 +154,7 @@
         </div>
       </details>
 
-      <section class="panel-section">
+      <section class="panel-section strategy-section">
         <div class="work-mode-card">
           <div class="field-row">
             <label for="workMode">Work strategy</label>
@@ -170,7 +187,7 @@
         <textarea id="teamRules" rows="6" placeholder="Standing rules every teammate must follow, regardless of assigned job..."></textarea>
         <div class="field-help">Binds A, B, and C on every later turn — including a live session. You do not need to Stop/Start. Empty means no standing team rules.</div>
 
-        <div class="history-block command-history-block">
+        <div class="history-block command-history-block rules-history-block">
           <div class="history-heading">
             <span>Previous team rules</span>
             <button id="clearRulesHistory" class="tiny ghost" type="button">Clear</button>
@@ -179,20 +196,9 @@
             <div class="history-empty">No previous team rules yet.</div>
           </div>
         </div>
+      </section>
 
-        <label for="prompt">Primary objective</label>
-        <textarea id="prompt" rows="7" placeholder="Define the objective shared by all three agents..."></textarea>
-
-        <div class="history-block command-history-block">
-          <div class="history-heading">
-            <span>Previous commands</span>
-            <button id="clearCommandHistory" class="tiny ghost" type="button">Clear</button>
-          </div>
-          <div id="commandHistory" class="history-list">
-            <div class="history-empty">No previous commands yet.</div>
-          </div>
-        </div>
-
+      <section class="panel-section files-section">
         <section class="source-section" aria-labelledby="sourceHeading">
           <div class="section-heading">
             <span id="sourceHeading">Local code / files</span>
@@ -214,27 +220,29 @@
           <div id="sourceList" class="source-list"></div>
         </section>
 
-        <div class="split-fields">
-          <div>
-            <label for="maxCycles">Max team cycles</label>
-            <input id="maxCycles" type="number" min="-1" max="10000" step="1" value="-1" inputmode="numeric">
-            <div class="field-help"><strong>-1 = Infinite</strong> · 1–10000 = finite</div>
+        <div class="timing-section">
+          <div class="split-fields">
+            <div>
+              <label for="maxCycles">Max team cycles</label>
+              <input id="maxCycles" type="number" min="-1" max="10000" step="1" value="-1" inputmode="numeric">
+              <div class="field-help"><strong>-1 = Infinite</strong> · 1–10000 = finite</div>
+            </div>
+            <div>
+              <label for="delayMs">Relay delay (ms)</label>
+              <input id="delayMs" type="number" min="0" max="30000" step="100" value="1500" inputmode="numeric">
+            </div>
           </div>
-          <div>
-            <label for="delayMs">Relay delay (ms)</label>
-            <input id="delayMs" type="number" min="0" max="30000" step="100" value="1500" inputmode="numeric">
-          </div>
-        </div>
-        <div class="split-fields">
-          <div>
-            <label for="checkpointEveryNCycles">Recovery summary every N cycles</label>
-            <input id="checkpointEveryNCycles" type="number" min="1" max="50" step="1" value="5" inputmode="numeric">
-            <div class="field-help">After cycle 1, then every N. Local only. Does not consume a team cycle.</div>
-          </div>
-          <div>
-            <label for="stuckTimeoutMinutes">Stuck timeout (minutes)</label>
-            <input id="stuckTimeoutMinutes" type="number" min="5" max="120" step="1" value="30" inputmode="numeric">
-            <div class="field-help">Default 30. Range 5–120. Watchdog uses chrome.alarms.</div>
+          <div class="split-fields">
+            <div>
+              <label for="checkpointEveryNCycles">Recovery summary every N cycles</label>
+              <input id="checkpointEveryNCycles" type="number" min="1" max="50" step="1" value="5" inputmode="numeric">
+              <div class="field-help">After cycle 1, then every N. Local only. Does not consume a team cycle.</div>
+            </div>
+            <div>
+              <label for="stuckTimeoutMinutes">Stuck timeout (minutes)</label>
+              <input id="stuckTimeoutMinutes" type="number" min="5" max="120" step="1" value="30" inputmode="numeric">
+              <div class="field-help">Default 30. Range 5–120. Watchdog uses chrome.alarms.</div>
+            </div>
           </div>
         </div>
       </section>
@@ -251,13 +259,31 @@
           </div>
         </div>
       </details>
+      </div>
 
-      <section class="human-panel interject-panel">
-        <div class="section-heading"><span>Human interjection</span><span class="muted">queued for Main AI</span></div>
-        <textarea id="interjectText" rows="3" placeholder="Add your 2 cents, correction, priority, or steering note..."></textarea>
-        <button id="sendInterject" class="human-send" type="button" disabled>Queue for Main AI</button>
-        <div class="field-help">Safe delivery: your note is queued now, but it is not injected into the currently queued model. It is sent with the Main AI's next group turn, then becomes shared context for later teammates.</div>
-      </section>
+      <div class="studio-slot-composer">
+        <section class="panel-section objective-section">
+          <label for="prompt">Primary objective</label>
+          <textarea id="prompt" rows="7" placeholder="Define the objective shared by all three agents..."></textarea>
+
+          <div class="history-block command-history-block">
+            <div class="history-heading">
+              <span>Previous commands</span>
+              <button id="clearCommandHistory" class="tiny ghost" type="button">Clear</button>
+            </div>
+            <div id="commandHistory" class="history-list">
+              <div class="history-empty">No previous commands yet.</div>
+            </div>
+          </div>
+        </section>
+
+        <section class="human-panel interject-panel">
+          <div class="section-heading"><span>Human interjection</span><span class="muted">queued for Main AI</span></div>
+          <textarea id="interjectText" rows="3" placeholder="Add your 2 cents, correction, priority, or steering note..."></textarea>
+          <button id="sendInterject" class="human-send" type="button" disabled>Queue for Main AI</button>
+          <div class="field-help">Safe delivery: your note is queued now, but it is not injected into the currently queued model. It is sent with the Main AI's next group turn, then becomes shared context for later teammates.</div>
+        </section>
+      </div>
       </div>
 
       <div id="settingsView" class="hidden">
@@ -265,6 +291,12 @@
           <div class="section-heading">
             <span id="appearanceHeading">Appearance</span>
           </div>
+          <label for="layoutSelect">Dashboard layout</label>
+          <select id="layoutSelect" class="theme-select" aria-label="Dashboard layout">
+            <option value="studio">Studio — transcript first</option>
+            <option value="classic">Classic — stacked control pane</option>
+          </select>
+          <div class="field-help">Studio is the default for new installs. Classic keeps the original left-pane stack. The choice is stored on this machine and is included in Push/Pull.</div>
           <label for="themeSelect">Theme</label>
           <select id="themeSelect" class="theme-select" aria-label="Theme">
             <option value="blizzard">Blizzard Blue</option>
@@ -346,6 +378,7 @@
           <h2>Shared transcript</h2>
         </div>
         <div class="workspace-actions">
+          <button id="toolsToggle" class="ghost studio-tools-toggle" type="button">Tools</button>
           <button id="interjectNow" class="ghost" type="button" disabled>Interject</button>
           <button id="jumpLatest" class="ghost hidden">Jump to latest</button>
           <button id="refreshTabs" class="ghost">Refresh AI tabs</button>
@@ -354,7 +387,9 @@
 
       <div id="transcript" class="transcript" aria-live="polite" aria-label="AI Bridge transcript">
         <div id="emptyTranscript" class="empty-state">
-          <div class="empty-icon">↔</div>
+          <div class="empty-icon" aria-hidden="true">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M7 7H3v4"/><path d="M3 7c2.5-3 7-4 11-2"/><path d="M17 17h4v-4"/><path d="M21 17c-2.5 3-7 4-11 2"/></svg>
+          </div>
           <h3>No AI output yet</h3>
           <p>Start a session and completed responses from AI A, B, and C will appear here in sequence.</p>
         </div>

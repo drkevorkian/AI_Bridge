@@ -2754,8 +2754,10 @@ const CLOUD_SYNC_META_KEY = "bridgeCloudSettings.meta";
 const THEME_STORAGE_KEY = "aiBridgeTheme";
 const PANE_WIDTH_STORAGE_KEY = "aiBridgeControlPaneWidth";
 const FRESH_ON_START_KEY = "aiBridgeFreshOnStart";
+const LAYOUT_STORAGE_KEY = "aiBridgeLayout";
 const GOOGLE_LINKED_KEY = "bridgeGoogleLinked";
 const ALLOWED_CLOUD_THEMES = new Set(["blizzard", "ghostwhite", "midnight", "slate", "light", "solarized", "ocean", "terminal"]);
+const ALLOWED_CLOUD_LAYOUTS = new Set(["studio", "classic"]);
 const CONTENT_SCRIPT_MESSAGE_TYPES = new Set(["AI_BRIDGE_FETCH_ARTIFACT", "AI_BRIDGE_RESPONSE"]);
 const SYNC_ITEM_MAX_CHARS = 7000;
 const CLOUD_SYNC_MAX_BYTES = 90000;
@@ -2789,7 +2791,7 @@ function sanitizeHistoryForCloud(kind, items, limit) {
 function sanitizeCloudSettings(raw, options = {}) {
   // Whitelist reconstruction. Anything not copied here — transcripts, Vault
   // bytes, source files, tab IDs, tokens, live session, recoveryCheckpoint,
-  // OAuth client IDs — is dropped.
+  // OAuth client IDs — is dropped. layout is studio|classic only.
   const src = raw && typeof raw === "object" && !Array.isArray(raw) ? raw : {};
   const stamp = options.stamp !== false;
   let maxTurns = INFINITE_TURNS;
@@ -2802,6 +2804,7 @@ function sanitizeCloudSettings(raw, options = {}) {
     schemaVersion: CLOUD_SETTINGS_VERSION,
     updatedAt: !stamp && Number.isFinite(incomingUpdated) && incomingUpdated > 0 ? incomingUpdated : Date.now(),
     theme: ALLOWED_CLOUD_THEMES.has(src.theme) ? src.theme : "blizzard",
+    layout: ALLOWED_CLOUD_LAYOUTS.has(src.layout) ? src.layout : "studio",
     paneWidth: clampCloudPane(src.paneWidth),
     workMode: normalizeWorkMode(src.workMode),
     startSide: SIDES.includes(src.startSide) ? src.startSide : "A",
@@ -3548,6 +3551,7 @@ async function pullCloudSettings() {
   await chrome.storage.local.set({
     [CLOUD_SYNC_KEY]: winner.settings,
     [THEME_STORAGE_KEY]: winner.settings.theme,
+    [LAYOUT_STORAGE_KEY]: winner.settings.layout || "studio",
     [PANE_WIDTH_STORAGE_KEY]: winner.settings.paneWidth,
     [FRESH_ON_START_KEY]: winner.settings.freshOnStart
   });

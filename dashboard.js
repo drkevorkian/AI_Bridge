@@ -11,10 +11,13 @@ const $ = id => document.getElementById(id);
 const THEME_KEY = "aiBridgeTheme";
 const PANE_WIDTH_KEY = "aiBridgeControlPaneWidth";
 const FRESH_KEY = "aiBridgeFreshOnStart";
+const LAYOUT_KEY = "aiBridgeLayout";
 const DEFAULT_PANE_PCT = 40;
 const MIN_PANE_PCT = 24;
 const MAX_PANE_PCT = 70;
 const THEMES = new Set(["blizzard", "ghostwhite", "midnight", "slate", "light", "solarized", "ocean", "terminal"]);
+const LAYOUTS = new Set(["studio", "classic"]);
+const DEFAULT_LAYOUT = "studio";
 let tabsById = new Map();
 let latestState = null;
 let lastUpdateResult = null;
@@ -127,9 +130,41 @@ function applyTheme(theme) {
   if ($("themeSelect")) $("themeSelect").value = chosen;
 }
 
+function applyLayout(layout) {
+  // Studio is the default for new installs. Classic is the original stacked pane.
+  // Unknown values fail closed to Studio rather than inventing a third chrome.
+  const chosen = LAYOUTS.has(layout) ? layout : DEFAULT_LAYOUT;
+  document.documentElement.dataset.layout = chosen;
+  try { localStorage.setItem("aiBridgeLayoutHint", chosen); } catch (_) {}
+  if ($("layoutSelect")) $("layoutSelect").value = chosen;
+  const studioBtn = $("layoutStudioBtn");
+  const classicBtn = $("layoutClassicBtn");
+  if (studioBtn) {
+    studioBtn.classList.toggle("active", chosen === "studio");
+    studioBtn.setAttribute("aria-pressed", chosen === "studio" ? "true" : "false");
+  }
+  if (classicBtn) {
+    classicBtn.classList.toggle("active", chosen === "classic");
+    classicBtn.setAttribute("aria-pressed", chosen === "classic" ? "true" : "false");
+  }
+  document.body.classList.toggle("is-studio", chosen === "studio");
+  document.body.classList.toggle("is-classic", chosen === "classic");
+}
+
 async function loadTheme() {
   const stored = await chrome.storage.local.get(THEME_KEY);
   applyTheme(stored?.[THEME_KEY]);
+}
+
+async function loadLayout() {
+  const stored = await chrome.storage.local.get(LAYOUT_KEY);
+  applyLayout(stored?.[LAYOUT_KEY] || DEFAULT_LAYOUT);
+}
+
+async function persistLayout(layout) {
+  const chosen = LAYOUTS.has(layout) ? layout : DEFAULT_LAYOUT;
+  applyLayout(chosen);
+  await chrome.storage.local.set({ [LAYOUT_KEY]: chosen });
 }
 
 function clampPanePct(value) {
@@ -181,8 +216,11 @@ function showDashboardView(view) {
   const settingsView = $("settingsView");
   const sessionBtn = $("viewSessionBtn");
   const settingsBtn = $("viewSettingsBtn");
+  const shell = document.querySelector(".app-shell");
   if (sessionView) sessionView.classList.toggle("hidden", isSettings);
   if (settingsView) settingsView.classList.toggle("hidden", !isSettings);
+  if (shell) shell.classList.toggle("is-settings", isSettings);
+  if (isSettings && shell) shell.classList.remove("tools-open");
   if (sessionBtn) {
     sessionBtn.classList.toggle("active", !isSettings);
     sessionBtn.setAttribute("aria-selected", isSettings ? "false" : "true");
@@ -1098,9 +1136,32 @@ $("themeSelect").addEventListener("change", async event => {
   await chrome.storage.local.set({ [THEME_KEY]: theme });
 });
 
+if ($("layoutSelect")) {
+  $("layoutSelect").addEventListener("change", async event => {
+    await persistLayout(event.target.value);
+  });
+}
+if ($("layoutStudioBtn")) {
+  $("layoutStudioBtn").addEventListener("click", () => persistLayout("studio"));
+}
+if ($("layoutClassicBtn")) {
+  $("layoutClassicBtn").addEventListener("click", () => persistLayout("classic"));
+}
+if ($("toolsToggle")) {
+  $("toolsToggle").addEventListener("click", () => {
+    const shell = document.querySelector(".app-shell");
+    if (!shell) return;
+    const open = !shell.classList.contains("tools-open");
+    shell.classList.toggle("tools-open", open);
+    $("toolsToggle").setAttribute("aria-pressed", open ? "true" : "false");
+    $("toolsToggle").classList.toggle("active", open);
+  });
+}
+
 chrome.storage.onChanged.addListener((changes, area) => {
   if (area !== "local") return;
   if (changes[THEME_KEY]) applyTheme(changes[THEME_KEY].newValue);
+  if (changes[LAYOUT_KEY]) applyLayout(changes[LAYOUT_KEY].newValue || DEFAULT_LAYOUT);
   if (Object.prototype.hasOwnProperty.call(changes, PANE_WIDTH_KEY)) {
     applyPaneWidth(changes[PANE_WIDTH_KEY].newValue ?? DEFAULT_PANE_PCT);
   }
@@ -1457,6 +1518,7 @@ function showCloudNotice(text, isError = false) {
 function collectCloudSettings() {
   return {
     theme: document.documentElement.dataset.theme || "blizzard",
+    layout: document.documentElement.dataset.layout || DEFAULT_LAYOUT,
     paneWidth: currentPanePct(),
     workMode: selectedWorkMode(),
     startSide: $("startSide")?.value || "A",
@@ -1477,6 +1539,7 @@ function collectCloudSettings() {
 function applyCloudSettingsToForm(settings) {
   if (!settings || typeof settings !== "object") return;
   if (settings.theme) applyTheme(settings.theme);
+  if (settings.layout) applyLayout(settings.layout);
   if (settings.paneWidth != null) applyPaneWidth(settings.paneWidth);
   if ($("freshOnStart")) $("freshOnStart").checked = settings.freshOnStart !== false;
   if ($("workMode") && WORK_MODE_INFO[settings.workMode]) $("workMode").value = settings.workMode;
@@ -1724,7 +1787,7 @@ window.addEventListener("hashchange", () => showDashboardView(dashboardViewFromH
 showDashboardView(dashboardViewFromHash());
 
 initPaneSplitter();
-Promise.all([loadTheme(), loadPaneWidth(), loadFreshOnStart(), loadTabs({ preserve: false })]).then(async () => {
+Promise.all([loadTheme(), loadLayout(), loadPaneWidth(), loadFreshOnStart(), loadTabs({ preserve: false })]).then(async () => {
   await refreshState();
   await refreshCloudStatus();
 });
