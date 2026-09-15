@@ -46,9 +46,6 @@ assert.match(guard, /MutationObserver/);
 assert.match(guard, /AI_BRIDGE_COMPLETION_GUARD_STATUS/);
 assert.doesNotMatch(`${hardening}\n${guard}`, /innerHTML|eval\s*\(|new Function/);
 
-// Timestamp fallback is intentionally directional. The stale DOM timestamp is
-// created before sendToSide() starts the new round timer. A genuine response,
-// even an identical one, observed after the timer starts must be accepted.
 const classifierSandbox = { Number, String };
 vm.runInNewContext(
   `${extractFunction(hardening, "aiBridgeLooksLikeStaleBaseline")}\nthis.check = aiBridgeLooksLikeStaleBaseline;`,
@@ -61,9 +58,6 @@ assert.equal(check({ previousText: "same", incomingText: "same", startedAt: 10_0
 assert.equal(check({ previousText: "same", incomingText: "different", startedAt: 10_000, completedAt: 9_999 }), false);
 assert.equal(check({ previousText: "", incomingText: "", startedAt: 10_000, completedAt: 9_999 }), false);
 
-// Service-worker integration: the provider guard is explicitly injected and
-// verified, stale pre-round text is rejected, but a very fast identical answer
-// after the round starts is not rejected by an arbitrary time window.
 const accepted = [];
 const runtimeState = {
   lastResponseBySide: { A: "previous answer" },
@@ -80,16 +74,11 @@ const runtimeSandbox = {
   state: runtimeState,
   appendLog() {},
   chrome: {
-    scripting: {
-      executeScript: async payload => { injected.push(payload); }
-    },
+    scripting: { executeScript: async payload => { injected.push(payload); } },
     tabs: {
-      sendMessage: async (_tabId, msg) => {
-        if (msg?.type === "AI_BRIDGE_COMPLETION_GUARD_STATUS") {
-          return { ok: true, patched: true, version: "1.16.3" };
-        }
-        return { ok: true };
-      }
+      sendMessage: async (_tabId, msg) => msg?.type === "AI_BRIDGE_COMPLETION_GUARD_STATUS"
+        ? { ok: true, patched: true, version: "1.16.3" }
+        : { ok: true }
     }
   },
   ensureTabListener: async tabId => ({ ok: true, tabId }),
@@ -107,8 +96,9 @@ const runtimeSandbox = {
 vm.runInNewContext(hardening, runtimeSandbox);
 await runtimeSandbox.ensureTabListener(123);
 assert.equal(injected.length, 1);
-assert.deepEqual(injected[0].target, { tabId: 123 });
-assert.deepEqual(injected[0].files, ["content-completion-guard.js"]);
+assert.equal(injected[0].target?.tabId, 123);
+assert.equal(injected[0].files?.length, 1);
+assert.equal(injected[0].files?.[0], "content-completion-guard.js");
 
 await runtimeSandbox.sendToSide("A", "new prompt", {});
 let result = await runtimeSandbox.handleCompletedResponse("A", "previous answer", {
@@ -118,7 +108,6 @@ let result = await runtimeSandbox.handleCompletedResponse("A", "previous answer"
 assert.equal(result.staleBaseline, true);
 assert.equal(accepted.length, 0);
 
-// Same wording one millisecond after the new round starts is legitimate.
 result = await runtimeSandbox.handleCompletedResponse("A", "previous answer", {
   generationId: "gen-A-2",
   completedAt: 50_001
@@ -126,10 +115,6 @@ result = await runtimeSandbox.handleCompletedResponse("A", "previous answer", {
 assert.equal(result.ok, true);
 assert.equal(accepted.length, 1);
 
-// Content-guard integration covers three distinct cases:
-// 1) unchanged old node + old text => suppress;
-// 2) new node + identical text => allow;
-// 3) reused node changed during generation then restored => allow.
 const listeners = [];
 const outbound = [];
 let observerCallback = null;
@@ -166,9 +151,7 @@ const contentSandbox = {
         outbound.push(msg);
         return { ok: true };
       },
-      onMessage: {
-        addListener: fn => listeners.push(fn)
-      }
+      onMessage: { addListener: fn => listeners.push(fn) }
     }
   }
 };
