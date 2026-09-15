@@ -1,6 +1,7 @@
 (() => {
   "use strict";
 
+  const GUARD_VERSION = "1.16.3";
   if (window.__AI_BRIDGE_COMPLETION_GUARD_V1163__) return;
   window.__AI_BRIDGE_COMPLETION_GUARD_V1163__ = true;
 
@@ -113,6 +114,15 @@
     if (waiter.timer) clearInterval(waiter.timer);
     if (error) waiter.reject(error);
     else waiter.resolve(value);
+  }
+
+  function cancelAllHolds(reason = "cancelled") {
+    const ids = new Set([...baselineByGeneration.keys(), ...waiterByGeneration.keys()]);
+    baselineByGeneration.clear();
+    for (const id of ids) {
+      settleWaiter(id, { ok: false, ignored: true, cancelled: true, reason: String(reason || "cancelled").slice(0, 120) });
+    }
+    return ids.size;
   }
 
   function supersedeOlderGenerations(keepId) {
@@ -292,8 +302,13 @@
       rememberBaseline(msg.generationId);
       return false;
     }
+    if (msg?.type === "AI_BRIDGE_CANCEL_COMPLETION_HOLDS") {
+      const cancelled = cancelAllHolds(msg.reason || "bridge-paused-or-stopped");
+      sendResponse({ ok: true, cancelled, version: GUARD_VERSION });
+      return false;
+    }
     if (msg?.type === "AI_BRIDGE_COMPLETION_GUARD_STATUS") {
-      sendResponse({ ok: true, patched, error: patchError, version: "1.16.3" });
+      sendResponse({ ok: true, patched, error: patchError, version: GUARD_VERSION });
       return false;
     }
     return false;
