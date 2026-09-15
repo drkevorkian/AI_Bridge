@@ -21,6 +21,7 @@
     "chat.openai.com",
     "grok.com",
     "assets.grok.com",
+    "assets.grokusercontent.com",
     "claude.ai",
     "gemini.google.com",
     "copilot.microsoft.com",
