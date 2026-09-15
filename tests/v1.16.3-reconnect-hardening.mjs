@@ -7,16 +7,31 @@ import { fileURLToPath } from "node:url";
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const source = fs.readFileSync(path.join(root, "reconnect-runtime-hardening.js"), "utf8");
 const wrapper = fs.readFileSync(path.join(root, "background-wrapper.js"), "utf8");
+const manifest = JSON.parse(fs.readFileSync(path.join(root, "manifest.json"), "utf8"));
 
 assert.match(wrapper, /importScripts\("reconnect-runtime-hardening\.js"\)/, "service worker must load reconnect hardening");
+
+const manifestScripts = manifest.content_scripts?.[0]?.js || [];
+assert.deepEqual(
+  manifestScripts,
+  ["content-completion-guard.js", "content.js"],
+  "test expectation must match the actual manifest content runtime"
+);
+for (const script of manifestScripts) {
+  assert.equal(fs.existsSync(path.join(root, script)), true, `manifest content script must exist: ${script}`);
+}
 assert.match(
   source,
-  /files:\s*\[\s*"content-completion-guard\.js",\s*"content-response-delivery-hardening\.js",\s*"content\.js"\s*\]/,
-  "reconnect must rebuild the full content runtime in manifest order"
+  /files:\s*\[\s*"content-completion-guard\.js",\s*"content\.js"\s*\]/,
+  "reconnect must rebuild the exact shipped content runtime in manifest order"
+);
+assert.doesNotMatch(
+  source,
+  /content-response-delivery-hardening\.js/,
+  "reconnect must never reference the removed/nonexistent response-delivery module"
 );
 assert.match(source, /delete window\.__AI_BRIDGE_LOADED_V114__/, "reconnect must clear the stale content bootstrap sentinel after a failed ping");
 assert.match(source, /delete window\.__AI_BRIDGE_COMPLETION_GUARD_V1163__/, "reconnect must reset the stale completion guard sentinel");
-assert.match(source, /delete window\.__AI_BRIDGE_RESPONSE_DELIVERY_HARDENING_V1163__/, "reconnect must reset response delivery hardening before reinjection");
 assert.match(source, /PING_ATTEMPTS\s*=\s*8/, "reconnect should use bounded ping retries");
 
 function buildRuntime({ sendMessage, tab = { id: 17, status: "complete", url: "https://chatgpt.com/c/test" } } = {}) {
@@ -35,7 +50,17 @@ function buildRuntime({ sendMessage, tab = { id: 17, status: "complete", url: "h
         reload: async id => { reloadCalls.push(id); }
       },
       scripting: {
-        executeScript: async spec => { executeCalls.push(spec); return []; }
+        executeScript: async spec => {
+          if (Array.isArray(spec.files)) {
+            for (const file of spec.files) {
+              if (!fs.existsSync(path.join(root, file))) {
+                throw new Error(`Could not load file: ${file}`);
+              }
+            }
+          }
+          executeCalls.push(spec);
+          return [];
+        }
       }
     }
   };
@@ -67,7 +92,7 @@ function buildRuntime({ sendMessage, tab = { id: 17, status: "complete", url: "h
   assert.equal(typeof runtime.executeCalls[0].func, "function");
   assert.deepEqual(
     Array.from(runtime.executeCalls[1].files),
-    ["content-completion-guard.js", "content-response-delivery-hardening.js", "content.js"]
+    ["content-completion-guard.js", "content.js"]
   );
   assert.ok(sends >= 3, "post-injection ping must retry instead of relying on one 150ms probe");
 }
