@@ -142,6 +142,7 @@
   }
 
   function markChangedBaselines() {
+    if (!baselineByGeneration.size) return;
     const snapshot = currentResponseSnapshot();
     for (const baseline of baselineByGeneration.values()) {
       if (baseline.changed || !baseline.node) continue;
