@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "AI Bridge",
-  "version": "1.16.3",
+  "version": "1.16.4",
   "description": "Coordinate three AI agents with relay, direct-mesh routing, team-cycle timing, stuck recovery, reliable completion detection, a Settings tab, GitHub update checks, optional Chrome Sync and Google Drive appDataFolder settings, persistent artifact vault storage, ZIP/file relay, human control, OAuth CSRF state, system-awake protection during active runs, structural untrusted-peer-data wrapping, and a modern multi-theme workspace.",
   "permissions": [
     "tabs",
@@ -54,6 +54,7 @@
         "https://copilot.microsoft.com/*"
       ],
       "js": [
+        "content-runtime-prelude.js",
         "content-completion-guard.js",
         "content-response-delivery-hardening.js",
         "content.js"
