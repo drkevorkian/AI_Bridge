@@ -36,16 +36,21 @@ assert.deepEqual(
   "DOM completion guard must load before the provider runtime"
 );
 assert.match(hardening, /GUARD_FILE = "content-completion-guard\.js"/);
+assert.match(hardening, /GUARD_VERSION = "1\.16\.3"/);
+assert.match(hardening, /AI_BRIDGE_CANCEL_COMPLETION_HOLDS/);
+assert.match(hardening, /status\?\.version !== GUARD_VERSION/);
 assert.match(hardening, /Completion guard could not be established/);
 assert.match(hardening, /completed < start/);
 assert.match(hardening, /state\?\.lastResponseBySide/);
 assert.match(hardening, /baseHandleCompletedResponse/);
 assert.match(hardening, /staleBaseline: true/);
 assert.match(guard, /holdStaleResponse/);
+assert.match(guard, /cancelAllHolds/);
 assert.match(guard, /sameNode && sameText && !baseline\.changed/);
 assert.match(guard, /artifacts: \[\]/);
 assert.match(guard, /MutationObserver/);
 assert.match(guard, /AI_BRIDGE_COMPLETION_GUARD_STATUS/);
+assert.match(guard, /AI_BRIDGE_CANCEL_COMPLETION_HOLDS/);
 assert.doesNotMatch(`${hardening}\n${guard}`, /innerHTML|eval\s*\(|new Function/);
 
 const classifierSandbox = { Number, String };
@@ -64,23 +69,38 @@ const accepted = [];
 const runtimeState = {
   lastResponseBySide: { A: "previous answer" },
   generationIdBySide: { A: null },
-  roundStartedAtBySide: { A: null }
+  roundStartedAtBySide: { A: null },
+  tabA: 101,
+  tabB: 102,
+  tabC: 103
 };
 const injected = [];
+const cancelMessages = [];
+let guardStatusVersion = "1.16.3";
+let pauseCalls = 0;
+let endCalls = 0;
 const runtimeSandbox = {
   console: { warn() {} },
   Date,
   Map,
   Number,
+  Promise,
   String,
   state: runtimeState,
   appendLog() {},
   chrome: {
     scripting: { executeScript: async payload => { injected.push(payload); } },
     tabs: {
-      sendMessage: async (_tabId, msg) => msg?.type === "AI_BRIDGE_COMPLETION_GUARD_STATUS"
-        ? { ok: true, patched: true, version: "1.16.3" }
-        : { ok: true }
+      sendMessage: async (tabId, msg) => {
+        if (msg?.type === "AI_BRIDGE_COMPLETION_GUARD_STATUS") {
+          return { ok: true, patched: true, version: guardStatusVersion };
+        }
+        if (msg?.type === "AI_BRIDGE_CANCEL_COMPLETION_HOLDS") {
+          cancelMessages.push({ tabId, reason: msg.reason });
+          return { ok: true, cancelled: 1, version: "1.16.3" };
+        }
+        return { ok: true };
+      }
     }
   },
   ensureTabListener: async tabId => ({ ok: true, tabId }),
@@ -93,6 +113,14 @@ const runtimeSandbox = {
   handleCompletedResponse: async (side, text, options) => {
     accepted.push({ side, text, options });
     return { ok: true };
+  },
+  pauseBridge: async () => {
+    pauseCalls += 1;
+    return { paused: true };
+  },
+  endBridge: async () => {
+    endCalls += 1;
+    return { ended: true };
   }
 };
 vm.runInNewContext(hardening, runtimeSandbox);
@@ -101,6 +129,24 @@ assert.equal(injected.length, 1);
 assert.equal(injected[0].target?.tabId, 123);
 assert.equal(injected[0].files?.length, 1);
 assert.equal(injected[0].files?.[0], "content-completion-guard.js");
+
+guardStatusVersion = "1.16.2";
+await assert.rejects(
+  () => runtimeSandbox.ensureTabListener(123),
+  /completion guard version 1\.16\.2 does not match required 1\.16\.3/
+);
+guardStatusVersion = "1.16.3";
+
+await runtimeSandbox.pauseBridge("test pause");
+assert.equal(pauseCalls, 1);
+assert.equal(cancelMessages.length, 3);
+assert.deepEqual(cancelMessages.map(item => item.tabId).sort((a, b) => a - b), [101, 102, 103]);
+assert.ok(cancelMessages.every(item => item.reason === "bridge-paused"));
+cancelMessages.length = 0;
+await runtimeSandbox.endBridge("test stop");
+assert.equal(endCalls, 1);
+assert.equal(cancelMessages.length, 3);
+assert.ok(cancelMessages.every(item => item.reason === "bridge-ended"));
 
 await runtimeSandbox.sendToSide("A", "new prompt", {});
 let result = await runtimeSandbox.handleCompletedResponse("A", "previous answer", {
@@ -162,6 +208,7 @@ const contentSandbox = {
   Date: FakeDate,
   Map,
   Promise,
+  Set,
   String,
   MutationObserver: FakeMutationObserver,
   setInterval: setIntervalFake,
@@ -260,5 +307,31 @@ assert.equal(result.accepted, true);
 assert.equal(outbound.length, 3);
 assert.equal(outbound[2].text, "different real answer");
 assert.equal(timers.size, 0);
+
+// 5) Pause/Stop cancellation resolves a held stale-response promise locally and
+// never forwards it to the privileged service worker afterward.
+currentNode = makeNode("identical answer");
+listeners[0]({ type: "AI_BRIDGE_SEND", generationId: "gen-4" }, {}, () => {});
+const heldCancelled = contentSandbox.chrome.runtime.sendMessage({
+  type: "AI_BRIDGE_RESPONSE",
+  text: "identical answer",
+  generationId: "gen-4",
+  completedAt: fakeNow - 1
+});
+assert.equal(timers.size, 1);
+let cancelReply = null;
+listeners[0](
+  { type: "AI_BRIDGE_CANCEL_COMPLETION_HOLDS", reason: "bridge-paused" },
+  {},
+  value => { cancelReply = value; }
+);
+result = await heldCancelled;
+assert.equal(result.cancelled, true);
+assert.equal(result.reason, "bridge-paused");
+assert.equal(cancelReply.ok, true);
+assert.equal(cancelReply.cancelled, 1);
+assert.equal(cancelReply.version, "1.16.3");
+assert.equal(timers.size, 0);
+assert.equal(outbound.length, 3);
 
 console.log("v1.16.3 completion identity + stale-baseline regression ok");
