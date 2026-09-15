@@ -29,7 +29,7 @@ const WORK_MODE_INFO = {
     help: [
       "Timing: sequential A → B → C. One AI at a time.",
       "Peer visibility: every later AI sees accumulated shared updates before it responds, and continues the same problem.",
-      "Cycle: 3 responses (A, then B, then C) make one lap.",
+      "Cycle: every selected LLM has participated once (A, then B, then C). The counter ticks only after that full lap.",
       "Main AI: first speaker, and the recipient of queued human interjections.",
       "Best for: investigations, debugging, and iterative design where each specialist builds on prior work."
     ].join("\n")
@@ -40,40 +40,40 @@ const WORK_MODE_INFO = {
     help: [
       "Timing: sequential like Relay. One AI at a time.",
       "Peer visibility: every later AI sees the accumulated shared deliverable and revises that same artifact.",
-      "Cycle: 3 responses make one lap of the shared document/design/code.",
+      "Cycle: every selected LLM has participated once. The counter ticks only after that full lap of the shared document/design/code.",
       "Main AI: first speaker, and the recipient of queued human interjections.",
       "Best for: writing one final design, spec, or codebase where each specialist improves the same artifact."
     ].join("\n")
   },
   compete: {
     label: "Compete",
-    minTurns: 3,
+    minTurns: 1,
     help: [
       "Timing: A, B, and C start simultaneously.",
       "Peer visibility: they do not see each other's answers during the primary pass.",
-      "Cycle: 3 independent submissions make one compete pass.",
+      "Cycle: the whole simultaneous batch. The counter ticks after every selected LLM has submitted, not after each individual response.",
       "Main AI: still the recipient of queued human interjections; it is not a sequential first speaker in this mode.",
       "Best for: independent solutions, avoiding anchoring, then comparing results."
     ].join("\n")
   },
   parallel: {
     label: "Parallel Independent",
-    minTurns: 3,
+    minTurns: 1,
     help: [
       "Timing: A, B, and C start simultaneously.",
       "Peer visibility: they work independently on their assigned jobs rather than solving the identical problem three times.",
-      "Cycle: 3 parallel job completions make one pass.",
+      "Cycle: the whole simultaneous batch. The counter ticks after every selected job has finished.",
       "Main AI: recipient of queued human interjections; all three still start together.",
       "Best for: work that decomposes into backend / frontend / research / security tracks."
     ].join("\n")
   },
   review: {
     label: "Peer Review",
-    minTurns: 6,
+    minTurns: 1,
     help: [
       "Timing: two simultaneous phases.",
       "Peer visibility: phase 1 is independent (no peer answers). Phase 2 gives each AI the other two results and requests critique.",
-      "Cycle: 6 responses (3 primary + 3 critiques) make one complete review.",
+      "Cycle: the full primary+critique pass (6 responses when A/B/C are selected). The counter ticks only after both phases finish.",
       "Main AI: recipient of queued human interjections; it is not a sequential first speaker.",
       "Best for: high-confidence validation and catching mistakes or bias."
     ].join("\n")
@@ -84,7 +84,7 @@ const WORK_MODE_INFO = {
     help: [
       "Timing: one AI at a time.",
       "Peer visibility: the responding AI sees accumulated shared updates, then can choose the next teammate.",
-      "Cycle: 1 response per handoff. Put SEND TO: AI A|B|C (or an unambiguous label) on the final non-empty line. Without a valid target, normal next-agent routing applies.",
+      "Cycle: every selected LLM has participated at least once. Routing the same teammate twice does not complete the cycle. Put SEND TO: AI A|B|C (or an unambiguous label) on the final non-empty line. Without a valid target, normal next-agent routing applies.",
       "Main AI: first speaker unless a prior handoff changed the cursor, and the recipient of queued human interjections.",
       "Best for: dynamic workflows where the right next specialist depends on what was just discovered."
     ].join("\n")
@@ -105,13 +105,12 @@ function updateWorkModeUI() {
   $("startSide").title = batch
     ? "All three AIs start simultaneously; this selection still defines the Main AI for queued human interjections."
     : "Choose the first speaker and Main AI for queued human interjections.";
-  const maxHelp = $("maxTurns")?.parentElement?.querySelector(".field-help");
+  const maxHelp = $("maxCycles")?.parentElement?.querySelector(".field-help");
   if (maxHelp) {
     maxHelp.replaceChildren();
     const strong = document.createElement("strong");
     strong.textContent = "-1 = Infinite";
-    const suffix = info.minTurns > 1 ? ` · ${info.minTurns}–10000 for this mode` : " · 1–10000 = finite";
-    maxHelp.append(strong, document.createTextNode(suffix));
+    maxHelp.append(strong, document.createTextNode(" · 1–10000 team cycles"));
   }
 }
 
@@ -444,8 +443,10 @@ function hydrateFromState(s) {
   if (s.startSide && SIDES.includes(s.startSide)) $("startSide").value = s.startSide;
   if (s.workMode && WORK_MODE_INFO[s.workMode]) $("workMode").value = s.workMode;
   updateWorkModeUI();
-  if (Number.isInteger(Number(s.maxTurns))) $("maxTurns").value = String(s.maxTurns);
+  if (Number.isInteger(Number(s.maxCycles ?? s.maxTurns))) $("maxCycles").value = String(s.maxCycles ?? s.maxTurns);
   if (Number.isFinite(Number(s.delayMs))) $("delayMs").value = String(s.delayMs);
+  if (Number.isInteger(Number(s.checkpointEveryNCycles))) $("checkpointEveryNCycles").value = String(s.checkpointEveryNCycles);
+  if (Number.isInteger(Number(s.stuckTimeoutMinutes))) $("stuckTimeoutMinutes").value = String(s.stuckTimeoutMinutes);
   selectedSourceFiles = Array.isArray(s.sourceFiles) ? s.sourceFiles.map(file => ({ ...file })) : [];
   renderSourceFiles();
   renderHistory(s.history);
@@ -544,7 +545,8 @@ function attachmentChips(entry) {
 }
 
 function limitLabel(s) {
-  return Number(s?.maxTurns) === -1 ? "∞" : String(s?.maxTurns ?? "?");
+  const max = Number(s?.maxCycles ?? s?.maxTurns);
+  return max === -1 ? "∞" : String(Number.isInteger(max) ? max : "?");
 }
 
 function currentLabel(s) {
@@ -566,23 +568,33 @@ function formatRoundDuration(ms, live = false) {
 function updateRoundTimers(s = latestState) {
   const now = Date.now();
   for (const side of SIDES) {
-    const node = $(`timer${side}`);
-    if (!node) continue;
+    const totalNode = $(`timerTotal${side}`);
+    const currentNode = $(`timerCurrent${side}`);
     const startedAt = Number(s?.roundStartedAtBySide?.[side]);
     const roundNumber = Math.max(0, Number(s?.roundNumberBySide?.[side]) || 0);
     const lastDuration = Number(s?.lastRoundDurationMsBySide?.[side]);
+    const totalMs = Math.max(0, Number(s?.totalWorkMsBySide?.[side]) || 0);
     const active = Boolean(s?.sessionActive && Number.isFinite(startedAt) && startedAt > 0);
-    node.classList.toggle("active", active);
-    node.classList.toggle("idle", !active);
-    if (active) {
-      node.textContent = `R${roundNumber} · ${formatRoundDuration(now - startedAt, true)}`;
-      node.title = `Round ${roundNumber} active · extension timer started when the prompt was submitted`;
-    } else if (roundNumber > 0 && Number.isFinite(lastDuration) && lastDuration >= 0) {
-      node.textContent = `R${roundNumber} · ${formatRoundDuration(lastDuration)}`;
-      node.title = `Last completed round ${roundNumber} · extension-measured prompt-to-final-response time`;
-    } else {
-      node.textContent = "No round yet";
-      node.title = "No extension-measured round has completed yet";
+    const liveMs = active ? Math.max(0, now - startedAt) : 0;
+    if (totalNode) {
+      totalNode.classList.toggle("active", false);
+      totalNode.classList.toggle("idle", true);
+      totalNode.textContent = `Total ${formatRoundDuration(totalMs + liveMs, active)}`;
+      totalNode.title = "Cumulative prompt-accepted to final-response time for this LLM in the current session. Aborted or stuck attempts still count.";
+    }
+    if (currentNode) {
+      currentNode.classList.toggle("active", active);
+      currentNode.classList.toggle("idle", !active);
+      if (active) {
+        currentNode.textContent = `Current ${formatRoundDuration(liveMs, true)}`;
+        currentNode.title = `Round ${roundNumber} active · started when the prompt was accepted`;
+      } else if (roundNumber > 0 && Number.isFinite(lastDuration) && lastDuration >= 0) {
+        currentNode.textContent = `Last ${formatRoundDuration(lastDuration)}`;
+        currentNode.title = `Last completed round ${roundNumber} · extension-measured prompt-to-final-response time`;
+      } else {
+        currentNode.textContent = "Current —";
+        currentNode.title = "No current turn is running";
+      }
     }
   }
 }
@@ -700,6 +712,8 @@ function transcriptCard(entry) {
   title.className = "transcript-title";
   if (entry.type === "human") {
     title.textContent = entry.interjection ? "Human controller · interjection" : "Human controller";
+  } else if (entry.type === "checkpoint") {
+    title.textContent = `Recovery checkpoint · AI ${entry.side || "?"} · ${entry.label || "AI"}`;
   } else {
     title.textContent = `AI ${entry.side || "?"} · ${entry.label || "AI"}`;
   }
@@ -742,7 +756,7 @@ function renderTranscript(s) {
     clearTranscript();
   }
 
-  const fresh = entries.filter(e => Number(e.seq) > renderedSeq && (e.type === "response" || e.type === "human"));
+  const fresh = entries.filter(e => Number(e.seq) > renderedSeq && (e.type === "response" || e.type === "human" || e.type === "checkpoint"));
   if (!fresh.length) return;
 
   $("emptyTranscript").classList.add("hidden");
@@ -920,24 +934,27 @@ function updateControls(s) {
 
 function updateStatus(s) {
   const limit = limitLabel(s);
-  $("turnCounter").textContent = `${s.turn || 0} / ${limit}`;
+  const cycles = Number(s?.cycleCount) || 0;
+  $("turnCounter").textContent = `Cycle ${cycles} / ${limit}`;
   updateSessionPill(s);
 
   if (s.sessionActive && s.awaitingHuman && s.pendingHuman) {
     $("status").textContent = `PAUSED — HUMAN INPUT NEEDED\nWaiting on controller for ${s.pendingHuman.requestingLabel || `AI ${s.pendingHuman.requestingSide}`}.`;
+  } else if (s.sessionActive && s.checkpointPending) {
+    $("status").textContent = `Running — recovery checkpoint\nMain AI is writing a local restart summary after cycle ${cycles}.\nTeam cycles: ${cycles}/${limit}`;
   } else if (s.sessionActive && s.running) {
     const batch = ["compete", "parallel", "review"].includes(s.workMode);
     if (batch) {
       const pending = Array.isArray(s.phasePendingSides) && s.phasePendingSides.length ? s.phasePendingSides.map(side => `AI ${side}`).join(", ") : "phase transition";
-      $("status").textContent = `Running — ${WORK_MODE_INFO[s.workMode]?.label || s.workMode} / ${String(s.workPhase || "primary").toUpperCase()}\nWaiting on: ${pending}\nAI turns: ${s.turn}/${limit}`;
+      $("status").textContent = `Running — ${WORK_MODE_INFO[s.workMode]?.label || s.workMode} / ${String(s.workPhase || "primary").toUpperCase()}\nWaiting on: ${pending}\nTeam cycles: ${cycles}/${limit}`;
     } else {
-      $("status").textContent = `Running — ${WORK_MODE_INFO[s.workMode]?.label || "Relay"}\nWaiting on: ${currentLabel(s)}\nAI turns: ${s.turn}/${limit}`;
+      $("status").textContent = `Running — ${WORK_MODE_INFO[s.workMode]?.label || "Relay"}\nWaiting on: ${currentLabel(s)}\nTeam cycles: ${cycles}/${limit}`;
     }
   } else if (s.sessionActive && s.paused) {
     const batch = ["compete", "parallel", "review"].includes(s.workMode);
     const next = batch ? ((s.phasePendingSides || []).map(side => `AI ${side}`).join(", ") || "phase transition") : currentLabel(s);
     const suppressed = Array.isArray(s.suppressedHumanRequests) ? s.suppressedHumanRequests.length : 0;
-    $("status").textContent = `PAUSED — ${s.pauseReason || "Session saved."}\nNext/current: ${next}\nAI turns: ${s.turn}/${limit}${suppressed ? `\nSuppressed human requests: ${suppressed}` : ""}`;
+    $("status").textContent = `PAUSED — ${s.pauseReason || "Session saved."}\nNext/current: ${next}\nTeam cycles: ${cycles}/${limit}${suppressed ? `\nSuppressed human requests: ${suppressed}` : ""}`;
   } else {
     const last = s.log?.length ? s.log[s.log.length - 1]?.text : "";
     $("status").textContent = `Idle${last ? ` — ${last}` : ""}`;
@@ -986,17 +1003,39 @@ function validateThreeTabs() {
   return null;
 }
 
-function validateMaxTurns() {
-  const input = $("maxTurns");
+function validateMaxCycles() {
+  const input = $("maxCycles");
   input.classList.remove("validation-error");
   const raw = input.value.trim();
   const value = Number(raw);
-  const mode = selectedWorkMode();
-  const minTurns = WORK_MODE_INFO[mode]?.minTurns || 1;
-  const valid = raw !== "" && Number.isInteger(value) && (value === -1 || (value >= minTurns && value <= 10000));
+  const valid = raw !== "" && Number.isInteger(value) && (value === -1 || (value >= 1 && value <= 10000));
   if (!valid) {
     input.classList.add("validation-error");
-    return `${WORK_MODE_INFO[mode]?.label || "This"} mode requires -1 (infinite) or an integer from ${minTurns} to 10000.`;
+    return "Max team cycles requires -1 (infinite) or an integer from 1 to 10000.";
+  }
+  return null;
+}
+
+function validateCheckpointEvery() {
+  const input = $("checkpointEveryNCycles");
+  if (!input) return null;
+  input.classList.remove("validation-error");
+  const value = Number(input.value);
+  if (!Number.isInteger(value) || value < 1 || value > 50) {
+    input.classList.add("validation-error");
+    return "Recovery summary interval must be an integer from 1 to 50 cycles.";
+  }
+  return null;
+}
+
+function validateStuckTimeout() {
+  const input = $("stuckTimeoutMinutes");
+  if (!input) return null;
+  input.classList.remove("validation-error");
+  const value = Number(input.value);
+  if (!Number.isInteger(value) || value < 5 || value > 120) {
+    input.classList.add("validation-error");
+    return "Stuck timeout must be an integer from 5 to 120 minutes.";
   }
   return null;
 }
@@ -1094,9 +1133,11 @@ for (const side of SIDES) {
 $("newAllChats").addEventListener("click", () => openFreshChats(SIDES));
 $("workMode").addEventListener("change", () => {
   updateWorkModeUI();
-  $("maxTurns").classList.remove("validation-error");
+  $("maxCycles").classList.remove("validation-error");
 });
-$("maxTurns").addEventListener("input", () => $("maxTurns").classList.remove("validation-error"));
+$("maxCycles").addEventListener("input", () => $("maxCycles").classList.remove("validation-error"));
+$("checkpointEveryNCycles")?.addEventListener("input", () => $("checkpointEveryNCycles").classList.remove("validation-error"));
+$("stuckTimeoutMinutes")?.addEventListener("input", () => $("stuckTimeoutMinutes").classList.remove("validation-error"));
 if ($("freshOnStart")) {
   $("freshOnStart").addEventListener("change", async () => {
     await chrome.storage.local.set({ [FRESH_KEY]: $("freshOnStart").checked });
@@ -1106,8 +1147,12 @@ if ($("freshOnStart")) {
 $("start").addEventListener("click", async () => {
   const tabError = validateThreeTabs();
   if (tabError) return $("status").textContent = tabError;
-  const turnError = validateMaxTurns();
+  const turnError = validateMaxCycles();
   if (turnError) return $("status").textContent = turnError;
+  const checkpointError = validateCheckpointEvery();
+  if (checkpointError) return $("status").textContent = checkpointError;
+  const stuckError = validateStuckTimeout();
+  if (stuckError) return $("status").textContent = stuckError;
 
   const initialPrompt = $("prompt").value.trim();
   if (!initialPrompt) return $("status").textContent = "Enter a primary objective or initial prompt.";
@@ -1126,7 +1171,10 @@ $("start").addEventListener("click", async () => {
       initialPrompt,
       sourceFiles: selectedSourceFiles.map(file => ({ path: file.path, size: file.size, content: file.content })),
       freshChats: $("freshOnStart").checked,
-      maxTurns: Number($("maxTurns").value),
+      maxCycles: Number($("maxCycles").value),
+      maxTurns: Number($("maxCycles").value),
+      checkpointEveryNCycles: Number($("checkpointEveryNCycles").value),
+      stuckTimeoutMinutes: Number($("stuckTimeoutMinutes").value),
       delayMs: Number($("delayMs").value)
     });
     if (!res?.ok) throw new Error(res?.error || "Could not start");
@@ -1366,7 +1414,10 @@ function collectCloudSettings() {
     paneWidth: currentPanePct(),
     workMode: selectedWorkMode(),
     startSide: $("startSide")?.value || "A",
-    maxTurns: Number($("maxTurns")?.value),
+    maxTurns: Number($("maxCycles")?.value),
+    maxCycles: Number($("maxCycles")?.value),
+    checkpointEveryNCycles: Number($("checkpointEveryNCycles")?.value),
+    stuckTimeoutMinutes: Number($("stuckTimeoutMinutes")?.value),
     delayMs: Number($("delayMs")?.value),
     freshOnStart: Boolean($("freshOnStart")?.checked),
     jobA: $("jobA")?.value || "",
@@ -1384,8 +1435,10 @@ function applyCloudSettingsToForm(settings) {
   if ($("freshOnStart")) $("freshOnStart").checked = settings.freshOnStart !== false;
   if ($("workMode") && WORK_MODE_INFO[settings.workMode]) $("workMode").value = settings.workMode;
   if ($("startSide") && SIDES.includes(settings.startSide)) $("startSide").value = settings.startSide;
-  if (Number.isInteger(Number(settings.maxTurns))) $("maxTurns").value = String(settings.maxTurns);
+  if (Number.isInteger(Number(settings.maxCycles ?? settings.maxTurns))) $("maxCycles").value = String(settings.maxCycles ?? settings.maxTurns);
   if (Number.isFinite(Number(settings.delayMs))) $("delayMs").value = String(settings.delayMs);
+  if (Number.isInteger(Number(settings.checkpointEveryNCycles))) $("checkpointEveryNCycles").value = String(settings.checkpointEveryNCycles);
+  if (Number.isInteger(Number(settings.stuckTimeoutMinutes))) $("stuckTimeoutMinutes").value = String(settings.stuckTimeoutMinutes);
   if (typeof settings.jobA === "string") $("jobA").value = settings.jobA;
   if (typeof settings.jobB === "string") $("jobB").value = settings.jobB;
   if (typeof settings.jobC === "string") $("jobC").value = settings.jobC;

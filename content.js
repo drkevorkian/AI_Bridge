@@ -1,6 +1,6 @@
 (() => {
-  if (window.__AI_BRIDGE_LOADED_V113__) return;
-  window.__AI_BRIDGE_LOADED_V113__ = true;
+  if (window.__AI_BRIDGE_LOADED_V114__) return;
+  window.__AI_BRIDGE_LOADED_V114__ = true;
 
   const host = location.hostname;
   let lastObservedText = "";
@@ -8,6 +8,7 @@
   let lastReportedText = "";
   let lastReportedSignature = "";
   let pendingSend = false;
+  let currentGenerationId = "";
   const MAX_ARTIFACTS_PER_RESPONSE = 8;
   const MAX_ARTIFACT_FILE_BYTES = 12 * 1024 * 1024;
   const MAX_ARTIFACT_TOTAL_BYTES = 24 * 1024 * 1024;
@@ -16,6 +17,7 @@
     "a[href]", "a[download]", "button", "[role='button']",
     "[data-download-url]", "[data-file-url]", "[data-url]", "[data-href]"
   ].join(",");
+
 
   const adapters = {
     chatgpt: {
@@ -246,7 +248,8 @@
     return { clicked: true };
   }
 
-  async function sendPrompt(text, artifacts = []) {
+  async function sendPrompt(text, artifacts = [], generationId = "") {
+    currentGenerationId = String(generationId || "");
     lastReportedText = "";
     lastReportedSignature = "";
     const input = firstVisible(adapter.inputSelectors);
@@ -610,7 +613,8 @@
         text,
         artifacts: captured.artifacts,
         artifactDiagnostics: { candidateCount: captured.candidateCount, errors: captured.errors },
-        completedAt
+        completedAt,
+        generationId: currentGenerationId
       });
     } catch (_) {}
   }
@@ -619,12 +623,42 @@
   observer.observe(document.documentElement, { childList: true, subtree: true, characterData: true });
   setInterval(monitor, 650);
 
+  function stopGeneration() {
+    const button = firstVisible(adapter.stopSelectors || []);
+    if (button && !button.disabled) {
+      button.click();
+      return { stopped: true };
+    }
+    return { stopped: false };
+  }
+
+  function generationStatus() {
+    const node = latestResponseNode();
+    return {
+      ok: true,
+      generating: Boolean(pendingSend || generationAppearsActive(node)),
+      lastChangeAt: Number(lastChangeAt) || 0,
+      lastObservedChars: String(lastObservedText || "").length,
+      pendingSend: Boolean(pendingSend),
+      generationId: currentGenerationId
+    };
+  }
+
   chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
     if (msg.type === "AI_BRIDGE_PING") {
-      sendResponse({ ok: true, host: location.hostname, ready: true, version: "1.11.3" });
+      sendResponse({ ok: true, host: location.hostname, ready: true, version: "1.14.0" });
       return false;
     }
 
+    if (msg.type === "AI_BRIDGE_GENERATION_STATUS") {
+      sendResponse(generationStatus());
+      return false;
+    }
+
+    if (msg.type === "AI_BRIDGE_STOP_GENERATION") {
+      sendResponse({ ok: true, ...stopGeneration() });
+      return false;
+    }
 
     if (msg.type === "AI_BRIDGE_NEW_CHAT") {
       openNewConversation()
@@ -634,8 +668,8 @@
     }
 
     if (msg.type === "AI_BRIDGE_SEND") {
-      sendPrompt(String(msg.text || ""), Array.isArray(msg.artifacts) ? msg.artifacts : [])
-        .then(uploadedCount => sendResponse({ ok: true, uploadedCount }))
+      sendPrompt(String(msg.text || ""), Array.isArray(msg.artifacts) ? msg.artifacts : [], msg.generationId)
+        .then(uploadedCount => sendResponse({ ok: true, uploadedCount, generationId: currentGenerationId }))
         .catch(err => sendResponse({ ok: false, error: err.message }));
       return true;
     }

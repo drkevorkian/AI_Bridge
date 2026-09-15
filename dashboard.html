@@ -15,7 +15,7 @@
     <aside id="controlPanel" class="control-panel">
       <header class="brand-block">
         <div>
-          <div class="eyebrow">AI BRIDGE <span id="versionBadge" class="version-badge">v1.13.1</span></div>
+          <div class="eyebrow">AI BRIDGE <span id="versionBadge" class="version-badge">v1.14.0</span></div>
           <h1>Three agents. One workspace.</h1>
         </div>
         <div class="header-tools">
@@ -60,7 +60,7 @@
           <span id="accountHeading">Account & sync</span>
           <span id="cloudStatusPill" class="muted">Local only</span>
         </div>
-        <div class="field-help">Optional. Login is never required. Local-only behavior stays unchanged. Push writes Chrome Sync and, when linked, a private Google Drive appDataFolder copy. Pull takes the newest valid copy. Synced data is configuration only: theme, pane width, strategy, Main AI, turn/delay defaults, jobs, Team rules, and reusable history. Transcripts, Vault files, source uploads, tab IDs, tokens, and live session state stay on this machine.</div>
+        <div class="field-help">Optional. Login is never required. Local-only behavior stays unchanged. Push writes Chrome Sync and, when linked, a private Google Drive appDataFolder copy. Pull takes the newest valid copy. Synced data is configuration only: theme, pane width, strategy, Main AI, cycle/delay defaults, recovery-summary interval, stuck timeout, jobs, Team rules, and reusable history. Transcripts, Vault files, source uploads, tab IDs, tokens, live session state, and recovery checkpoints stay on this machine.</div>
         <div class="account-actions">
           <button id="cloudPush" class="ghost" type="button">Push settings</button>
           <button id="cloudPull" class="ghost" type="button">Pull settings</button>
@@ -75,7 +75,13 @@
 
         <article class="agent-card agent-a">
           <div class="agent-topline">
-            <div class="agent-identity"><strong>AI A</strong><span id="timerA" class="round-timer idle" title="Extension-measured prompt-to-response time">No round yet</span></div>
+            <div class="agent-identity">
+              <strong>AI A</strong>
+              <div class="agent-timers">
+                <span id="timerTotalA" class="round-timer idle" title="Total working time for this LLM in the current session">Total 0s</span>
+                <span id="timerCurrentA" class="round-timer idle" title="Current turn timer for this LLM">Current —</span>
+              </div>
+            </div>
             <div class="agent-actions">
               <button id="newChatA" class="tiny ghost" type="button">New chat</button>
               <button id="resendA" class="tiny ghost" disabled>Resend</button>
@@ -87,7 +93,13 @@
 
         <article class="agent-card agent-b">
           <div class="agent-topline">
-            <div class="agent-identity"><strong>AI B</strong><span id="timerB" class="round-timer idle" title="Extension-measured prompt-to-response time">No round yet</span></div>
+            <div class="agent-identity">
+              <strong>AI B</strong>
+              <div class="agent-timers">
+                <span id="timerTotalB" class="round-timer idle" title="Total working time for this LLM in the current session">Total 0s</span>
+                <span id="timerCurrentB" class="round-timer idle" title="Current turn timer for this LLM">Current —</span>
+              </div>
+            </div>
             <div class="agent-actions">
               <button id="newChatB" class="tiny ghost" type="button">New chat</button>
               <button id="resendB" class="tiny ghost" disabled>Resend</button>
@@ -99,7 +111,13 @@
 
         <article class="agent-card agent-c">
           <div class="agent-topline">
-            <div class="agent-identity"><strong>AI C</strong><span id="timerC" class="round-timer idle" title="Extension-measured prompt-to-response time">No round yet</span></div>
+            <div class="agent-identity">
+              <strong>AI C</strong>
+              <div class="agent-timers">
+                <span id="timerTotalC" class="round-timer idle" title="Total working time for this LLM in the current session">Total 0s</span>
+                <span id="timerCurrentC" class="round-timer idle" title="Current turn timer for this LLM">Current —</span>
+              </div>
+            </div>
             <div class="agent-actions">
               <button id="newChatC" class="tiny ghost" type="button">New chat</button>
               <button id="resendC" class="tiny ghost" disabled>Resend</button>
@@ -215,13 +233,25 @@
 
         <div class="split-fields">
           <div>
-            <label for="maxTurns">Max AI turns</label>
-            <input id="maxTurns" type="number" min="-1" max="10000" step="1" value="-1" inputmode="numeric">
+            <label for="maxCycles">Max team cycles</label>
+            <input id="maxCycles" type="number" min="-1" max="10000" step="1" value="-1" inputmode="numeric">
             <div class="field-help"><strong>-1 = Infinite</strong> · 1–10000 = finite</div>
           </div>
           <div>
             <label for="delayMs">Relay delay (ms)</label>
             <input id="delayMs" type="number" min="0" max="30000" step="100" value="1500" inputmode="numeric">
+          </div>
+        </div>
+        <div class="split-fields">
+          <div>
+            <label for="checkpointEveryNCycles">Recovery summary every N cycles</label>
+            <input id="checkpointEveryNCycles" type="number" min="1" max="50" step="1" value="5" inputmode="numeric">
+            <div class="field-help">After cycle 1, then every N. Local only. Does not consume a team cycle.</div>
+          </div>
+          <div>
+            <label for="stuckTimeoutMinutes">Stuck timeout (minutes)</label>
+            <input id="stuckTimeoutMinutes" type="number" min="5" max="120" step="1" value="30" inputmode="numeric">
+            <div class="field-help">Default 30. Range 5–120. Watchdog uses chrome.alarms.</div>
           </div>
         </div>
       </section>

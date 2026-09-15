@@ -379,9 +379,10 @@ h2 { margin: 4px 0 0; font-size: 20px; }
 .agent-card.agent-b { border-left-color: var(--b); }
 .agent-card.agent-c { border-left-color: var(--c); }
 
-.agent-identity { display: flex; align-items: center; gap: 8px; min-width: 0; }
+.agent-identity { display: flex; flex-direction: column; align-items: flex-start; gap: 6px; min-width: 0; }
+.agent-timers { display: flex; flex-wrap: wrap; gap: 4px; min-width: 0; }
 .round-timer {
-  display: inline-flex; align-items: center; min-width: 74px; justify-content: center;
+  display: inline-flex; align-items: center; min-width: 92px; justify-content: center;
   border: 1px solid var(--line-strong); border-radius: 999px; padding: 3px 7px;
   font-variant-numeric: tabular-nums; font-size: 10px; font-weight: 800; letter-spacing: .01em;
   color: var(--muted); background: var(--ghost-bg); white-space: nowrap;
