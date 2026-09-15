@@ -98,6 +98,11 @@ $("openDashboard").addEventListener("click", async () => {
   if (!res?.ok) $("status").textContent = `Could not open dashboard: ${res?.error || "Unknown error"}`;
 });
 
+$("openSettings").addEventListener("click", async () => {
+  const res = await chrome.runtime.sendMessage({ type: "AI_BRIDGE_OPEN_DASHBOARD", hash: "settings" });
+  if (!res?.ok) $("status").textContent = `Could not open settings: ${res?.error || "Unknown error"}`;
+});
+
 $("pause").addEventListener("click", async () => {
   const res = await chrome.runtime.sendMessage({ type: "AI_BRIDGE_PAUSE" });
   if (!res?.ok) $("status").textContent = `Pause failed: ${res?.error || "Unknown error"}`;

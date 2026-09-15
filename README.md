@@ -1,10 +1,10 @@
 # AI Bridge
 
-**Current version: 1.14.0**
+**Current version: 1.15.0**
 
-1.14.0 is the session-timer, team-cycle, and stuck-recovery release. 1.13.1 Google Drive `appDataFolder` sync remains in this build.
+1.15.0 adds a Settings tab, GitHub update checks, and Google Drive login via a user-supplied Web-application OAuth client ID. Chrome Sync still works without Google. Login remains optional. 1.14.0 session timers, team cycles, and stuck recovery remain in this build.
 
-AI Bridge is a Manifest V3 Chrome extension for coordinating three AI web apps as one team from a single dashboard. It supports sequential relay, parallel work, peer review, direct model-to-model routing, human intervention, persistent file relay, reusable history, optional Chrome/Google settings sync, team-cycle timing, recovery checkpoints, and a `chrome.alarms` stuck watchdog.
+AI Bridge is a Manifest V3 Chrome extension for coordinating three AI web apps as one team from a single dashboard. It supports sequential relay, parallel work, peer review, direct model-to-model routing, human intervention, persistent file relay, reusable history, optional Chrome/Google settings sync, team-cycle timing, recovery checkpoints, a `chrome.alarms` stuck watchdog, and in-dashboard GitHub updates.
 
 ## Supported providers
 
@@ -22,32 +22,42 @@ The provider tabs must remain open. AI Bridge coordinates those tabs; it does no
 2. Open `chrome://extensions/`.
 3. Enable **Developer mode**.
 4. Choose **Load unpacked** and select the folder containing `manifest.json`.
-5. For updates, replace the extension files and click **Reload** on the extension card.
-6. Open three supported AI chats.
-7. Open the AI Bridge dashboard and bind them as AI A, AI B, and AI C.
+5. Open three supported AI chats.
+6. Open the AI Bridge dashboard and bind them as AI A, AI B, and AI C.
+
+Unpacked Chrome extensions cannot overwrite themselves. After the first install, use **Settings → Check for updates**. That fetches `manifest.json` from GitHub `main` over HTTPS, compares versions, and can download the ZIP. Extract it over the same folder, then click **Reload** on the extension card. Daily checks are off unless you opt in. AI Bridge never auto-installs.
+
+## Settings tab
+
+The dashboard header has **Session** and **Settings**.
+
+- **Appearance** — theme, applied immediately on this machine
+- **Account & sync** — optional Push / Pull / Link / Unlink
+- **Google Drive login** — paste a Web-application OAuth client ID
+- **Updates** — check GitHub, download ZIP, optional daily alarm
+
+The popup **Settings** button opens `dashboard.html#settings`.
 
 ## Account & sync (optional)
 
-Login is **never required**. Local-only behavior is unchanged.
+Login is **never required**. Local-only behavior is unchanged. Chrome Sync (Push / Pull) works without Google.
 
 **Push settings** writes a sanitized configuration copy to Chrome Sync. If a Google account is linked, the same copy is also written to Google Drive's hidden `appDataFolder` as `ai-bridge-settings.json`.
 
 **Pull settings** inspects every available copy (Chrome Sync and, when linked, Drive), sanitizes each copy, and applies the newest valid `updatedAt`. Pull refuses to run during an active Bridge session.
 
-**Link Google account** uses Chrome Identity. Interactive token prompts happen only from that button. Tokens stay in Chrome's identity cache and are never written into AI Bridge storage.
+**Link Google account** is optional. Unpacked installs have no packaged `oauth2.client_id` on purpose (a placeholder would be a security hole). To link:
 
-**Unlink Google account** clears the Identity token cache and the local linked flag. It does not delete the Drive app-data copy, so a later Link can recover it.
+1. Open Settings and copy the **Extension ID** and **Authorized redirect URI** (`https://<extension-id>.chromiumapp.org/`).
+2. In Google Cloud, create a **Web application** OAuth client, enable the Drive API, and add that redirect URI.
+3. Paste the client ID into Settings and click **Save client ID**. It is stored only on this machine and is never synced.
+4. Click **Link Google account**. Scope used is `drive.appdata` only.
 
-Google Drive stays fail-closed until a real Chrome-extension OAuth client ID is packaged in `manifest.json`:
+Packaged Chrome-extension client IDs still use `chrome.identity.getAuthToken`. User-supplied Web-application client IDs use `chrome.identity.launchWebAuthFlow` against `https://accounts.google.com/o/oauth2/v2/auth` with an implicit token. That token stays in `chrome.storage.session` only — never local, never sync, never Drive.
 
-```json
-"oauth2": {
-  "client_id": "<chrome-extension-client-id>.apps.googleusercontent.com",
-  "scopes": ["https://www.googleapis.com/auth/drive.appdata"]
-}
-```
+**Unlink Google account** clears the Identity cache, the session token, and the local linked flag. It does not delete the Drive app-data copy, so a later Link can recover it.
 
-Do not add a placeholder client ID. The only Drive scope AI Bridge will accept is `drive.appdata`. Drive API calls are hardcoded to `https://www.googleapis.com` with `redirect: "error"`. Listing uses `spaces=appDataFolder`. Creating a file uses `parents: ["appDataFolder"]`.
+Do not add a placeholder `oauth2` block to `manifest.json`. Do not add a manifest `key` (that would change the unpacked extension ID and wipe local/sync for existing installs). The only Drive scope AI Bridge will accept is `drive.appdata`. Drive API calls are hardcoded to `https://www.googleapis.com` with `redirect: "error"`. Listing uses `spaces=appDataFolder`. Creating a file uses `parents: ["appDataFolder"]`. HTTP 401 evicts the cached/session token and retries once.
 
 Synced whitelist:
 
@@ -70,10 +80,20 @@ Never synced:
 - uploaded source files
 - tab IDs
 - OAuth tokens
+- OAuth client IDs
 - live session state
 - human answers
 - recovery checkpoints
 - generation IDs / watchdog recovery state
+
+## GitHub updates
+
+Update URLs are hardcoded to `drkevorkian/AI_Bridge`:
+
+- `https://raw.githubusercontent.com/drkevorkian/AI_Bridge/main/manifest.json`
+- `https://codeload.github.com/drkevorkian/AI_Bridge/zip/refs/heads/main`
+
+Fetches use `redirect: "error"` and re-validate the final URL. The optional daily alarm (`ai-bridge-update-check`, 1440 minutes) only notifies — it does not download or install.
 
 ## Team configuration
 
@@ -140,13 +160,13 @@ Best for: dynamic workflows.
 4. Diagnostics Report
 5. Session Checkpoints
 
-`content.js` is on the 1.14.0 content-script protocol (`generationId`, `AI_BRIDGE_GENERATION_STATUS`, optional `AI_BRIDGE_STOP_GENERATION`). AI Bridge reloads a stale provider tab when the ping version does not match.
+`content.js` is on the 1.14.0 content-script protocol (`generationId`, `AI_BRIDGE_GENERATION_STATUS`, optional `AI_BRIDGE_STOP_GENERATION`). AI Bridge reloads a stale provider tab when the ping version does not match. v1.15.0 does not bump that protocol.
 
 ## Dashboard
 
 The dashboard uses a resizable control/transcript split. Default is **40% / 60%**.
 
-Core controls include bind A/B/C, jobs, Team rules, work strategy, Main AI, objective, **Max team cycles**, recovery-summary interval, stuck timeout, Start/Pause/Resume/Stop/Resend, fresh chats, human interjection, Suppressed Requests, Shared Vault, history, dual Total/Current timers per LLM, and optional Account & sync.
+Core controls include bind A/B/C, jobs, Team rules, work strategy, Main AI, objective, **Max team cycles**, recovery-summary interval, stuck timeout, Start/Pause/Resume/Stop/Resend, fresh chats, human interjection, Suppressed Requests, Shared Vault, history, dual Total/Current timers per LLM, and a **Settings** tab for theme, Google login, Chrome Sync, and GitHub updates.
 
 The runtime header shows `Cycle X / Y`. Each AI card shows **Total** (session working time, including aborted/stuck attempts) and **Current** (the live turn, or the last completed duration when idle).
 
@@ -172,7 +192,17 @@ The packaged extension contains:
 
 Command-line tests live in `tests/`.
 
-## Current release — 1.14.0
+## Current release — 1.15.0
+
+- Session / Settings view tabs on the dashboard; popup Settings opens `#settings`
+- Google Drive login works for unpacked installs: paste a Web-application OAuth client ID, then Link. Packaged `oauth2.client_id` is still supported and still not shipped
+- Implicit `launchWebAuthFlow` tokens stay in `chrome.storage.session` only
+- GitHub update check against hardcoded HTTPS allowlist; ZIP download via `chrome.downloads` (`saveAs: true`); user extracts + Reloads
+- Optional daily update alarm (`periodInMinutes: 1440`), default off, notify-only
+- Chrome Sync remains the no-Google path. Login never required
+- `CONTENT_VERSION` stays 1.14.0; `STATE_VERSION` stays 3
+
+## Previous release — 1.14.0
 
 - two timers per LLM: Total session work and Current turn
 - team-cycle counter replaces the user-facing per-response counter; internal `turn` remains for diagnostics
