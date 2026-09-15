@@ -14,7 +14,7 @@ const content = fs.readFileSync(path.join(root, "content.js"), "utf8");
 const readme = fs.readFileSync(path.join(root, "README.md"), "utf8");
 const manifest = JSON.parse(fs.readFileSync(path.join(root, "manifest.json"), "utf8"));
 
-assert.equal(manifest.version, "1.14.0");
+assert.equal(manifest.version, "1.15.0");
 assert.ok(manifest.permissions.includes("identity"));
 assert.ok(manifest.permissions.includes("storage"));
 assert.ok(manifest.permissions.includes("alarms"));
@@ -22,8 +22,8 @@ assert.equal(manifest.oauth2, undefined, "do not ship a placeholder OAuth client
 assert.ok(manifest.host_permissions.every(rule => rule.startsWith("https://")));
 assert.ok(manifest.host_permissions.includes("https://www.googleapis.com/*"));
 assert.ok(!manifest.host_permissions.some(rule => rule.startsWith("http://")));
-assert.match(html, /v1\.14\.0/);
-assert.match(popupHtml, /v1\.14\.0/);
+assert.match(html, /v1\.15\.0/);
+assert.match(popupHtml, /v1\.15\.0/);
 assert.match(html, /id="cloudPush"/);
 assert.match(html, /id="cloudPull"/);
 assert.match(html, /id="cloudConnect"/);
@@ -39,7 +39,7 @@ assert.doesNotMatch(dashboardJs, /innerHTML/);
 assert.match(content, /version: "1\.14\.0"/);
 assert.match(background, /CONTENT_VERSION = "1\.14\.0"/);
 assert.doesNotMatch(readme, /not yet on main/i);
-assert.match(readme, /Current version: 1\.14\.0/);
+assert.match(readme, /Current version: 1\.15\.0/);
 
 const ids = [...html.matchAll(/id="([^"]+)"/g)].map(m => m[1]);
 assert.equal(ids.length, new Set(ids).size, `duplicate ids: ${ids.filter((id, i) => ids.indexOf(id) !== i)}`);
@@ -166,6 +166,7 @@ const dirty = cloudSandbox.sanitizeCloudSettings({
   oauthToken: "ya29.secret",
   accessToken: "ya29.secret",
   token: "ya29.secret",
+  googleClientId: "1234567890-abc.apps.googleusercontent.com",
   activeArtifactIds: ["vault-1"],
   recoveryCheckpoint: { text: "secret restart summary", cycleCount: 4 },
   cycleCount: 4,
@@ -184,6 +185,7 @@ assert.equal(dirty.sourceFiles, undefined);
 assert.equal(dirty.oauthToken, undefined);
 assert.equal(dirty.accessToken, undefined);
 assert.equal(dirty.token, undefined);
+assert.equal(dirty.googleClientId, undefined);
 assert.equal(dirty.activeArtifactIds, undefined);
 assert.equal(dirty.recoveryCheckpoint, undefined);
 assert.equal(dirty.cycleCount, undefined);

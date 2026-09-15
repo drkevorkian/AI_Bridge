@@ -17,6 +17,7 @@ const MAX_PANE_PCT = 70;
 const THEMES = new Set(["blizzard", "ghostwhite", "midnight", "slate", "light", "solarized", "ocean", "terminal"]);
 let tabsById = new Map();
 let latestState = null;
+let lastUpdateResult = null;
 let hydrated = false;
 let renderedSeq = 0;
 let autoScroll = true;
@@ -161,6 +162,36 @@ async function loadPaneWidth() {
 
 async function persistPaneWidth(pct) {
   await chrome.storage.local.set({ [PANE_WIDTH_KEY]: clampPanePct(pct) });
+}
+
+function currentPanePct() {
+  const shell = document.querySelector(".app-shell");
+  if (!shell) return DEFAULT_PANE_PCT;
+  const raw = parseFloat(getComputedStyle(shell).getPropertyValue("--control-pane-width"));
+  return clampPanePct(raw);
+}
+
+function dashboardViewFromHash() {
+  return String(location.hash || "").replace(/^#/, "") === "settings" ? "settings" : "session";
+}
+
+function showDashboardView(view) {
+  const isSettings = view === "settings";
+  const sessionView = $("sessionView");
+  const settingsView = $("settingsView");
+  const sessionBtn = $("viewSessionBtn");
+  const settingsBtn = $("viewSettingsBtn");
+  if (sessionView) sessionView.classList.toggle("hidden", isSettings);
+  if (settingsView) settingsView.classList.toggle("hidden", !isSettings);
+  if (sessionBtn) {
+    sessionBtn.classList.toggle("active", !isSettings);
+    sessionBtn.setAttribute("aria-selected", isSettings ? "false" : "true");
+  }
+  if (settingsBtn) {
+    settingsBtn.classList.toggle("active", isSettings);
+    settingsBtn.setAttribute("aria-selected", isSettings ? "true" : "false");
+  }
+  if (isSettings) refreshCloudStatus().catch(() => {});
 }
 
 function initPaneSplitter() {
@@ -1388,12 +1419,6 @@ async function loadFreshOnStart() {
   }
 }
 
-function currentPanePct() {
-  const shell = document.querySelector(".app-shell");
-  const raw = shell ? parseFloat(getComputedStyle(shell).getPropertyValue("--control-pane-width")) : DEFAULT_PANE_PCT;
-  return clampPanePct(raw);
-}
-
 function showCloudNotice(text, isError = false) {
   const el = $("cloudNotice");
   if (!el) return;
@@ -1469,9 +1494,20 @@ async function refreshCloudStatus() {
       pill.dataset.state = state;
     }
     if ($("cloudUnlink")) $("cloudUnlink").disabled = !res.googleLinked;
-    if (!res.googleConfigured && $("cloudConnect")) {
-      $("cloudConnect").title = "Needs a Google Cloud OAuth client ID in the packaged manifest, scoped only to drive.appdata. Push/Pull still work through Chrome Sync.";
+    if ($("cloudConnect")) {
+      $("cloudConnect").title = res.googleConfigured
+        ? "Opens Google sign-in for drive.appdata only. Login is optional."
+        : "Paste a Web-application OAuth client ID below first. Push/Pull still work through Chrome Sync.";
     }
+    if ($("extensionIdValue")) $("extensionIdValue").textContent = res.extensionId || "unavailable";
+    if ($("redirectUriValue")) $("redirectUriValue").textContent = res.redirectUri || "unavailable";
+    if ($("googleClientId") && document.activeElement !== $("googleClientId")) {
+      $("googleClientId").value = res.googleClientId || "";
+    }
+    if ($("installedVersionPill")) {
+      $("installedVersionPill").textContent = res.installedVersion ? `v${res.installedVersion}` : "v?";
+    }
+    if ($("autoCheckUpdates")) $("autoCheckUpdates").checked = res.autoCheckUpdates === true;
   } catch (err) {
     if (pill) {
       pill.textContent = "Sync unavailable";
@@ -1499,7 +1535,9 @@ async function runCloudAction(button, type, extra = {}) {
       await refreshState();
     } else if (type === "AI_BRIDGE_CLOUD_CONNECT") {
       showCloudNotice(res.googleLinked
-        ? "Google account linked. Settings will use the private Drive appDataFolder plus Chrome Sync. Tokens stay in Chrome's identity cache."
+        ? (res.via === "user-client-id"
+          ? "Google account linked. Drive appDataFolder + Chrome Sync. The access token stays in session storage only and is never synced."
+          : "Google account linked. Settings will use the private Drive appDataFolder plus Chrome Sync. Tokens stay in Chrome's identity cache.")
         : "Google login is not configured yet.");
     } else if (type === "AI_BRIDGE_CLOUD_UNLINK") {
       showCloudNotice("Google account unlinked on this extension. Chrome Sync still works. Drive app data was not deleted.");
@@ -1527,6 +1565,142 @@ if ($("cloudConnect")) {
 if ($("cloudUnlink")) {
   $("cloudUnlink").addEventListener("click", () => runCloudAction($("cloudUnlink"), "AI_BRIDGE_CLOUD_UNLINK"));
 }
+
+async function copySettingsValue(value, label) {
+  const text = String(value || "").trim();
+  if (!text || text === "loading…" || text === "unavailable") {
+    showCloudNotice(`Nothing to copy for ${label} yet.`, true);
+    return;
+  }
+  try {
+    await navigator.clipboard.writeText(text);
+    showCloudNotice(`Copied ${label}.`);
+  } catch (_) {
+    showCloudNotice(`Could not copy ${label}. Select it manually.`, true);
+  }
+}
+
+function renderUpdateStatus(info, fallback) {
+  const el = $("updateStatus");
+  if (!el) return;
+  if (!info) {
+    el.textContent = fallback || "Not checked yet.";
+    return;
+  }
+  if (info.updateAvailable) {
+    el.textContent = `Update available: v${info.remoteVersion} (installed v${info.installedVersion}). Download the ZIP, extract over this folder, then Reload on chrome://extensions.`;
+  } else {
+    el.textContent = `Already on latest (v${info.installedVersion}). You can still download the GitHub ZIP to reinstall.`;
+  }
+}
+
+if ($("copyExtensionId")) {
+  $("copyExtensionId").addEventListener("click", () => copySettingsValue($("extensionIdValue")?.textContent, "extension ID"));
+}
+if ($("copyRedirectUri")) {
+  $("copyRedirectUri").addEventListener("click", () => copySettingsValue($("redirectUriValue")?.textContent, "redirect URI"));
+}
+if ($("saveGoogleClientId")) {
+  $("saveGoogleClientId").addEventListener("click", async () => {
+    const button = $("saveGoogleClientId");
+    const old = button.textContent;
+    button.disabled = true;
+    button.textContent = "Saving…";
+    showCloudNotice();
+    try {
+      const res = await chrome.runtime.sendMessage({
+        type: "AI_BRIDGE_SAVE_GOOGLE_CLIENT_ID",
+        clientId: $("googleClientId")?.value || ""
+      });
+      if (!res?.ok) throw new Error(res?.error || "Could not save client ID");
+      showCloudNotice(res.saved
+        ? "OAuth client ID saved on this machine. It is never synced. Click Link Google account next."
+        : "OAuth client ID cleared on this machine. Chrome Sync still works.");
+      await refreshCloudStatus();
+    } catch (err) {
+      showCloudNotice(err.message, true);
+    } finally {
+      button.textContent = old;
+      button.disabled = false;
+    }
+  });
+}
+if ($("checkUpdates")) {
+  $("checkUpdates").addEventListener("click", async () => {
+    const button = $("checkUpdates");
+    const old = button.textContent;
+    button.disabled = true;
+    button.textContent = "Checking…";
+    try {
+      const res = await chrome.runtime.sendMessage({ type: "AI_BRIDGE_CHECK_UPDATES" });
+      if (!res?.ok) throw new Error(res?.error || "Update check failed");
+      lastUpdateResult = res;
+      renderUpdateStatus(res);
+      if ($("downloadUpdate")) $("downloadUpdate").disabled = false;
+    } catch (err) {
+      lastUpdateResult = null;
+      renderUpdateStatus(null, err.message);
+      if ($("downloadUpdate")) $("downloadUpdate").disabled = true;
+    } finally {
+      button.textContent = old;
+      button.disabled = false;
+    }
+  });
+}
+if ($("downloadUpdate")) {
+  $("downloadUpdate").addEventListener("click", async () => {
+    const button = $("downloadUpdate");
+    const old = button.textContent;
+    button.disabled = true;
+    button.textContent = "Downloading…";
+    try {
+      const res = await chrome.runtime.sendMessage({ type: "AI_BRIDGE_DOWNLOAD_UPDATE" });
+      if (!res?.ok) throw new Error(res?.error || "Download failed");
+      lastUpdateResult = res;
+      renderUpdateStatus(res, null);
+      const el = $("updateStatus");
+      if (el) el.textContent = `Download started (${res.filename || "ZIP"}). Extract over this folder, then Reload on chrome://extensions.`;
+      if ($("downloadUpdate")) $("downloadUpdate").disabled = false;
+    } catch (err) {
+      renderUpdateStatus(lastUpdateResult, err.message);
+      const el = $("updateStatus");
+      if (el) el.textContent = err.message;
+      button.disabled = false;
+    } finally {
+      button.textContent = old;
+    }
+  });
+}
+if ($("autoCheckUpdates")) {
+  $("autoCheckUpdates").addEventListener("change", async event => {
+    const enabled = Boolean(event.target.checked);
+    try {
+      const res = await chrome.runtime.sendMessage({ type: "AI_BRIDGE_SET_AUTO_UPDATE", enabled });
+      if (!res?.ok) throw new Error(res?.error || "Could not save update preference");
+      showCloudNotice(enabled
+        ? "Daily GitHub check enabled. AI Bridge will notify if a newer manifest is on main — it will not auto-install."
+        : "Daily GitHub check disabled.");
+    } catch (err) {
+      event.target.checked = !enabled;
+      showCloudNotice(err.message, true);
+    }
+  });
+}
+
+if ($("viewSessionBtn")) {
+  $("viewSessionBtn").addEventListener("click", () => {
+    if (location.hash === "#settings") location.hash = "session";
+    else showDashboardView("session");
+  });
+}
+if ($("viewSettingsBtn")) {
+  $("viewSettingsBtn").addEventListener("click", () => {
+    if (location.hash !== "#settings") location.hash = "settings";
+    else showDashboardView("settings");
+  });
+}
+window.addEventListener("hashchange", () => showDashboardView(dashboardViewFromHash()));
+showDashboardView(dashboardViewFromHash());
 
 initPaneSplitter();
 Promise.all([loadTheme(), loadPaneWidth(), loadFreshOnStart(), loadTabs({ preserve: false })]).then(async () => {

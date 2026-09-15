@@ -15,24 +15,19 @@
     <aside id="controlPanel" class="control-panel">
       <header class="brand-block">
         <div>
-          <div class="eyebrow">AI BRIDGE <span id="versionBadge" class="version-badge">v1.14.0</span></div>
+          <div class="eyebrow">AI BRIDGE <span id="versionBadge" class="version-badge">v1.15.0</span></div>
           <h1>Three agents. One workspace.</h1>
         </div>
         <div class="header-tools">
-          <select id="themeSelect" class="theme-select" aria-label="Theme">
-            <option value="blizzard">Blizzard Blue</option>
-            <option value="ghostwhite">Ghost White</option>
-            <option value="midnight">Midnight</option>
-            <option value="slate">Slate</option>
-            <option value="light">Light</option>
-            <option value="solarized">Solarized Light</option>
-            <option value="ocean">Ocean</option>
-            <option value="terminal">Terminal</option>
-          </select>
+          <div class="view-tabs" role="tablist" aria-label="Dashboard views">
+            <button id="viewSessionBtn" class="view-tab active" type="button" role="tab" aria-selected="true" aria-controls="sessionView">Session</button>
+            <button id="viewSettingsBtn" class="view-tab" type="button" role="tab" aria-selected="false" aria-controls="settingsView">Settings</button>
+          </div>
           <div id="sessionPill" class="session-pill idle">Idle</div>
         </div>
       </header>
 
+      <div id="sessionView">
       <section class="panel-section runtime-card">
         <div class="section-heading">
           <span>Runtime</span>
@@ -53,21 +48,6 @@
           <button id="newAllChats" class="tiny ghost" type="button">New AI chats</button>
         </div>
         <div class="field-help">Uses the three selected, already-open AI tabs. AI Bridge never opens replacement AI tabs for this action.</div>
-      </section>
-
-      <section class="panel-section account-section" aria-labelledby="accountHeading">
-        <div class="section-heading">
-          <span id="accountHeading">Account & sync</span>
-          <span id="cloudStatusPill" class="muted">Local only</span>
-        </div>
-        <div class="field-help">Optional. Login is never required. Local-only behavior stays unchanged. Push writes Chrome Sync and, when linked, a private Google Drive appDataFolder copy. Pull takes the newest valid copy. Synced data is configuration only: theme, pane width, strategy, Main AI, cycle/delay defaults, recovery-summary interval, stuck timeout, jobs, Team rules, and reusable history. Transcripts, Vault files, source uploads, tab IDs, tokens, live session state, and recovery checkpoints stay on this machine.</div>
-        <div class="account-actions">
-          <button id="cloudPush" class="ghost" type="button">Push settings</button>
-          <button id="cloudPull" class="ghost" type="button">Pull settings</button>
-          <button id="cloudConnect" class="ghost" type="button">Link Google account</button>
-          <button id="cloudUnlink" class="ghost" type="button">Unlink Google account</button>
-        </div>
-        <div id="cloudNotice" class="source-notice hidden"></div>
       </section>
 
       <section class="panel-section">
@@ -275,6 +255,81 @@
         <button id="sendInterject" class="human-send" type="button" disabled>Queue for Main AI</button>
         <div class="field-help">Safe delivery: your note is queued now, but it is not injected into the currently queued model. It is sent with the Main AI's next group turn, then becomes shared context for later teammates.</div>
       </section>
+      </div>
+
+      <div id="settingsView" class="hidden">
+        <section class="panel-section" aria-labelledby="appearanceHeading">
+          <div class="section-heading">
+            <span id="appearanceHeading">Appearance</span>
+          </div>
+          <label for="themeSelect">Theme</label>
+          <select id="themeSelect" class="theme-select" aria-label="Theme">
+            <option value="blizzard">Blizzard Blue</option>
+            <option value="ghostwhite">Ghost White</option>
+            <option value="midnight">Midnight</option>
+            <option value="slate">Slate</option>
+            <option value="light">Light</option>
+            <option value="solarized">Solarized Light</option>
+            <option value="ocean">Ocean</option>
+            <option value="terminal">Terminal</option>
+          </select>
+          <div class="field-help">Applies immediately on this machine. Push settings if you want the same theme on another Chrome profile.</div>
+        </section>
+
+        <section class="panel-section account-section" aria-labelledby="accountHeading">
+          <div class="section-heading">
+            <span id="accountHeading">Account & sync</span>
+            <span id="cloudStatusPill" class="muted">Local only</span>
+          </div>
+          <div class="field-help">Optional. Login is never required. Push writes Chrome Sync and, when linked, a private Google Drive appDataFolder copy. Pull takes the newest valid copy. Transcripts, Vault files, source uploads, tab IDs, tokens, live session, and recovery checkpoints stay on this machine.</div>
+          <div class="account-actions">
+            <button id="cloudPush" class="ghost" type="button">Push settings</button>
+            <button id="cloudPull" class="ghost" type="button">Pull settings</button>
+            <button id="cloudConnect" class="ghost" type="button">Link Google account</button>
+            <button id="cloudUnlink" class="ghost" type="button">Unlink Google account</button>
+          </div>
+          <div id="cloudNotice" class="source-notice hidden"></div>
+        </section>
+
+        <section class="panel-section" aria-labelledby="googleOauthHeading">
+          <div class="section-heading">
+            <span id="googleOauthHeading">Google Drive login</span>
+          </div>
+          <div class="field-help">Linking needs a Google Cloud OAuth client because Chrome will not let an unpacked extension ship a fake client ID. Create a <strong>Web application</strong> client, enable the Drive API, and add the redirect URI below. Scope used is <code>drive.appdata</code> only. The client ID is stored on this machine and is never synced.</div>
+          <label>Extension ID</label>
+          <div class="settings-id-row">
+            <code id="extensionIdValue">loading…</code>
+            <button id="copyExtensionId" class="tiny ghost" type="button">Copy</button>
+          </div>
+          <label>Authorized redirect URI</label>
+          <div class="settings-id-row">
+            <code id="redirectUriValue">loading…</code>
+            <button id="copyRedirectUri" class="tiny ghost" type="button">Copy</button>
+          </div>
+          <label for="googleClientId">OAuth client ID</label>
+          <input id="googleClientId" type="text" spellcheck="false" autocomplete="off" placeholder="1234567890-abc.apps.googleusercontent.com">
+          <div class="account-actions">
+            <button id="saveGoogleClientId" class="ghost" type="button">Save client ID</button>
+          </div>
+        </section>
+
+        <section class="panel-section" aria-labelledby="updatesHeading">
+          <div class="section-heading">
+            <span id="updatesHeading">Updates</span>
+            <span id="installedVersionPill" class="muted">v1.15.0</span>
+          </div>
+          <div class="field-help">Unpacked Chrome extensions cannot overwrite themselves. Check GitHub for a newer <code>manifest.json</code> on main, download the ZIP, extract over this folder, then click Reload on chrome://extensions. Daily checks only run if you opt in — AI Bridge does not phone home by default.</div>
+          <div id="updateStatus" class="status-text">Not checked yet.</div>
+          <div class="account-actions">
+            <button id="checkUpdates" class="ghost" type="button">Check for updates</button>
+            <button id="downloadUpdate" class="ghost" type="button" disabled>Download latest ZIP</button>
+          </div>
+          <label class="check-line" for="autoCheckUpdates">
+            <input id="autoCheckUpdates" type="checkbox">
+            <span>Check GitHub once a day</span>
+          </label>
+        </section>
+      </div>
     </aside>
 
     <div id="paneSplitter" class="pane-splitter" role="separator" aria-orientation="vertical" aria-controls="controlPanel" aria-valuemin="24" aria-valuemax="70" aria-valuenow="40" aria-valuetext="40 percent" tabindex="0" title="Drag to resize. Double-click resets to 40%.">

@@ -1478,6 +1478,7 @@ async function loadState() {
   } else {
     await clearWatchdogAlarm();
   }
+  try { await ensureUpdateAlarm(); } catch (_) {}
 }
 
 function tabForSide(side) {
@@ -2309,16 +2310,18 @@ async function sendToSide(side, text, { record = true, deliveredSeq = null, deli
   }
 }
 
-async function openDashboard() {
-  const url = chrome.runtime.getURL("dashboard.html");
+async function openDashboard(hash = "") {
+  const base = chrome.runtime.getURL("dashboard.html");
+  const suffix = hash ? `#${String(hash).replace(/^#/, "")}` : "";
+  const url = base + suffix;
   const tabs = await chrome.tabs.query({});
-  const existing = tabs.find(tab => tab.url === url);
+  const existing = tabs.find(tab => String(tab.url || "").split("#")[0] === base);
 
   if (existing?.id) {
     if (existing.windowId) {
       try { await chrome.windows.update(existing.windowId, { focused: true }); } catch (_) {}
     }
-    await chrome.tabs.update(existing.id, { active: true });
+    await chrome.tabs.update(existing.id, { active: true, url: suffix ? url : undefined });
     return existing.id;
   }
 
@@ -2755,7 +2758,8 @@ function sanitizeHistoryForCloud(kind, items, limit) {
 
 function sanitizeCloudSettings(raw, options = {}) {
   // Whitelist reconstruction. Anything not copied here — transcripts, Vault
-  // bytes, source files, tab IDs, tokens, live session — is dropped.
+  // bytes, source files, tab IDs, tokens, live session, recoveryCheckpoint,
+  // OAuth client IDs — is dropped.
   const src = raw && typeof raw === "object" && !Array.isArray(raw) ? raw : {};
   const stamp = options.stamp !== false;
   let maxTurns = INFINITE_TURNS;
@@ -2834,15 +2838,191 @@ function pickNewestCloudCopy(candidates) {
   return best;
 }
 
-function googleOauthConfigured() {
+const GITHUB_OWNER = "drkevorkian";
+const GITHUB_REPO = "AI_Bridge";
+const GITHUB_MANIFEST_URL = "https://raw.githubusercontent.com/drkevorkian/AI_Bridge/main/manifest.json";
+const GITHUB_ZIP_URL = "https://codeload.github.com/drkevorkian/AI_Bridge/zip/refs/heads/main";
+const UPDATE_ALARM = "ai-bridge-update-check";
+const GOOGLE_CLIENT_ID_KEY = "bridgeGoogleOauthClientId";
+const GOOGLE_TOKEN_SESSION_KEY = "bridgeGoogleAccessToken";
+const AUTO_UPDATE_KEY = "bridgeAutoCheckUpdates";
+
+function googleOauthPackaged() {
   const oauth = chrome.runtime.getManifest()?.oauth2;
   const clientId = String(oauth?.client_id || "");
   if (!clientId.includes(".apps.googleusercontent.com")) return false;
   if (/UNCONFIGURED|YOUR_|PLACEHOLDER|EXAMPLE/i.test(clientId)) return false;
   const scopes = Array.isArray(oauth?.scopes) ? oauth.scopes.map(String) : [];
-  // Fail closed if the packaged manifest requests any Drive scope broader than appdata.
   if (scopes.some(scope => scope !== DRIVE_APP_DATA_SCOPE)) return false;
   return true;
+}
+
+function normalizeOauthClientId(raw, { emptyOk = false } = {}) {
+  const id = String(raw || "").trim();
+  if (!id) {
+    if (emptyOk) return "";
+    throw new Error("Paste a Google Cloud OAuth client ID first.");
+  }
+  if (!/^[0-9]+-[a-z0-9]+\.apps\.googleusercontent\.com$/i.test(id)) {
+    throw new Error("That does not look like a Google OAuth client ID.");
+  }
+  if (/UNCONFIGURED|YOUR_|PLACEHOLDER|EXAMPLE/i.test(id)) {
+    throw new Error("Refusing a placeholder OAuth client ID.");
+  }
+  return id;
+}
+
+function googleAuthUrlAllowed(rawUrl) {
+  try {
+    const url = new URL(String(rawUrl || ""));
+    if (url.protocol !== "https:") return false;
+    if (url.username || url.password) return false;
+    if (url.hostname !== "accounts.google.com") return false;
+    return url.pathname === "/o/oauth2/v2/auth" || url.pathname === "/o/oauth2/auth";
+  } catch (_) {
+    return false;
+  }
+}
+
+function parseImplicitOAuthRedirect(rawUrl, expectedHost) {
+  const url = new URL(String(rawUrl || ""));
+  if (url.protocol !== "https:") throw new Error("OAuth redirect was not HTTPS.");
+  const host = String(expectedHost || "");
+  if (!host || url.hostname !== host) throw new Error("OAuth redirect host rejected.");
+  const params = new URLSearchParams(String(url.hash || "").replace(/^#/, "") || String(url.search || "").replace(/^\?/, ""));
+  const err = params.get("error");
+  if (err) throw new Error(`Google sign-in was denied (${err}).`);
+  const token = params.get("access_token");
+  if (!token || token.length < 16 || token.length > 4096) throw new Error("Google sign-in did not return a token.");
+  if (!/^[A-Za-z0-9._~+/=-]+$/.test(token)) throw new Error("Google token rejected.");
+  const expiresIn = Number(params.get("expires_in"));
+  const ttl = Number.isFinite(expiresIn) ? Math.min(36000, Math.max(60, expiresIn)) : 3600;
+  return { token, expiresAt: Date.now() + ttl * 1000 - 30000 };
+}
+
+function githubUrlAllowed(rawUrl) {
+  try {
+    const url = new URL(String(rawUrl || ""));
+    if (url.protocol !== "https:") return false;
+    if (url.username || url.password) return false;
+    const host = url.hostname.toLowerCase();
+    const path = url.pathname;
+    if (host === "raw.githubusercontent.com") {
+      return path === `/${GITHUB_OWNER}/${GITHUB_REPO}/main/manifest.json`;
+    }
+    if (host === "api.github.com") {
+      return path === `/repos/${GITHUB_OWNER}/${GITHUB_REPO}/releases/latest`;
+    }
+    if (host === "codeload.github.com") {
+      return path === `/${GITHUB_OWNER}/${GITHUB_REPO}/zip/refs/heads/main`
+        || new RegExp(`^/${GITHUB_OWNER}/${GITHUB_REPO}/zip/refs/tags/v?[0-9.]+$`).test(path);
+    }
+    return false;
+  } catch (_) {
+    return false;
+  }
+}
+
+function parseVersionParts(raw) {
+  const parts = String(raw || "").trim().split(".").map(value => Number(value));
+  if (parts.length < 2 || parts.length > 4) return null;
+  if (parts.some(n => !Number.isInteger(n) || n < 0 || n > 99999)) return null;
+  return [parts[0] || 0, parts[1] || 0, parts[2] || 0];
+}
+
+function compareVersions(leftRaw, rightRaw) {
+  const left = parseVersionParts(leftRaw);
+  const right = parseVersionParts(rightRaw);
+  if (!left || !right) throw new Error("Version string rejected.");
+  for (let i = 0; i < 3; i++) {
+    if (left[i] > right[i]) return 1;
+    if (left[i] < right[i]) return -1;
+  }
+  return 0;
+}
+
+function extensionRedirectHost() {
+  return `${chrome.runtime.id}.chromiumapp.org`;
+}
+
+function extensionRedirectUri() {
+  return chrome.identity?.getRedirectURL ? chrome.identity.getRedirectURL() : `https://${extensionRedirectHost()}/`;
+}
+
+function googleOauthConfigured() {
+  // Packaged-manifest path. User-supplied Web-application client IDs are handled
+  // separately so this repo never ships a placeholder oauth2.client_id.
+  return googleOauthPackaged();
+}
+
+async function readUserOauthClientId() {
+  try {
+    const pack = await chrome.storage.local.get(GOOGLE_CLIENT_ID_KEY);
+    return normalizeOauthClientId(pack?.[GOOGLE_CLIENT_ID_KEY] || "", { emptyOk: true });
+  } catch (_) {
+    return "";
+  }
+}
+
+async function googleOauthReady() {
+  if (googleOauthPackaged()) return true;
+  return Boolean(await readUserOauthClientId());
+}
+
+async function saveUserOauthClientId(raw) {
+  const id = normalizeOauthClientId(raw, { emptyOk: true });
+  await chrome.storage.local.set({ [GOOGLE_CLIENT_ID_KEY]: id });
+  if (!id) {
+    try { await chrome.storage.session.remove(GOOGLE_TOKEN_SESSION_KEY); } catch (_) {}
+    await chrome.storage.local.set({ [GOOGLE_LINKED_KEY]: false });
+  }
+  return { saved: Boolean(id), googleConfigured: await googleOauthReady() };
+}
+
+async function readSessionGoogleToken() {
+  try {
+    if (!chrome.storage?.session?.get) return null;
+    const pack = await chrome.storage.session.get(GOOGLE_TOKEN_SESSION_KEY);
+    const rec = pack?.[GOOGLE_TOKEN_SESSION_KEY];
+    if (!rec || typeof rec !== "object") return null;
+    if (!rec.token || Date.now() >= Number(rec.expiresAt || 0)) return null;
+    return rec;
+  } catch (_) {
+    return null;
+  }
+}
+
+async function writeSessionGoogleToken(rec) {
+  if (!chrome.storage?.session?.set) return;
+  await chrome.storage.session.set({ [GOOGLE_TOKEN_SESSION_KEY]: rec });
+}
+
+async function clearSessionGoogleToken() {
+  try {
+    if (chrome.storage?.session?.remove) await chrome.storage.session.remove(GOOGLE_TOKEN_SESSION_KEY);
+  } catch (_) {}
+}
+
+async function launchGoogleWebAuth({ clientId, interactive }) {
+  const redirectUri = extensionRedirectUri();
+  const params = new URLSearchParams({
+    client_id: clientId,
+    redirect_uri: redirectUri,
+    response_type: "token",
+    scope: DRIVE_APP_DATA_SCOPE,
+    include_granted_scopes: "true"
+  });
+  if (interactive) params.set("prompt", "consent");
+  else params.set("prompt", "none");
+  const url = `https://accounts.google.com/o/oauth2/v2/auth?${params.toString()}`;
+  if (!googleAuthUrlAllowed(url)) throw new Error("OAuth URL rejected.");
+  const redirectUrl = await chrome.identity.launchWebAuthFlow({
+    url,
+    interactive: Boolean(interactive)
+  });
+  const parsed = parseImplicitOAuthRedirect(redirectUrl, extensionRedirectHost());
+  await writeSessionGoogleToken(parsed);
+  return parsed.token;
 }
 
 function driveUrlAllowed(rawUrl) {
@@ -2935,22 +3115,33 @@ async function readChromeSyncSettings() {
 }
 
 async function isGoogleLinked() {
-  if (!googleOauthConfigured()) return false;
+  if (!(await googleOauthReady())) return false;
   const local = await chrome.storage.local.get(GOOGLE_LINKED_KEY);
   return Boolean(local?.[GOOGLE_LINKED_KEY]);
 }
 
 async function getGoogleAccessToken({ interactive = false } = {}) {
-  if (!googleOauthConfigured()) {
-    throw new Error("Google Drive login needs a Google Cloud OAuth client ID in the extension manifest. Until then, use Chrome Sync (Push / Pull). Login remains optional.");
+  if (googleOauthPackaged()) {
+    const result = await chrome.identity.getAuthToken({
+      interactive: Boolean(interactive),
+      scopes: [DRIVE_APP_DATA_SCOPE]
+    });
+    const token = typeof result === "string" ? result : result?.token;
+    if (!token || typeof token !== "string") throw new Error("Google sign-in did not return a token.");
+    return token;
   }
-  const result = await chrome.identity.getAuthToken({
-    interactive: Boolean(interactive),
-    scopes: [DRIVE_APP_DATA_SCOPE]
-  });
-  const token = typeof result === "string" ? result : result?.token;
-  if (!token || typeof token !== "string") throw new Error("Google sign-in did not return a token.");
-  return token;
+  const clientId = await readUserOauthClientId();
+  if (!clientId) {
+    throw new Error("Google Drive login needs a Google Cloud OAuth client ID. Open Settings, paste a Web-application client ID with this extension's redirect URI, then Link. Until then, use Chrome Sync (Push / Pull). Login remains optional.");
+  }
+  const cached = await readSessionGoogleToken();
+  if (cached?.token) return cached.token;
+  try {
+    return await launchGoogleWebAuth({ clientId, interactive: Boolean(interactive) });
+  } catch (err) {
+    if (interactive) throw err;
+    throw new Error("Google sign-in expired. Use Link Google account again.");
+  }
 }
 
 async function googleApiFetch(url, options = {}) {
@@ -2979,6 +3170,7 @@ async function googleApiFetchAttempt(url, { method = "GET", headers = {}, body, 
   }
   if (response.status !== 401) return response;
   try { await chrome.identity.removeCachedAuthToken({ token: accessToken }); } catch (_) {}
+  await clearSessionGoogleToken();
   // 401 retry is bounded to one attempt. A second 401 clears the linked flag.
   if (attempt >= 1) {
     await chrome.storage.local.set({ [GOOGLE_LINKED_KEY]: false });
@@ -3075,24 +3267,37 @@ async function readDriveSettings() {
 }
 
 async function cloudStatus() {
-  const local = await chrome.storage.local.get([THEME_STORAGE_KEY, PANE_WIDTH_STORAGE_KEY, FRESH_ON_START_KEY, CLOUD_SYNC_KEY, GOOGLE_LINKED_KEY]);
+  const local = await chrome.storage.local.get([
+    THEME_STORAGE_KEY, PANE_WIDTH_STORAGE_KEY, FRESH_ON_START_KEY, CLOUD_SYNC_KEY,
+    GOOGLE_LINKED_KEY, GOOGLE_CLIENT_ID_KEY, AUTO_UPDATE_KEY
+  ]);
   let chromeSyncHasCopy = false;
   try {
     chromeSyncHasCopy = Boolean(await readChromeSyncSettings());
   } catch (_) {
     chromeSyncHasCopy = false;
   }
-  const googleLinked = Boolean(local?.[GOOGLE_LINKED_KEY]) && googleOauthConfigured();
+  const userClientId = await readUserOauthClientId();
+  const googleReady = googleOauthPackaged() || Boolean(userClientId);
+  const googleLinked = Boolean(local?.[GOOGLE_LINKED_KEY]) && googleReady;
+  const installedVersion = String(chrome.runtime.getManifest()?.version || "");
   return {
-    googleConfigured: googleOauthConfigured(),
+    googleConfigured: googleReady,
+    googlePackaged: googleOauthPackaged(),
+    googleUserClientConfigured: Boolean(userClientId),
+    googleClientId: userClientId,
     googleLinked,
+    extensionId: chrome.runtime.id,
+    redirectUri: extensionRedirectUri(),
     chromeSyncAvailable: Boolean(chrome.storage?.sync),
     chromeSyncHasCopy,
     lastPushAt: Number(local?.[CLOUD_SYNC_KEY]?.updatedAt) || null,
     theme: local?.[THEME_STORAGE_KEY] || "blizzard",
     paneWidth: local?.[PANE_WIDTH_STORAGE_KEY],
     freshOnStart: local?.[FRESH_ON_START_KEY] !== false,
-    driveScope: DRIVE_APP_DATA_SCOPE
+    driveScope: DRIVE_APP_DATA_SCOPE,
+    installedVersion,
+    autoCheckUpdates: local?.[AUTO_UPDATE_KEY] === true
   };
 }
 
@@ -3197,27 +3402,97 @@ async function pullCloudSettings() {
 }
 
 async function connectGoogleAccount() {
-  if (!googleOauthConfigured()) {
-    throw new Error("Google Drive login needs a Google Cloud OAuth client ID in the extension manifest, scoped only to https://www.googleapis.com/auth/drive.appdata. Until then, use Chrome Sync (Push / Pull) to copy settings across signed-in Chrome profiles. Login remains optional.");
+  if (!(await googleOauthReady())) {
+    throw new Error("Google Drive login needs a Google Cloud OAuth client ID. Open Settings, copy this extension ID and redirect URI into a Web-application OAuth client, paste the client ID, then Link. Scope used is drive.appdata only. Until then, use Chrome Sync (Push / Pull). Login remains optional.");
   }
   // Interactive token request only from the explicit Link button.
   await getGoogleAccessToken({ interactive: true });
-  // Probe appDataFolder with the cached token. Do not persist the token.
+  // Probe appDataFolder. Packaged getAuthToken caches in Chrome Identity.
+  // Web-application tokens stay in chrome.storage.session only — never local/sync.
   await findDriveSettingsFile();
   await chrome.storage.local.set({ [GOOGLE_LINKED_KEY]: true });
-  return { ok: true, googleLinked: true, driveScope: DRIVE_APP_DATA_SCOPE };
+  return { ok: true, googleLinked: true, driveScope: DRIVE_APP_DATA_SCOPE, via: googleOauthPackaged() ? "packaged" : "user-client-id" };
 }
 
 async function unlinkGoogleAccount() {
   // App-side revoke only. Drive's hidden appDataFolder copy is left in place so
-  // a later Link can recover it. Tokens stay out of extension storage.
+  // a later Link can recover it. Tokens stay out of local/sync storage.
   try {
     if (chrome.identity?.clearAllCachedAuthTokens) {
       await chrome.identity.clearAllCachedAuthTokens();
     }
   } catch (_) {}
+  await clearSessionGoogleToken();
   await chrome.storage.local.set({ [GOOGLE_LINKED_KEY]: false });
   return { ok: true, googleLinked: false };
+}
+
+async function githubFetch(url) {
+  if (!githubUrlAllowed(url)) throw new Error("Update URL is not permitted.");
+  let response;
+  try {
+    response = await fetch(url, {
+      redirect: "error",
+      credentials: "omit",
+      cache: "no-store"
+    });
+  } catch (err) {
+    throw new Error(`Update check failed: ${err.message}`);
+  }
+  if (!githubUrlAllowed(response.url)) throw new Error("Update fetch redirected off the HTTPS allowlist.");
+  if (!response.ok) throw new Error(`Update check failed (HTTP ${response.status}).`);
+  return response;
+}
+
+async function checkForExtensionUpdate() {
+  const installedVersion = String(chrome.runtime.getManifest()?.version || "");
+  const response = await githubFetch(GITHUB_MANIFEST_URL);
+  const text = await response.text();
+  if (text.length > 20000) throw new Error("Remote manifest is too large.");
+  let remote;
+  try {
+    remote = JSON.parse(text);
+  } catch (_) {
+    throw new Error("Remote manifest is not valid JSON.");
+  }
+  const remoteVersion = String(remote?.version || "");
+  const cmp = compareVersions(remoteVersion, installedVersion);
+  return {
+    ok: true,
+    installedVersion,
+    remoteVersion,
+    updateAvailable: cmp > 0,
+    zipUrl: GITHUB_ZIP_URL,
+    source: GITHUB_MANIFEST_URL
+  };
+}
+
+async function downloadExtensionUpdate() {
+  const info = await checkForExtensionUpdate();
+  if (!githubUrlAllowed(info.zipUrl)) throw new Error("Download URL is not permitted.");
+  const filename = `AI_Bridge_v${String(info.remoteVersion).replace(/[^0-9.]/g, "") || "latest"}.zip`;
+  const downloadId = await chrome.downloads.download({
+    url: info.zipUrl,
+    filename,
+    saveAs: true
+  });
+  return { ok: true, downloadId, filename, ...info };
+}
+
+async function ensureUpdateAlarm() {
+  if (!chrome.alarms?.create) return;
+  const stored = await chrome.storage.local.get(AUTO_UPDATE_KEY);
+  const enabled = stored?.[AUTO_UPDATE_KEY] === true;
+  try { await chrome.alarms.clear(UPDATE_ALARM); } catch (_) {}
+  if (enabled) {
+    await chrome.alarms.create(UPDATE_ALARM, { periodInMinutes: 1440 });
+  }
+  return { enabled };
+}
+
+async function setAutoCheckUpdates(enabled) {
+  await chrome.storage.local.set({ [AUTO_UPDATE_KEY]: Boolean(enabled) });
+  return ensureUpdateAlarm();
 }
 
 chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
@@ -3244,7 +3519,7 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
 
     if (msg.type === "AI_BRIDGE_OPEN_DASHBOARD") {
       requireExtensionPage(sender, "Open dashboard");
-      const tabId = await openDashboard();
+      const tabId = await openDashboard(msg.hash);
       sendResponse({ ok: true, tabId });
       return;
     }
@@ -3331,6 +3606,34 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
     if (msg.type === "AI_BRIDGE_CLOUD_UNLINK") {
       requireExtensionPage(sender, "Unlink Google account");
       const result = await unlinkGoogleAccount();
+      sendResponse({ ok: true, ...result });
+      return;
+    }
+
+    if (msg.type === "AI_BRIDGE_SAVE_GOOGLE_CLIENT_ID") {
+      requireExtensionPage(sender, "Save Google client ID");
+      const result = await saveUserOauthClientId(msg.clientId);
+      sendResponse({ ok: true, ...result });
+      return;
+    }
+
+    if (msg.type === "AI_BRIDGE_CHECK_UPDATES") {
+      requireExtensionPage(sender, "Check for updates");
+      const result = await checkForExtensionUpdate();
+      sendResponse({ ok: true, ...result });
+      return;
+    }
+
+    if (msg.type === "AI_BRIDGE_DOWNLOAD_UPDATE") {
+      requireExtensionPage(sender, "Download update");
+      const result = await downloadExtensionUpdate();
+      sendResponse({ ok: true, ...result });
+      return;
+    }
+
+    if (msg.type === "AI_BRIDGE_SET_AUTO_UPDATE") {
+      requireExtensionPage(sender, "Set auto-update");
+      const result = await setAutoCheckUpdates(Boolean(msg.enabled));
       sendResponse({ ok: true, ...result });
       return;
     }
@@ -3673,6 +3976,11 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
 
 chrome.notifications.onClicked.addListener(async notificationId => {
   await stateReady;
+  if (notificationId === "ai-bridge-update") {
+    try { await chrome.notifications.clear(notificationId); } catch (_) {}
+    try { await openDashboard("settings"); } catch (_) {}
+    return;
+  }
   if (notificationId !== "ai-bridge-human-input") return;
   try { await chrome.notifications.clear(notificationId); } catch (_) {}
   try { await openDashboard(); } catch (_) {}
@@ -3699,6 +4007,24 @@ chrome.tabs.onRemoved.addListener(async tabId => {
 
 
 chrome.alarms.onAlarm.addListener(async alarm => {
+  if (alarm?.name === UPDATE_ALARM) {
+    await stateReady;
+    try {
+      const result = await checkForExtensionUpdate();
+      if (result.updateAvailable) {
+        await chrome.notifications.create("ai-bridge-update", {
+          type: "basic",
+          iconUrl: "icon128.png",
+          title: "AI Bridge update available",
+          message: `Version ${result.remoteVersion} is on GitHub. Open Settings to download the ZIP, then Reload the unpacked extension.`,
+          priority: 1
+        });
+      }
+    } catch (err) {
+      console.warn("AI Bridge update check failed", err);
+    }
+    return;
+  }
   if (alarm?.name !== WATCHDOG_ALARM) return;
   await stateReady;
   try {
