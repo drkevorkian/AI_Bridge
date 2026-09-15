@@ -1,26 +1,30 @@
 // AI Bridge service-worker bootstrap.
 //
-// Keep the existing background.js runtime intact and load auxiliary runtime
-// modules after it. This lets small, isolated platform/security features stay
-// auditable without inflating the already-large coordination engine.
+// Install the mutation-serialization prelude before background.js registers its
+// listeners. This lets the coordinator's existing anonymous message listener
+// run behind one queue without rewriting the large core file.
+importScripts("coordinator-mutex-prelude.js");
+if (!globalThis.__AI_BRIDGE_COORDINATOR_MUTEX__) {
+  throw new Error("AI Bridge coordinator mutex failed to initialize.");
+}
+
+// Keep the existing background.js runtime intact and load established helpers.
 importScripts("background.js", "completion-runtime-hardening.js", "oauth-runtime-hardening.js", "power.js");
 
 // Artifact relay URLs come from provider DOM and are therefore untrusted.
-// Harden only that fetch primitive: strip credentials/referrer data, keep the
-// provider asset allowlist narrow, and re-check the final redirect target.
 importScripts("artifact-fetch-runtime-hardening.js");
 if (globalThis.__AI_BRIDGE_ARTIFACT_FETCH_SECURITY__?.credentials !== "omit") {
-  // Security boundary is mandatory. Throwing here prevents the service worker
-  // from completing startup rather than silently exposing the legacy fetcher.
   throw new Error("AI Bridge artifact security hardening failed to initialize.");
 }
 
-// Human-input detection is a control-plane concern. Load its isolated hardening
-// after the established bootstrap chain so existing runtime ordering and older
-// extension/test assumptions remain backwards compatible.
+// Fail closed on response generations after the core functions exist.
+importScripts("coordinator-generation-hardening.js");
+if (globalThis.__AI_BRIDGE_GENERATION_SECURITY__?.failClosedWhenUnarmed !== true) {
+  throw new Error("AI Bridge generation hardening failed to initialize.");
+}
+
+// Human-input detection is a control-plane concern.
 importScripts("human-input-runtime-hardening.js");
 
-// Reconnect recovery is also isolated from the coordinator. It replaces only
-// ensureTabListener() so service-worker restarts and extension reloads rebuild
-// the complete content runtime before resuming a session.
+// Reconnect recovery is isolated from the coordinator.
 importScripts("reconnect-runtime-hardening.js");
