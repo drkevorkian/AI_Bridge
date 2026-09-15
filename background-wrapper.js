@@ -5,6 +5,11 @@
 // auditable without inflating the already-large coordination engine.
 importScripts("background.js", "completion-runtime-hardening.js", "oauth-runtime-hardening.js", "power.js");
 
+// Artifact relay URLs come from provider DOM and are therefore untrusted.
+// Harden only that fetch primitive: strip credentials/referrer data, keep the
+// provider asset allowlist narrow, and re-check the final redirect target.
+importScripts("artifact-fetch-runtime-hardening.js");
+
 // Human-input detection is a control-plane concern. Load its isolated hardening
 // after the established bootstrap chain so existing runtime ordering and older
 // extension/test assumptions remain backwards compatible.
