@@ -58,7 +58,7 @@ assert.match(background, /pickDriveSettingsFile/);
 assert.match(background, /HTTP 409/);
 assert.match(background, /driveWriteChain/);
 assert.match(background, /enqueueGoogleAuth/);
-assert.match(wrapper, /importScripts\("background\.js",\s*"power\.js"\)/);
+assert.match(wrapper, /importScripts\("background\.js",\s*"oauth-runtime-hardening\.js",\s*"power\.js"\)/);
 assert.match(power, /requestKeepAwake\("system"\)/);
 assert.doesNotMatch(power, /requestKeepAwake\("display"\)/);
 assert.match(power, /awaitingHuman/);
