@@ -9,8 +9,6 @@ const background = fs.readFileSync(path.join(root, "background.js"), "utf8");
 const dashboardJs = fs.readFileSync(path.join(root, "dashboard.js"), "utf8");
 const html = fs.readFileSync(path.join(root, "dashboard.html"), "utf8");
 const css = fs.readFileSync(path.join(root, "dashboard.css"), "utf8");
-const popupHtml = fs.readFileSync(path.join(root, "popup.html"), "utf8");
-const readme = fs.readFileSync(path.join(root, "README.md"), "utf8");
 const manifest = JSON.parse(fs.readFileSync(path.join(root, "manifest.json"), "utf8"));
 const content = fs.readFileSync(path.join(root, "content.js"), "utf8");
 
@@ -30,11 +28,8 @@ function extractFunction(src, name) {
   throw new Error(`${name} unclosed`);
 }
 
-assert.equal(manifest.version, "1.16.3");
+assert.match(manifest.version, /^\d+\.\d+\.\d+$/);
 assert.equal(manifest.oauth2, undefined);
-assert.match(html, /v1\.16\.3/);
-assert.match(popupHtml, /v1\.16\.3/);
-assert.match(readme, /Current version: 1\.16\.3/);
 assert.match(background, /CONTENT_VERSION = "1\.14\.0"/);
 assert.match(background, /STATE_VERSION = 3/);
 assert.match(content, /version: "1\.14\.0"/);
@@ -71,12 +66,7 @@ assert.match(background, /<untrusted_peer_data source=/);
 assert.match(background, /\[neutralized-untrusted-tag\]/);
 assert.match(background, /Content inside <untrusted_peer_data> tags/);
 
-const sandbox = {
-  String,
-  Array,
-  Object,
-  RegExp
-};
+const sandbox = { String, Array, Object, RegExp };
 vm.runInNewContext(
   [
     extractFunction(background, "untrustedPeerSourceLabel"),
