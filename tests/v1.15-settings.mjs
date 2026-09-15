@@ -7,6 +7,7 @@ import vm from "node:vm";
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const background = fs.readFileSync(path.join(root, "background.js"), "utf8");
 const dashboardJs = fs.readFileSync(path.join(root, "dashboard.js"), "utf8");
+const dashboardRelease = fs.readFileSync(path.join(root, "dashboard-release.js"), "utf8");
 const html = fs.readFileSync(path.join(root, "dashboard.html"), "utf8");
 const css = fs.readFileSync(path.join(root, "dashboard.css"), "utf8");
 const popupHtml = fs.readFileSync(path.join(root, "popup.html"), "utf8");
@@ -31,7 +32,7 @@ function extractFunction(src, name) {
   throw new Error(`${name} unclosed`);
 }
 
-assert.equal(manifest.version, "1.16.2");
+assert.equal(manifest.version, "1.16.3");
 assert.equal(manifest.oauth2, undefined, "do not ship a placeholder OAuth client ID");
 assert.equal(JSON.stringify(manifest).includes("YOUR_"), false);
 assert.equal(JSON.stringify(manifest).includes("PLACEHOLDER"), false);
@@ -44,7 +45,8 @@ assert.ok(manifest.host_permissions.includes("https://raw.githubusercontent.com/
 assert.ok(manifest.host_permissions.includes("https://codeload.github.com/*"));
 assert.ok(manifest.host_permissions.every(rule => rule.startsWith("https://")));
 
-assert.match(html, /v1\.16\.2/);
+assert.match(html, /v1\.16\.3/);
+assert.match(html, /dashboard-release\.js/);
 assert.match(html, /id="viewSessionBtn"/);
 assert.match(html, /id="viewSettingsBtn"/);
 assert.match(html, /id="sessionView"/);
@@ -65,10 +67,14 @@ assert.match(html, /id="cloudConnect"/);
 assert.equal((html.match(/id="themeSelect"/g) || []).length, 1);
 assert.match(css, /\.view-tabs/);
 assert.match(css, /\.view-tab\.active/);
-assert.match(popupHtml, /v1\.16\.2/);
+assert.match(popupHtml, /v1\.16\.3/);
 assert.match(popupHtml, /id="openSettings"/);
 assert.match(popupJs, /hash: "settings"/);
 assert.doesNotMatch(dashboardJs, /innerHTML/);
+assert.doesNotMatch(dashboardRelease, /innerHTML|eval\s*\(|new Function/);
+assert.match(dashboardRelease, /getManifest\(\)\?\.version/);
+assert.match(dashboardRelease, /Google Drive login is optional/);
+assert.match(dashboardRelease, /Chrome Sync Push\/Pull works without Google Drive/);
 assert.match(dashboardJs, /function currentPanePct\(/);
 assert.match(dashboardJs, /function showDashboardView\(/);
 assert.match(dashboardJs, /AI_BRIDGE_SAVE_GOOGLE_CLIENT_ID/);
@@ -97,7 +103,7 @@ assert.match(background, /requireExtensionPage\(sender, "Set auto-update"\)/);
 assert.match(background, /openDashboard\(msg\.hash\)/);
 assert.match(background, /saveAs:\s*true/);
 assert.doesNotMatch(readme, /not yet on main/i);
-assert.match(readme, /Current version: 1\.16\.2/);
+assert.match(readme, /Current version: 1\.16\.3/);
 assert.match(readme, /Web application/);
 assert.match(readme, /drive\.appdata/);
 
