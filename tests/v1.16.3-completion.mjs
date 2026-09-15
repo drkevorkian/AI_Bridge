@@ -6,7 +6,9 @@ import { fileURLToPath } from "node:url";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const hardening = fs.readFileSync(path.join(root, "completion-runtime-hardening.js"), "utf8");
+const guard = fs.readFileSync(path.join(root, "content-completion-guard.js"), "utf8");
 const wrapper = fs.readFileSync(path.join(root, "background-wrapper.js"), "utf8");
+const manifest = JSON.parse(fs.readFileSync(path.join(root, "manifest.json"), "utf8"));
 
 function extractFunction(src, name) {
   const start = src.indexOf(`function ${name}(`);
@@ -28,48 +30,68 @@ assert.match(
   wrapper,
   /importScripts\("background\.js",\s*"completion-runtime-hardening\.js",\s*"oauth-runtime-hardening\.js",\s*"power\.js"\)/
 );
-assert.match(hardening, /const STALE_BASELINE_WINDOW_MS = 1200/);
+assert.deepEqual(
+  manifest.content_scripts?.[0]?.js,
+  ["content-completion-guard.js", "content.js"],
+  "DOM completion guard must load before the provider runtime"
+);
+assert.match(hardening, /GUARD_FILE = "content-completion-guard\.js"/);
+assert.match(hardening, /Completion guard could not be established/);
+assert.match(hardening, /completed < start/);
 assert.match(hardening, /state\?\.lastResponseBySide/);
-assert.match(hardening, /state\?\.generationIdBySide/);
 assert.match(hardening, /baseHandleCompletedResponse/);
 assert.match(hardening, /staleBaseline: true/);
-assert.doesNotMatch(hardening, /innerHTML|eval\s*\(|new Function/);
+assert.match(guard, /sameNode && sameText/);
+assert.match(guard, /AI_BRIDGE_COMPLETION_GUARD_STATUS/);
+assert.doesNotMatch(`${hardening}\n${guard}`, /innerHTML|eval\s*\(|new Function/);
 
-// Pure classifier boundary tests.
-const classifierSandbox = { Math, Number, String, STALE_BASELINE_WINDOW_MS: 1200 };
+// Timestamp fallback is now intentionally directional. The stale DOM timestamp
+// is created before sendToSide() starts the new round timer. A genuine response,
+// even an identical one, observed after the timer starts must be accepted.
+const classifierSandbox = { Number, String };
 vm.runInNewContext(
   `${extractFunction(hardening, "aiBridgeLooksLikeStaleBaseline")}\nthis.check = aiBridgeLooksLikeStaleBaseline;`,
   classifierSandbox
 );
-
 const check = classifierSandbox.check;
-assert.equal(check({ previousText: "old answer", incomingText: "old answer", startedAt: 10_000, completedAt: 10_050 }), true);
-assert.equal(check({ previousText: "old answer", incomingText: "old answer", startedAt: 10_000, completedAt: 9_100 }), true);
-assert.equal(check({ previousText: "old answer", incomingText: "old answer", startedAt: 10_000, completedAt: 11_199 }), true);
-assert.equal(check({ previousText: "old answer", incomingText: "old answer", startedAt: 10_000, completedAt: 11_201 }), false);
-assert.equal(check({ previousText: "old answer", incomingText: "new answer", startedAt: 10_000, completedAt: 10_050 }), false);
-assert.equal(check({ previousText: "", incomingText: "", startedAt: 10_000, completedAt: 10_050 }), false);
-assert.equal(check({ previousText: "same", incomingText: "same", startedAt: 0, completedAt: 10_050 }), false);
-assert.equal(check({ previousText: "same", incomingText: "same", startedAt: 10_000, completedAt: NaN }), false);
+assert.equal(check({ previousText: "same", incomingText: "same", startedAt: 10_000, completedAt: 9_999 }), true);
+assert.equal(check({ previousText: "same", incomingText: "same", startedAt: 10_000, completedAt: 10_000 }), false);
+assert.equal(check({ previousText: "same", incomingText: "same", startedAt: 10_000, completedAt: 10_001 }), false);
+assert.equal(check({ previousText: "same", incomingText: "different", startedAt: 10_000, completedAt: 9_999 }), false);
+assert.equal(check({ previousText: "", incomingText: "", startedAt: 10_000, completedAt: 9_999 }), false);
 
-// Runtime integration: sendToSide captures the previous response before the
-// core runtime clears it, stale prior DOM text is rejected, and the actual new
-// response continues through the original handler.
+// Service-worker integration: the provider guard is explicitly injected and
+// verified, stale pre-round text is rejected, but a very fast identical answer
+// after the round starts is not rejected by an arbitrary time window.
 const accepted = [];
 const runtimeState = {
   lastResponseBySide: { A: "previous answer" },
   generationIdBySide: { A: null },
   roundStartedAtBySide: { A: null }
 };
+const injected = [];
 const runtimeSandbox = {
   console: { warn() {} },
   Date,
   Map,
-  Math,
   Number,
   String,
   state: runtimeState,
   appendLog() {},
+  chrome: {
+    scripting: {
+      executeScript: async payload => { injected.push(payload); }
+    },
+    tabs: {
+      sendMessage: async (_tabId, msg) => {
+        if (msg?.type === "AI_BRIDGE_COMPLETION_GUARD_STATUS") {
+          return { ok: true, patched: true, version: "1.16.3" };
+        }
+        return { ok: true };
+      }
+    }
+  },
+  ensureTabListener: async tabId => ({ ok: true, tabId }),
   sendToSide: async side => {
     runtimeState.generationIdBySide[side] = "gen-A-2";
     runtimeState.roundStartedAtBySide[side] = 50_000;
@@ -82,21 +104,82 @@ const runtimeSandbox = {
   }
 };
 vm.runInNewContext(hardening, runtimeSandbox);
-await runtimeSandbox.sendToSide("A", "new prompt", {});
+await runtimeSandbox.ensureTabListener(123);
+assert.equal(injected.length, 1);
+assert.deepEqual(injected[0].target, { tabId: 123 });
+assert.deepEqual(injected[0].files, ["content-completion-guard.js"]);
 
+await runtimeSandbox.sendToSide("A", "new prompt", {});
 let result = await runtimeSandbox.handleCompletedResponse("A", "previous answer", {
   generationId: "gen-A-2",
-  completedAt: 50_400
+  completedAt: 49_999
 });
 assert.equal(result.staleBaseline, true);
 assert.equal(accepted.length, 0);
 
-result = await runtimeSandbox.handleCompletedResponse("A", "actual new answer", {
+// Same wording one millisecond after the new round starts is legitimate.
+result = await runtimeSandbox.handleCompletedResponse("A", "previous answer", {
   generationId: "gen-A-2",
-  completedAt: 54_000
+  completedAt: 50_001
 });
 assert.equal(result.ok, true);
 assert.equal(accepted.length, 1);
-assert.equal(accepted[0].text, "actual new answer");
 
-console.log("v1.16.3 stale-completion baseline regression ok");
+// Content-guard integration: same node + same text is suppressed, while a new
+// DOM node carrying identical text is allowed through to the real runtime API.
+const listeners = [];
+const outbound = [];
+function makeNode(text) {
+  const node = {
+    innerText: text,
+    textContent: text,
+    getBoundingClientRect: () => ({ width: 100, height: 20 }),
+    closest: () => node
+  };
+  return node;
+}
+let currentNode = makeNode("identical answer");
+const contentSandbox = {
+  window: {},
+  location: { hostname: "chatgpt.com" },
+  Date,
+  Map,
+  Promise,
+  String,
+  document: {
+    querySelectorAll: () => [currentNode]
+  },
+  getComputedStyle: () => ({ visibility: "visible", display: "block" }),
+  chrome: {
+    runtime: {
+      sendMessage: async msg => {
+        outbound.push(msg);
+        return { ok: true };
+      },
+      onMessage: {
+        addListener: fn => listeners.push(fn)
+      }
+    }
+  }
+};
+vm.runInNewContext(guard, contentSandbox);
+assert.equal(listeners.length, 1);
+listeners[0]({ type: "AI_BRIDGE_SEND", generationId: "gen-1" }, {}, () => {});
+result = await contentSandbox.chrome.runtime.sendMessage({
+  type: "AI_BRIDGE_RESPONSE",
+  text: "identical answer",
+  generationId: "gen-1"
+});
+assert.equal(result.staleBaseline, true);
+assert.equal(outbound.length, 0);
+
+currentNode = makeNode("identical answer");
+result = await contentSandbox.chrome.runtime.sendMessage({
+  type: "AI_BRIDGE_RESPONSE",
+  text: "identical answer",
+  generationId: "gen-1"
+});
+assert.equal(result.ok, true);
+assert.equal(outbound.length, 1);
+
+console.log("v1.16.3 completion identity + stale-baseline regression ok");
