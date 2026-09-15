@@ -9,8 +9,14 @@ const source = fs.readFileSync(path.join(root, "reconnect-runtime-hardening.js")
 const wrapper = fs.readFileSync(path.join(root, "background-wrapper.js"), "utf8");
 
 assert.match(wrapper, /importScripts\("reconnect-runtime-hardening\.js"\)/, "service worker must load reconnect hardening");
-assert.match(source, /files:\s*\["content-completion-guard\.js",\s*"content\.js"\]/, "reconnect must rebuild the full content runtime in manifest order");
+assert.match(
+  source,
+  /files:\s*\[\s*"content-completion-guard\.js",\s*"content-response-delivery-hardening\.js",\s*"content\.js"\s*\]/,
+  "reconnect must rebuild the full content runtime in manifest order"
+);
 assert.match(source, /delete window\.__AI_BRIDGE_LOADED_V114__/, "reconnect must clear the stale content bootstrap sentinel after a failed ping");
+assert.match(source, /delete window\.__AI_BRIDGE_COMPLETION_GUARD_V1163__/, "reconnect must reset the stale completion guard sentinel");
+assert.match(source, /delete window\.__AI_BRIDGE_RESPONSE_DELIVERY_HARDENING_V1163__/, "reconnect must reset response delivery hardening before reinjection");
 assert.match(source, /PING_ATTEMPTS\s*=\s*8/, "reconnect should use bounded ping retries");
 
 function buildRuntime({ sendMessage, tab = { id: 17, status: "complete", url: "https://chatgpt.com/c/test" } } = {}) {
@@ -57,9 +63,12 @@ function buildRuntime({ sendMessage, tab = { id: 17, status: "complete", url: "h
   });
   const pong = await runtime.context.ensureTabListener(17);
   assert.equal(pong.ok, true);
-  assert.equal(runtime.executeCalls.length, 2, "failed ping must clear stale sentinel and reinject both content scripts");
+  assert.equal(runtime.executeCalls.length, 2, "failed ping must clear stale sentinels and reinject the complete content stack");
   assert.equal(typeof runtime.executeCalls[0].func, "function");
-  assert.deepEqual(Array.from(runtime.executeCalls[1].files), ["content-completion-guard.js", "content.js"]);
+  assert.deepEqual(
+    Array.from(runtime.executeCalls[1].files),
+    ["content-completion-guard.js", "content-response-delivery-hardening.js", "content.js"]
+  );
   assert.ok(sends >= 3, "post-injection ping must retry instead of relying on one 150ms probe");
 }
 
