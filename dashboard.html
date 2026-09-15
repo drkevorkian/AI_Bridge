@@ -9,16 +9,7 @@
     .icon-btn { display: inline-flex; align-items: center; justify-content: center; gap: 6px; }
     .btn-icon { width: 13px; height: 13px; flex: 0 0 auto; }
   </style>
-  <script>
-    (function () {
-      try {
-        var hint = localStorage.getItem("aiBridgeLayoutHint");
-        document.documentElement.dataset.layout = hint === "classic" ? "classic" : "studio";
-      } catch (_) {
-        document.documentElement.dataset.layout = "studio";
-      }
-    })();
-  </script>
+  <script src="dashboard-bootstrap.js"></script>
 </head>
 <body>
   <div class="app-shell">
