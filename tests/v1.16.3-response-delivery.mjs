@@ -27,7 +27,7 @@ assert.match(hardening, /supersedeOlder\(/);
 assert.match(hardening, /function artifactSignature\(/, "delivery identity must include artifacts");
 assert.match(hardening, /artifactSignature\(message\)/);
 assert.match(hardening, /result\.ok === true/, "positive acknowledgement must be explicit");
-assert.match(hardening, /result\.awaitingHuman \? "coordinator is awaiting human input"/, "human-gated negative replies must remain retryable");
+assert.match(hardening, /result\?\.awaitingHuman\s*\?\s*"coordinator is awaiting human input"/, "human-gated negative replies must remain retryable");
 assert.doesNotMatch(hardening, /return Boolean\(result && typeof result === "object"\)/, "arbitrary structured errors must not count as acknowledgements");
 
 console.log("v1.16.3 response delivery regression passed");
