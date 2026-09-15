@@ -71,11 +71,31 @@
     baselineByGeneration.set(id, {
       node: responseIdentity(node),
       text: baselineText(node),
+      changed: false,
       createdAt: Date.now()
     });
     while (baselineByGeneration.size > MAX_BASELINES) {
       baselineByGeneration.delete(baselineByGeneration.keys().next().value);
     }
+  }
+
+  function markChangedBaselines() {
+    for (const baseline of baselineByGeneration.values()) {
+      if (baseline.changed || !baseline.node) continue;
+      if (baselineText(baseline.node) !== baseline.text) baseline.changed = true;
+    }
+  }
+
+  // Some providers reuse one response container throughout generation. Track
+  // whether that baseline container ever actually changes so a deterministic
+  // answer that eventually returns to the same wording is not suppressed.
+  if (typeof MutationObserver === "function") {
+    const mutationObserver = new MutationObserver(() => markChangedBaselines());
+    mutationObserver.observe(document.documentElement, {
+      childList: true,
+      subtree: true,
+      characterData: true
+    });
   }
 
   function shouldSuppressResponse(message) {
@@ -84,14 +104,16 @@
     const baseline = baselineByGeneration.get(id);
     if (!baseline) return false;
 
+    markChangedBaselines();
     const currentNode = responseIdentity(latestResponseNode());
     const sameNode = Boolean(baseline.node && currentNode === baseline.node);
     const sameText = Boolean(baseline.text && String(message.text || "").trim() === baseline.text);
 
-    // The exact old response node and exact old response text cannot be the new
-    // generation's completion. A new node is allowed even when its wording is
-    // identical, preserving legitimate repeated/deterministic answers.
-    if (sameNode && sameText) return true;
+    // The exact old response node and old response text are stale only if that
+    // container never changed after the new prompt. A new node is allowed even
+    // with identical wording, and a reused node that visibly changed is also a
+    // legitimate generation.
+    if (sameNode && sameText && !baseline.changed) return true;
 
     baselineByGeneration.delete(id);
     return false;
