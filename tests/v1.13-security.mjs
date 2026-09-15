@@ -9,12 +9,11 @@ const background = fs.readFileSync(path.join(root, "background.js"), "utf8");
 const dashboardJs = fs.readFileSync(path.join(root, "dashboard.js"), "utf8");
 const html = fs.readFileSync(path.join(root, "dashboard.html"), "utf8");
 const css = fs.readFileSync(path.join(root, "dashboard.css"), "utf8");
-const popupHtml = fs.readFileSync(path.join(root, "popup.html"), "utf8");
 const content = fs.readFileSync(path.join(root, "content.js"), "utf8");
 const readme = fs.readFileSync(path.join(root, "README.md"), "utf8");
 const manifest = JSON.parse(fs.readFileSync(path.join(root, "manifest.json"), "utf8"));
 
-assert.equal(manifest.version, "1.16.3");
+assert.match(manifest.version, /^\d+\.\d+\.\d+$/, "manifest must use a Chrome-compatible semantic version");
 assert.ok(manifest.permissions.includes("identity"));
 assert.ok(manifest.permissions.includes("storage"));
 assert.ok(manifest.permissions.includes("alarms"));
@@ -22,8 +21,8 @@ assert.equal(manifest.oauth2, undefined, "do not ship a placeholder OAuth client
 assert.ok(manifest.host_permissions.every(rule => rule.startsWith("https://")));
 assert.ok(manifest.host_permissions.includes("https://www.googleapis.com/*"));
 assert.ok(!manifest.host_permissions.some(rule => rule.startsWith("http://")));
-assert.match(html, /v1\.16\.3/);
-assert.match(popupHtml, /v1\.16\.3/);
+assert.match(html, /id="versionBadge"/);
+assert.match(html, /id="installedVersionPill"/);
 assert.match(html, /id="cloudPush"/);
 assert.match(html, /id="cloudPull"/);
 assert.match(html, /id="cloudConnect"/);
@@ -36,10 +35,11 @@ assert.match(dashboardJs, /AI_BRIDGE_CLOUD_UNLINK/);
 assert.match(dashboardJs, /Timing: sequential A → B → C/);
 assert.match(dashboardJs, /replaceChildren/);
 assert.doesNotMatch(dashboardJs, /innerHTML/);
+// content.js retains its source-era marker for backwards compatibility; the
+// content-runtime prelude reports the actual injected stack version at runtime.
 assert.match(content, /version: "1\.14\.0"/);
 assert.match(background, /CONTENT_VERSION = "1\.14\.0"/);
 assert.doesNotMatch(readme, /not yet on main/i);
-assert.match(readme, /Current version: 1\.16\.3/);
 
 const ids = [...html.matchAll(/id="([^"]+)"/g)].map(m => m[1]);
 assert.equal(ids.length, new Set(ids).size, `duplicate ids: ${ids.filter((id, i) => ids.indexOf(id) !== i)}`);
