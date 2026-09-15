@@ -1,17 +1,9 @@
 (() => {
   "use strict";
 
-  // v1.16.0 added a one-time OAuth CSRF record in chrome.storage.session.
-  // Keep the core implementation fail-closed even when Google returns a
-  // syntactically valid redirect that parseImplicitOAuthRedirect() rejects
-  // (for example access_denied or malformed token data). Without this guard,
-  // that parser exception occurs before background.js consumes the pending
-  // record, leaving it resident until a later login overwrites it or its TTL
-  // becomes irrelevant.
-  //
-  // This runtime shim is intentionally small and loaded immediately after the
-  // core coordination/completion runtime. A later refactor can fold the same
-  // invariants directly into background.js without changing behavior.
+  // v1.16.x OAuth hardening lives beside the core coordinator so the security
+  // invariants stay easy to audit without inflating background.js further.
+  // The core runtime still owns the actual OAuth, Drive, and cloud-sync logic.
 
   if (typeof launchGoogleWebAuth !== "function" ||
       typeof clearPendingOauthState !== "function" ||
@@ -70,6 +62,30 @@
       }
 
       return result;
+    };
+  }
+
+  // Missing publisher OAuth configuration is an installation/deployment state,
+  // not a runtime crash. The old connectGoogleAccount() deliberately threw so
+  // the feature failed closed, but the top-level message handler logged that
+  // expected condition as "AI Bridge background error" and exposed a stack
+  // trace to the user. Preserve fail-closed behavior without treating it as an
+  // exception: no token is requested, no Drive call occurs, and the dashboard
+  // receives a normal unlinked/setupRequired result.
+  if (typeof connectGoogleAccount === "function" &&
+      typeof googleOauthReady === "function") {
+    const baseConnectGoogleAccount = connectGoogleAccount;
+    connectGoogleAccount = async function hardenedConnectGoogleAccount() {
+      if (!(await googleOauthReady())) {
+        return {
+          googleLinked: false,
+          googleConfigured: false,
+          setupRequired: true,
+          setupKind: "publisher-oauth",
+          driveScope: typeof DRIVE_APP_DATA_SCOPE === "string" ? DRIVE_APP_DATA_SCOPE : ""
+        };
+      }
+      return baseConnectGoogleAccount();
     };
   }
 })();

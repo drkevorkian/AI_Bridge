@@ -11,11 +11,14 @@ let clientId = "111-old.apps.googleusercontent.com";
 let tokenClearCount = 0;
 let stateClearCount = 0;
 let linkedValue = true;
+let oauthReady = true;
+let connectCallCount = 0;
 
 const sandbox = {
   console: { warn() {} },
   Date,
   Number,
+  DRIVE_APP_DATA_SCOPE: "https://www.googleapis.com/auth/drive.appdata",
   GOOGLE_LINKED_KEY: "bridgeGoogleLinked",
   chrome: {
     storage: {
@@ -36,6 +39,11 @@ const sandbox = {
   saveUserOauthClientId: async raw => {
     clientId = String(raw || "").trim();
     return { saved: Boolean(clientId), googleConfigured: Boolean(clientId) };
+  },
+  googleOauthReady: async () => oauthReady,
+  connectGoogleAccount: async () => {
+    connectCallCount += 1;
+    return { googleLinked: true, via: "packaged" };
   }
 };
 
@@ -62,4 +70,23 @@ assert.equal(result.relinkRequired, undefined);
 assert.equal(tokenClearCount, 1);
 assert.equal(stateClearCount, 1);
 
-console.log("v1.16.3 OAuth client-switch invalidation regression ok");
+// Missing publisher OAuth configuration is a normal setup state, not an
+// exception. It must not call the underlying interactive auth path.
+oauthReady = false;
+result = await sandbox.connectGoogleAccount();
+assert.equal(result.googleLinked, false);
+assert.equal(result.googleConfigured, false);
+assert.equal(result.setupRequired, true);
+assert.equal(result.setupKind, "publisher-oauth");
+assert.equal(result.driveScope, "https://www.googleapis.com/auth/drive.appdata");
+assert.equal(connectCallCount, 0);
+
+// Once OAuth is configured, the wrapper must delegate unchanged to the real
+// one-click Google authorization implementation.
+oauthReady = true;
+result = await sandbox.connectGoogleAccount();
+assert.equal(result.googleLinked, true);
+assert.equal(result.via, "packaged");
+assert.equal(connectCallCount, 1);
+
+console.log("v1.16.3 OAuth client-switch + link-setup regression ok");
