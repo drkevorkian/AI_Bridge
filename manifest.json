@@ -2,7 +2,7 @@
   "manifest_version": 3,
   "name": "AI Bridge",
   "version": "1.15.0",
-  "description": "Coordinate three AI agents with relay, direct-mesh routing, team-cycle timing, stuck recovery, a Settings tab, GitHub update checks, optional Chrome Sync and Google Drive appDataFolder settings, persistent artifact vault storage, ZIP/file relay, human control, and a modern multi-theme workspace.",
+  "description": "Coordinate three AI agents with relay, direct-mesh routing, team-cycle timing, stuck recovery, a Settings tab, GitHub update checks, optional Chrome Sync and Google Drive appDataFolder settings, persistent artifact vault storage, ZIP/file relay, human control, system-awake protection during active runs, and a modern multi-theme workspace.",
   "permissions": [
     "tabs",
     "storage",
@@ -11,7 +11,8 @@
     "notifications",
     "scripting",
     "identity",
-    "alarms"
+    "alarms",
+    "power"
   ],
   "host_permissions": [
     "https://chatgpt.com/*",
@@ -34,7 +35,7 @@
     "https://codeload.github.com/*"
   ],
   "background": {
-    "service_worker": "background.js"
+    "service_worker": "background-wrapper.js"
   },
   "action": {
     "default_popup": "popup.html",
