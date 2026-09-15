@@ -31,10 +31,10 @@ function extractFunction(src, name) {
   throw new Error(`${name} unclosed`);
 }
 
-assert.equal(manifest.version, "1.15.0");
+assert.equal(manifest.version, "1.16.0");
 assert.ok(manifest.permissions.includes("alarms"));
-assert.match(html, /v1\.15\.0/);
-assert.match(popupHtml, /v1\.15\.0/);
+assert.match(html, /v1\.16\.0/);
+assert.match(popupHtml, /v1\.16\.0/);
 assert.match(html, /id="maxCycles"/);
 assert.match(html, /id="checkpointEveryNCycles"/);
 assert.match(html, /id="stuckTimeoutMinutes"/);
@@ -64,7 +64,7 @@ assert.match(background, /Ignored late response/);
 assert.match(background, /Automatic recovery attempt 1/);
 assert.match(background, /nextRecoveryAttemptAllowed/);
 assert.match(background, /recoveryCheckpoint/);
-assert.match(readme, /Current version: 1\.15\.0/);
+assert.match(readme, /Current version: 1\.16\.0/);
 assert.match(readme, /chrome\.alarms/);
 assert.doesNotMatch(readme, /not yet on main/i);
 

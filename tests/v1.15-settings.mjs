@@ -31,7 +31,7 @@ function extractFunction(src, name) {
   throw new Error(`${name} unclosed`);
 }
 
-assert.equal(manifest.version, "1.15.0");
+assert.equal(manifest.version, "1.16.0");
 assert.equal(manifest.oauth2, undefined, "do not ship a placeholder OAuth client ID");
 assert.equal(JSON.stringify(manifest).includes("YOUR_"), false);
 assert.equal(JSON.stringify(manifest).includes("PLACEHOLDER"), false);
@@ -44,7 +44,7 @@ assert.ok(manifest.host_permissions.includes("https://raw.githubusercontent.com/
 assert.ok(manifest.host_permissions.includes("https://codeload.github.com/*"));
 assert.ok(manifest.host_permissions.every(rule => rule.startsWith("https://")));
 
-assert.match(html, /v1\.15\.0/);
+assert.match(html, /v1\.16\.0/);
 assert.match(html, /id="viewSessionBtn"/);
 assert.match(html, /id="viewSettingsBtn"/);
 assert.match(html, /id="sessionView"/);
@@ -65,7 +65,7 @@ assert.match(html, /id="cloudConnect"/);
 assert.equal((html.match(/id="themeSelect"/g) || []).length, 1);
 assert.match(css, /\.view-tabs/);
 assert.match(css, /\.view-tab\.active/);
-assert.match(popupHtml, /v1\.15\.0/);
+assert.match(popupHtml, /v1\.16\.0/);
 assert.match(popupHtml, /id="openSettings"/);
 assert.match(popupJs, /hash: "settings"/);
 assert.doesNotMatch(dashboardJs, /innerHTML/);
@@ -97,7 +97,7 @@ assert.match(background, /requireExtensionPage\(sender, "Set auto-update"\)/);
 assert.match(background, /openDashboard\(msg\.hash\)/);
 assert.match(background, /saveAs:\s*true/);
 assert.doesNotMatch(readme, /not yet on main/i);
-assert.match(readme, /Current version: 1\.15\.0/);
+assert.match(readme, /Current version: 1\.16\.0/);
 assert.match(readme, /Web application/);
 assert.match(readme, /drive\.appdata/);
 
