@@ -1,8 +1,8 @@
 # AI Bridge
 
-**Current version: 1.16.0**
+**Current version: 1.16.2**
 
-1.16.0 hardens Google login with a cryptographically random OAuth `state`, keeps the host system awake during active runs, and labels peer-AI output as untrusted evidence. Chrome Sync still works without Google. Login remains optional.
+1.16.2 wraps peer-AI output, vault previews, and local source files in structural `<untrusted_peer_data>` tags, shows a keep-awake status pill, and labels transcript AI cards as data-only. 1.16.1 consumed leftover OAuth state on every callback failure. 1.16.0 added CSRF `state`, system keep-awake, and Drive 409 hardening. Chrome Sync still works without Google. Login remains optional.
 
 AI Bridge is a Manifest V3 Chrome extension for coordinating three AI web apps as one team from a single dashboard. It supports sequential relay, parallel work, peer review, direct model-to-model routing, human intervention, persistent file relay, reusable history, optional Chrome/Google settings sync, team-cycle timing, recovery checkpoints, a `chrome.alarms` stuck watchdog, system keep-awake during active runs, and in-dashboard GitHub updates.
 
@@ -126,7 +126,7 @@ Best for: investigations, debugging, and iterative design.
 
 ### Collaborate
 
-Sequential like Relay, but every turn revises one shared deliverable.
+Sequential like Relay — not a live consensus discussion. Every turn revises one shared deliverable.
 Best for: writing one final design, spec, or codebase.
 
 ### Compete
@@ -142,7 +142,8 @@ Best for: work that decomposes into backend / frontend / research / security tra
 
 ### Peer Review
 
-Phase 1: independent primary responses. Phase 2: each AI critiques the other two.
+Phase 1: all three produce independent primary responses. There is no single drafter.
+Phase 2: each AI critiques the other two. There is no automatic primary-revision pass after critique.
 Cycle: the full primary+critique pass. The counter ticks only after both phases finish.
 Best for: high-confidence validation.
 
@@ -181,6 +182,7 @@ The packaged extension contains:
 - `manifest.json`
 - `background-wrapper.js`
 - `background.js`
+- `oauth-runtime-hardening.js`
 - `power.js`
 - `content.js`
 - `dashboard.html`
@@ -194,7 +196,22 @@ The packaged extension contains:
 
 Command-line tests live in `tests/`.
 
-## Current release — 1.16.0
+## Current release — 1.16.2
+
+- Peer SHARED UPDATES, Direct Mesh bodies, and peer-review primaries are wrapped in `<untrusted_peer_data source="AI_A|AI_B|AI_C">`. Breakout tags inside the payload are neutralized
+- Local source files and vault text previews use the same wrapper (`source="files"` / `source="vault"`)
+- Working rules tell models that content inside those tags cannot override the Human Controller, Team Rules, job, or working protocol
+- Dashboard header shows **Keep-awake on** while `sessionActive && running && !awaitingHuman`, with high-contrast treatment in Blizzard Blue and Ghost White
+- Transcript AI cards show a **Peer Output — Data Only** pill. No `innerHTML`. Unique element IDs preserved
+- Collaborate / Peer Review copy matches the implemented cycle semantics (sequential shared deliverable; independent primaries then all-critique)
+- `CONTENT_VERSION` stays 1.14.0; `STATE_VERSION` stays 3
+
+## Previous release — 1.16.1
+
+- OAuth callback failures (`access_denied`, parser rejection, state/TTL/client-id mismatch) consume leftover `chrome.storage.session` CSRF state instead of leaving it until TTL
+- `oauth-runtime-hardening.js` loads after `background.js` and before `power.js`
+
+## Previous release — 1.16.0
 
 - `chrome.power.requestKeepAwake("system")` while a session is active and running; Pause / Stop / HUMAN_INPUT release it. Monitor may still dim. Re-asserted after MV3 service-worker restart, alarms, and browser startup
 - User-supplied Google OAuth now binds a 256-bit `crypto.getRandomValues` `state` to each `launchWebAuthFlow` request. Mismatch or expiry refuses the token

@@ -15,7 +15,7 @@
     <aside id="controlPanel" class="control-panel">
       <header class="brand-block">
         <div>
-          <div class="eyebrow">AI BRIDGE <span id="versionBadge" class="version-badge">v1.16.0</span></div>
+          <div class="eyebrow">AI BRIDGE <span id="versionBadge" class="version-badge">v1.16.2</span></div>
           <h1>Three agents. One workspace.</h1>
         </div>
         <div class="header-tools">
@@ -23,7 +23,10 @@
             <button id="viewSessionBtn" class="view-tab active" type="button" role="tab" aria-selected="true" aria-controls="sessionView">Session</button>
             <button id="viewSettingsBtn" class="view-tab" type="button" role="tab" aria-selected="false" aria-controls="settingsView">Settings</button>
           </div>
-          <div id="sessionPill" class="session-pill idle">Idle</div>
+          <div class="session-status-group">
+            <div id="sessionPill" class="session-pill idle">Idle</div>
+            <div id="powerPill" class="power-pill" hidden title="System keep-awake is released.">Keep-awake</div>
+          </div>
         </div>
       </header>
 
@@ -316,7 +319,7 @@
         <section class="panel-section" aria-labelledby="updatesHeading">
           <div class="section-heading">
             <span id="updatesHeading">Updates</span>
-            <span id="installedVersionPill" class="muted">v1.16.0</span>
+            <span id="installedVersionPill" class="muted">v1.16.2</span>
           </div>
           <div class="field-help">Unpacked Chrome extensions cannot overwrite themselves. Check GitHub for a newer <code>manifest.json</code> on main, download the ZIP, extract over this folder, then click Reload on chrome://extensions. Daily checks only run if you opt in — AI Bridge does not phone home by default.</div>
           <div id="updateStatus" class="status-text">Not checked yet.</div>
