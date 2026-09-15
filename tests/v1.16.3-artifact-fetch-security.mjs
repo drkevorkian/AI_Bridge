@@ -13,12 +13,18 @@ assert.ok(
   wrapperSource.includes('importScripts("artifact-fetch-runtime-hardening.js")'),
   "service worker must load artifact fetch hardening"
 );
+assert.match(
+  wrapperSource,
+  /__AI_BRIDGE_ARTIFACT_FETCH_SECURITY__\?\.credentials\s*!==\s*"omit"[\s\S]*throw new Error/,
+  "service-worker bootstrap must fail closed if artifact hardening does not initialize"
+);
 
 const permissions = new Set(manifest.host_permissions || []);
 assert.equal(permissions.has("https://*.microsoft.com/*"), false, "broad Microsoft wildcard must stay removed");
 assert.equal(permissions.has("https://*.x.ai/*"), false, "broad x.ai wildcard must stay removed");
 assert.equal(permissions.has("https://copilot.microsoft.com/*"), true, "supported Copilot origin must remain available");
-assert.equal(permissions.has("https://assets.grok.com/*"), true, "Grok artifact origin must remain available");
+assert.equal(permissions.has("https://assets.grok.com/*"), true, "Grok asset origin must remain available");
+assert.equal(permissions.has("https://assets.grokusercontent.com/*"), true, "Grok generated-artifact CDN must remain available");
 
 const calls = [];
 let nextResponse = null;
@@ -55,6 +61,7 @@ assert.notEqual(context.artifactFetchHostAllowed("https://chatgpt.com/file"), "l
 assert.equal(context.artifactFetchHostAllowed("https://chatgpt.com/file"), true);
 assert.equal(context.artifactFetchHostAllowed("https://files.oaiusercontent.com/file"), true);
 assert.equal(context.artifactFetchHostAllowed("https://assets.grok.com/file"), true);
+assert.equal(context.artifactFetchHostAllowed("https://assets.grokusercontent.com/file"), true);
 assert.equal(context.artifactFetchHostAllowed("https://x.ai/file"), true);
 assert.equal(context.artifactFetchHostAllowed("https://api.x.ai/file"), true);
 assert.equal(context.artifactFetchHostAllowed("https://evil.x.ai/file"), false, "x.ai sibling subdomains must not inherit permission");
