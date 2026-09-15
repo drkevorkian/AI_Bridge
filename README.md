@@ -1,6 +1,8 @@
 # AI Bridge
 
-**Current version: 1.13.0 (workstream — not yet on main)**
+**Current version: 1.13.1**
+
+1.13.0 is live on main. 1.13.1 adds the optional Google Drive `appDataFolder` write/read path on top of that release.
 
 AI Bridge is a Manifest V3 Chrome extension for coordinating three AI web apps as one team from a single dashboard. It supports sequential relay, parallel work, peer review, direct model-to-model routing, human intervention, persistent file relay, reusable history, optional Chrome/Google settings sync, and extension-side round timing.
 
@@ -28,9 +30,24 @@ The provider tabs must remain open. AI Bridge coordinates those tabs; it does no
 
 Login is **never required**. Local-only behavior is unchanged.
 
-**Push settings** / **Pull settings** copy configuration through Chrome Sync when you are signed into Chrome. This is the working cross-profile path today.
+**Push settings** writes a sanitized configuration copy to Chrome Sync. If a Google account is linked, the same copy is also written to Google Drive's hidden `appDataFolder` as `ai-bridge-settings.json`.
 
-**Link Google account** is the future Google Drive `appDataFolder` path. It stays disabled-by-architecture until a real Google Cloud OAuth client ID is packaged in `manifest.json` (`oauth2.client_id`). No placeholder client ID is shipped. Tokens stay in Chrome's identity cache and are never written into AI Bridge storage.
+**Pull settings** inspects every available copy (Chrome Sync and, when linked, Drive), sanitizes each copy, and applies the newest valid `updatedAt`. Pull refuses to run during an active Bridge session.
+
+**Link Google account** uses Chrome Identity. Interactive token prompts happen only from that button. Tokens stay in Chrome's identity cache and are never written into AI Bridge storage.
+
+**Unlink Google account** clears the Identity token cache and the local linked flag. It does not delete the Drive app-data copy, so a later Link can recover it.
+
+Google Drive stays fail-closed until a real Chrome-extension OAuth client ID is packaged in `manifest.json`:
+
+```json
+"oauth2": {
+  "client_id": "<chrome-extension-client-id>.apps.googleusercontent.com",
+  "scopes": ["https://www.googleapis.com/auth/drive.appdata"]
+}
+```
+
+Do not add a placeholder client ID. The only Drive scope AI Bridge will accept is `drive.appdata`. Drive API calls are hardcoded to `https://www.googleapis.com` with `redirect: "error"`. Listing uses `spaces=appDataFolder`. Creating a file uses `parents: ["appDataFolder"]`.
 
 Synced whitelist:
 
@@ -53,8 +70,6 @@ Never synced:
 - OAuth tokens
 - live session state
 - human answers
-
-Pull refuses to run during an active session so a cloud copy cannot overwrite a live run.
 
 ## Team configuration
 
@@ -79,75 +94,48 @@ Each strategy is defined by timing, peer visibility, cycle size, Main AI meaning
 
 ### Relay
 
-- Timing: sequential A → B → C. One AI at a time.
-- Peer visibility: every later AI sees accumulated shared updates and continues the same problem.
-- Cycle: 3 responses make one lap.
-- Main AI: first speaker, and the recipient of queued human interjections.
-- Best for: investigations, debugging, and iterative design.
+Timing: sequential `A → B → C`. One AI at a time.
+Peer visibility: later AIs see accumulated shared updates.
+Cycle: 3 responses make one lap.
+Main AI: first speaker and recipient of queued human interjections.
+Best for: investigations, debugging, and iterative design.
 
 ### Collaborate
 
-- Timing: sequential like Relay.
-- Peer visibility: later AIs revise one shared deliverable.
-- Cycle: 3 responses make one lap of the shared artifact.
-- Main AI: first speaker + queued interjections.
-- Best for: one final design, spec, or codebase.
+Sequential like Relay, but every turn revises one shared deliverable.
+Best for: writing one final design, spec, or codebase.
 
 ### Compete
 
-- Timing: A, B, and C start simultaneously.
-- Peer visibility: they do not see each other during the primary pass.
-- Cycle: 3 independent submissions.
-- Main AI: recipient of queued interjections.
-- Best for: independent solutions, avoiding anchoring.
+A/B/C start simultaneously with the same objective and do not see each other during the primary pass.
+Cycle: 3 independent submissions.
+Best for: independent solutions, avoiding anchoring.
 
 ### Parallel Independent
 
-- Timing: A, B, and C start simultaneously.
-- Peer visibility: each executes its assigned job rather than solving the identical problem three times.
-- Cycle: 3 parallel job completions.
-- Main AI: queued interjections.
-- Best for: work that decomposes into backend / frontend / research / security tracks.
+A/B/C start simultaneously and execute separate assigned jobs.
+Best for: work that decomposes into backend / frontend / research / security tracks.
 
 ### Peer Review
 
-- Timing: two simultaneous phases.
-- Peer visibility: phase 1 independent; phase 2 each AI receives the other two results and critiques them.
-- Cycle: 6 responses (3 primary + 3 critiques).
-- Main AI: queued interjections.
-- Best for: high-confidence validation and catching mistakes or bias.
+Phase 1: independent primary responses. Phase 2: each AI critiques the other two.
+Cycle: 6 responses.
+Best for: high-confidence validation.
 
 ### Direct Mesh
 
-- Timing: one AI at a time.
-- Peer visibility: accumulated shared updates, then an optional explicit handoff.
-- Cycle: 1 response per handoff. Put `SEND TO: AI A|B|C` (or an unambiguous label) on the final non-empty line. Without a valid target, normal next-agent routing applies.
-- Main AI: first speaker unless a prior handoff changed the cursor, plus queued interjections.
-- Best for: dynamic workflows where the right next specialist depends on what was just discovered.
+One AI at a time. The responding AI may choose the next teammate with a final-line `SEND TO:` command. Without a valid target, normal next-agent routing applies.
+Best for: dynamic workflows.
 
-## Human control
+## Agreed upcoming features
 
-Preferred explicit marker:
+1. Provider Preflight / Health Check
+2. Named Team Profiles
+3. Export / Import Config JSON
+4. Diagnostics Report
+5. Session Checkpoints
 
-```text
-[[HUMAN_INPUT: specific question for the human]]
-```
-
-Modal actions: **Send response & continue**, **Suppress request**, **Stop session**.
-
-Interjections wait for the configured **Main AI** and are delivered on that model's next group turn.
-
-## Security notes for 1.13.0
-
-- Artifact background fetch is HTTPS-only. HTTP, embedded credentials, and `javascript:` / `data:` URLs fail closed.
-- `redirect: follow` re-validates `response.url` against the same HTTPS allowlist.
-- Privileged messages (`START`, `GET_STATE`, Vault download, Team rules, cloud ops, …) are restricted to extension pages (dashboard / popup).
-- Content scripts may send only `AI_BRIDGE_FETCH_ARTIFACT` and `AI_BRIDGE_RESPONSE`.
-- Artifact fetch and inbound responses require an active session and a currently bound A/B/C tab.
-- `chrome.storage.local` and `chrome.storage.sync` are locked to `TRUSTED_CONTEXTS` so provider-page scripts cannot read transcripts, Vault bytes, or synced settings.
-- Chrome Sync settings are chunked under the 8 KB per-item quota.
-
-`content.js` remains on the 1.11.3 content-script protocol because 1.13.0 does not change provider DOM handling.
+`content.js` remains on the 1.11.3 content-script protocol because 1.13.x does not change provider DOM handling.
 
 ## Dashboard
 
@@ -157,7 +145,7 @@ Core controls include bind A/B/C, jobs, Team rules, work strategy, Main AI, obje
 
 ## Persistence
 
-Session state remains in `chrome.storage.local`. Optional configuration copies use `chrome.storage.sync`. Google Drive `appDataFolder` is the planned explicit Google-account path once the human supplies an OAuth client ID.
+Session state remains in `chrome.storage.local`. Optional configuration copies use `chrome.storage.sync` and, when linked, Google Drive `appDataFolder`. `chrome.storage.local` and `chrome.storage.sync` are locked to trusted extension contexts.
 
 ## Release files
 
@@ -177,16 +165,24 @@ The packaged extension contains:
 
 Command-line tests live in `tests/`.
 
-## Current release — 1.13.0
+## Current release — 1.13.1
+
+- optional Google Drive `appDataFolder` settings file (`ai-bridge-settings.json`)
+- Push writes Chrome Sync and, when linked, Drive
+- Pull sanitizes every available copy and applies the newest `updatedAt`
+- Link / Unlink Google account; tokens never stored by AI Bridge
+- Drive API calls are HTTPS `www.googleapis.com` only, `redirect: "error"`, `drive.appdata` scope only
+- HTTP 401 evicts the cached token and retries once non-interactively
+- 1.13.0 security hardening retained
+
+## Previous release — 1.13.0
 
 - optional Chrome Sync settings push/pull (login never required)
-- Google account button present, fail-closed until a real OAuth client ID is packaged
-- expanded work-strategy explanations (timing, visibility, cycle, Main AI, best use)
+- expanded work-strategy explanations
 - HTTPS-only artifact fetch + redirect re-validation
 - extension-page vs content-script message authorization
 - bound-tab check for artifact fetch and inbound responses
 - `chrome.storage` locked to trusted extension contexts
-- live Apply team rules retained from 1.12.1
 
 ## Previous release — 1.12.1
 
