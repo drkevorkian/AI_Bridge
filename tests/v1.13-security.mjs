@@ -14,15 +14,16 @@ const content = fs.readFileSync(path.join(root, "content.js"), "utf8");
 const readme = fs.readFileSync(path.join(root, "README.md"), "utf8");
 const manifest = JSON.parse(fs.readFileSync(path.join(root, "manifest.json"), "utf8"));
 
-assert.equal(manifest.version, "1.13.1");
+assert.equal(manifest.version, "1.14.0");
 assert.ok(manifest.permissions.includes("identity"));
 assert.ok(manifest.permissions.includes("storage"));
+assert.ok(manifest.permissions.includes("alarms"));
 assert.equal(manifest.oauth2, undefined, "do not ship a placeholder OAuth client ID");
 assert.ok(manifest.host_permissions.every(rule => rule.startsWith("https://")));
 assert.ok(manifest.host_permissions.includes("https://www.googleapis.com/*"));
 assert.ok(!manifest.host_permissions.some(rule => rule.startsWith("http://")));
-assert.match(html, /v1\.13\.1/);
-assert.match(popupHtml, /v1\.13\.1/);
+assert.match(html, /v1\.14\.0/);
+assert.match(popupHtml, /v1\.14\.0/);
 assert.match(html, /id="cloudPush"/);
 assert.match(html, /id="cloudPull"/);
 assert.match(html, /id="cloudConnect"/);
@@ -35,10 +36,10 @@ assert.match(dashboardJs, /AI_BRIDGE_CLOUD_UNLINK/);
 assert.match(dashboardJs, /Timing: sequential A → B → C/);
 assert.match(dashboardJs, /replaceChildren/);
 assert.doesNotMatch(dashboardJs, /innerHTML/);
-assert.match(content, /version: "1\.11\.3"/);
-assert.match(background, /CONTENT_VERSION = "1\.11\.3"/);
+assert.match(content, /version: "1\.14\.0"/);
+assert.match(background, /CONTENT_VERSION = "1\.14\.0"/);
 assert.doesNotMatch(readme, /not yet on main/i);
-assert.match(readme, /Current version: 1\.13\.1/);
+assert.match(readme, /Current version: 1\.14\.0/);
 
 const ids = [...html.matchAll(/id="([^"]+)"/g)].map(m => m[1]);
 assert.equal(ids.length, new Set(ids).size, `duplicate ids: ${ids.filter((id, i) => ids.indexOf(id) !== i)}`);
@@ -120,13 +121,17 @@ const cloudSandbox = {
   ALLOWED_CLOUD_THEMES: new Set(["blizzard", "ghostwhite", "midnight", "slate", "light", "solarized", "ocean", "terminal"]),
   CLOUD_SETTINGS_VERSION: 1,
   SYNC_ITEM_MAX_CHARS: 7000,
-  CLOUD_SYNC_MAX_BYTES: 90000
+  CLOUD_SYNC_MAX_BYTES: 90000,
+  DEFAULT_CHECKPOINT_EVERY: 5,
+  DEFAULT_STUCK_MINUTES: 30
 };
 vm.runInNewContext(
   [
     "function normalizeWorkMode(raw) { const value = String(raw || 'relay').toLowerCase(); return WORK_MODES.has(value) ? value : 'relay'; }",
     "function normalizeMaxTurns(raw) { const value = Number(raw); if (value === -1) return -1; if (!Number.isInteger(value) || value < 1 || value > 10000) throw new Error('bad turns'); return value; }",
     extractFunction(background, "clampCloudPane"),
+    extractFunction(background, "clampCheckpointEvery"),
+    extractFunction(background, "clampStuckTimeoutMinutes"),
     extractFunction(background, "sanitizeHistoryForCloud"),
     extractFunction(background, "sanitizeCloudSettings"),
     extractFunction(background, "assertCloudSettingsSafe"),
@@ -162,6 +167,9 @@ const dirty = cloudSandbox.sanitizeCloudSettings({
   accessToken: "ya29.secret",
   token: "ya29.secret",
   activeArtifactIds: ["vault-1"],
+  recoveryCheckpoint: { text: "secret restart summary", cycleCount: 4 },
+  cycleCount: 4,
+  generationIdBySide: { A: "A-1" },
   history: { jobs: [{ time: 1, side: "A", label: "A", job: "Lead" }], commands: [{ text: "obj" }], rules: [{ text: "SECURITY FIRST" }] }
 });
 assert.equal(dirty.theme, "midnight");
@@ -177,6 +185,9 @@ assert.equal(dirty.oauthToken, undefined);
 assert.equal(dirty.accessToken, undefined);
 assert.equal(dirty.token, undefined);
 assert.equal(dirty.activeArtifactIds, undefined);
+assert.equal(dirty.recoveryCheckpoint, undefined);
+assert.equal(dirty.cycleCount, undefined);
+assert.equal(dirty.generationIdBySide, undefined);
 assert.equal(dirty.history.jobs.length, 1);
 assert.doesNotMatch(JSON.stringify(dirty), /ya29/);
 cloudSandbox.assertCloudSettingsSafe(dirty);

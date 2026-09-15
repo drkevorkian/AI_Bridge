@@ -1,6 +1,6 @@
 const SIDES = ["A", "B", "C"];
 const STATE_VERSION = 3;
-const CONTENT_VERSION = "1.11.3";
+const CONTENT_VERSION = "1.14.0";
 const WORK_MODES = new Set(["relay", "collaborate", "compete", "parallel", "review", "mesh"]);
 const INFINITE_TURNS = -1;
 const MIN_FINITE_TURNS = 1;
@@ -62,6 +62,20 @@ const DEFAULT_STATE = {
   suppressedHumanRequests: [],
   turn: 0,
   maxTurns: INFINITE_TURNS,
+  cycleCount: 0,
+  maxCycles: INFINITE_TURNS,
+  activeSides: ["A", "B", "C"],
+  cycleParticipants: [],
+  totalWorkMsBySide: { A: 0, B: 0, C: 0 },
+  checkpointEveryNCycles: 5,
+  stuckTimeoutMinutes: 30,
+  recoveryCheckpoint: null,
+  checkpointPending: false,
+  checkpointRequestId: null,
+  postCheckpointResume: null,
+  generationIdBySide: { A: null, B: null, C: null },
+  recoveryAttemptBySide: { A: 0, B: 0, C: 0 },
+  lastProgressAtBySide: { A: null, B: null, C: null },
   delayMs: 1500,
   initialPrompt: "",
   sourceFiles: [],
@@ -128,6 +142,16 @@ function cloneDefaultState() {
     roundNumberBySide: { A: 0, B: 0, C: 0 },
     lastRoundDurationMsBySide: { A: null, B: null, C: null },
     lastRoundCompletedAtBySide: { A: null, B: null, C: null },
+    totalWorkMsBySide: { A: 0, B: 0, C: 0 },
+    generationIdBySide: { A: null, B: null, C: null },
+    recoveryAttemptBySide: { A: 0, B: 0, C: 0 },
+    lastProgressAtBySide: { A: null, B: null, C: null },
+    activeSides: ["A", "B", "C"],
+    cycleParticipants: [],
+    recoveryCheckpoint: null,
+    checkpointPending: false,
+    checkpointRequestId: null,
+    postCheckpointResume: null,
     phasePendingSides: [],
     phaseSentSides: [],
     phaseCompletedSides: [],
@@ -177,18 +201,460 @@ function normalizeMaxTurns(raw) {
 
   const value = Number(raw);
   if (!Number.isInteger(value)) {
-    throw new Error("Max AI turns must be -1 (infinite) or an integer from 1 to 10000.");
+    throw new Error("Max team cycles must be -1 (infinite) or an integer from 1 to 10000.");
   }
   if (value === INFINITE_TURNS) return INFINITE_TURNS;
   if (value < MIN_FINITE_TURNS || value > MAX_FINITE_TURNS) {
-    throw new Error("Max AI turns must be -1 (infinite) or an integer from 1 to 10000.");
+    throw new Error("Max team cycles must be -1 (infinite) or an integer from 1 to 10000.");
   }
   return value;
 }
 
-function hasReachedTurnLimit() {
-  return state.maxTurns !== INFINITE_TURNS && state.turn >= state.maxTurns;
+function hasReachedCycleLimit() {
+  const max = Number.isInteger(Number(state.maxCycles)) ? Number(state.maxCycles) : Number(state.maxTurns);
+  return max !== INFINITE_TURNS && Number(state.cycleCount) >= max;
 }
+
+function hasReachedTurnLimit() {
+  // Kept as a compatibility alias. The user-facing budget is team cycles.
+  return hasReachedCycleLimit();
+}
+
+const WATCHDOG_ALARM = "ai-bridge-watchdog";
+const MAX_CHECKPOINT_CHARS = 12000;
+const DEFAULT_CHECKPOINT_EVERY = 5;
+const DEFAULT_STUCK_MINUTES = 30;
+
+function emptySideMap(value) {
+  return { A: value, B: value, C: value };
+}
+
+function normalizeActiveSides(raw) {
+  const list = Array.isArray(raw) ? raw : SIDES;
+  const out = [];
+  for (const item of list) {
+    const side = String(item || "").toUpperCase();
+    if (SIDES.includes(side) && !out.includes(side)) out.push(side);
+  }
+  return out.length ? out : [...SIDES];
+}
+
+function clampCheckpointEvery(raw) {
+  const n = Number(raw);
+  if (!Number.isInteger(n)) return DEFAULT_CHECKPOINT_EVERY;
+  return Math.min(50, Math.max(1, n));
+}
+
+function clampStuckTimeoutMinutes(raw) {
+  const n = Number(raw);
+  if (!Number.isInteger(n)) return DEFAULT_STUCK_MINUTES;
+  return Math.min(120, Math.max(5, n));
+}
+
+function checkpointDue(cycleCount, everyN) {
+  const count = Number(cycleCount) || 0;
+  const n = clampCheckpointEvery(everyN);
+  if (count <= 0) return false;
+  if (count === 1) return true;
+  return (count - 1) % n === 0;
+}
+
+function recordSequentialParticipation(participants, side, activeSides) {
+  const active = normalizeActiveSides(activeSides);
+  const next = [];
+  for (const item of (Array.isArray(participants) ? participants : [])) {
+    const value = String(item || "").toUpperCase();
+    if (active.includes(value) && !next.includes(value)) next.push(value);
+  }
+  const incoming = String(side || "").toUpperCase();
+  if (active.includes(incoming) && !next.includes(incoming)) next.push(incoming);
+  const complete = active.every(item => next.includes(item));
+  return { participants: complete ? [] : next, cycleCompleted: complete };
+}
+
+function migrateTimerState(bridgeState) {
+  const activeSides = normalizeActiveSides(bridgeState?.activeSides);
+  let maxCycles = INFINITE_TURNS;
+  try {
+    maxCycles = normalizeMaxTurns(bridgeState?.maxCycles ?? bridgeState?.maxTurns);
+  } catch (_) {
+    maxCycles = INFINITE_TURNS;
+  }
+  const turn = Math.max(0, Number(bridgeState?.turn) || 0);
+  let cycleCount = Number(bridgeState?.cycleCount);
+  if (!Number.isInteger(cycleCount) || cycleCount < 0) {
+    if (bridgeState?.sessionActive) {
+      cycleCount = 0;
+      maxCycles = INFINITE_TURNS;
+    } else {
+      const mode = normalizeWorkMode(bridgeState?.workMode);
+      cycleCount = mode === "review"
+        ? Math.floor(turn / Math.max(1, activeSides.length * 2))
+        : Math.floor(turn / Math.max(1, activeSides.length));
+    }
+  }
+  return { activeSides, maxCycles, cycleCount, turn };
+}
+
+function generationMatches(expectedId, incomingId) {
+  const expected = String(expectedId || "");
+  if (!expected) return true;
+  return String(incomingId || "") === expected;
+}
+
+function shouldDeclareStuck({ startedAt, lastProgressAt, now, timeoutMs }) {
+  if (!Number.isFinite(Number(startedAt)) || Number(startedAt) <= 0) return false;
+  const progress = Number(lastProgressAt) > 0 ? Number(lastProgressAt) : Number(startedAt);
+  return (Number(now) - progress) >= Number(timeoutMs);
+}
+
+function nextRecoveryAttemptAllowed(attemptCount) {
+  return (Number(attemptCount) || 0) < 1;
+}
+
+function accumulateTotalWorkMs(currentTotal, durationMs) {
+  return Math.max(0, Number(currentTotal) || 0) + Math.max(0, Number(durationMs) || 0);
+}
+
+function newGenerationId(side) {
+  return `${side}-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
+}
+
+function settleRunningTimers(completedAt = Date.now()) {
+  for (const side of SIDES) {
+    if (Number(state.roundStartedAtBySide?.[side]) > 0) {
+      completeRoundTimer(side, completedAt);
+    }
+  }
+}
+
+async function ensureWatchdogAlarm() {
+  if (!chrome.alarms?.create) return;
+  try { await chrome.alarms.clear(WATCHDOG_ALARM); } catch (_) {}
+  if (state.sessionActive && state.running && !state.awaitingHuman) {
+    await chrome.alarms.create(WATCHDOG_ALARM, { periodInMinutes: 1 });
+  }
+}
+
+async function clearWatchdogAlarm() {
+  if (!chrome.alarms?.clear) return;
+  try { await chrome.alarms.clear(WATCHDOG_ALARM); } catch (_) {}
+}
+
+function checkpointMessage(side) {
+  return {
+    deliveredSeq: latestSeq(),
+    deliveredSources: false,
+    artifactIds: [],
+    artifacts: [],
+    mainInterjectionIds: [],
+    text: [
+      teamContext(side),
+      "",
+      "RECOVERY CHECKPOINT REQUEST:",
+      "This is a maintenance summary for AI Bridge, not a normal team turn.",
+      "It must not consume a team cycle, change team participation, or replace the current objective.",
+      "Write a compact recovery checkpoint the extension can reuse if another model becomes stuck.",
+      "",
+      "Include:",
+      "- Current objective",
+      "- Decisions already made",
+      "- Completed work",
+      "- Versions / files / commits / artifacts that matter",
+      "- Unresolved issues",
+      "- Next actions",
+      "- Critical constraints",
+      "",
+      "Do not include passwords, OAuth tokens, secrets, API keys, or unnecessary private data.",
+      "Keep the summary dense and reusable. Do not ask the other AIs questions.",
+      "",
+      "PRIMARY OBJECTIVE FROM THE HUMAN CONTROLLER:",
+      state.initialPrompt
+    ].join("\n")
+  };
+}
+
+function stuckRecoveryMessage(side) {
+  const checkpoint = String(state.recoveryCheckpoint?.text || "").trim() || "No recovery checkpoint has been captured yet.";
+  const pending = String(state.lastSentBySide?.[side] || "").trim();
+  const sourceContext = sourceSectionForSide(side, { force: true });
+  const artifactIds = (state.activeArtifactIds || []).filter(id => Boolean(artifactStore[id]));
+  const artifacts = artifactRecordsForIds(artifactIds);
+  const attachmentContext = artifactNote(artifacts);
+  return {
+    deliveredSeq: latestSeq(),
+    deliveredSources: Boolean(sourceContext),
+    artifactIds,
+    artifacts,
+    mainInterjectionIds: [],
+    text: [
+      teamContext(side),
+      "",
+      "STUCK-MODEL RECOVERY:",
+      `AI Bridge stopped a stalled generation for AI ${side} and started a fresh conversation for this same role.`,
+      "Do not restart the whole project. Reconstruct only what you need, then finish the pending work.",
+      "",
+      "YOUR ASSIGNED JOB:",
+      jobForSide(side),
+      "",
+      teamRulesBlock() || "TEAM RULES: (none recorded)",
+      "",
+      "PRIMARY OBJECTIVE FROM THE HUMAN CONTROLLER:",
+      state.initialPrompt,
+      "",
+      "LATEST RECOVERY CHECKPOINT:",
+      checkpoint,
+      "",
+      "EXACT PENDING WORK YOU WERE TRYING TO FINISH:",
+      pending || "The previous prompt was not retained. Continue from the checkpoint and objective.",
+      ...(sourceContext ? ["", sourceContext] : []),
+      ...(attachmentContext ? ["", attachmentContext] : []),
+      "",
+      "Resume the pending work now and return one complete response."
+    ].join("\n")
+  };
+}
+
+function storeRecoveryCheckpoint(side, text, extra = {}) {
+  const summary = String(text || "").trim().slice(0, MAX_CHECKPOINT_CHARS);
+  state.recoveryCheckpoint = {
+    text: summary,
+    capturedAt: Date.now(),
+    cycleCount: Number(state.cycleCount) || 0,
+    side,
+    ...extra
+  };
+  return state.recoveryCheckpoint;
+}
+
+async function maybeRequestCheckpointThen(resume) {
+  if (!checkpointDue(state.cycleCount, state.checkpointEveryNCycles)) {
+    return { requested: false };
+  }
+  const side = SIDES.includes(state.mainSide) ? state.mainSide : (normalizeActiveSides(state.activeSides)[0] || "A");
+  state.checkpointPending = true;
+  state.postCheckpointResume = resume || null;
+  try {
+    const outgoing = checkpointMessage(side);
+    await sendToSide(side, outgoing.text, {
+      deliveredSeq: outgoing.deliveredSeq,
+      deliveredSources: false,
+      artifactIds: outgoing.artifactIds || [],
+      artifacts: outgoing.artifacts || [],
+      mainInterjectionIds: outgoing.mainInterjectionIds || []
+    });
+    state.checkpointRequestId = state.generationIdBySide?.[side] || null;
+    appendLog({
+      time: Date.now(),
+      type: "checkpoint-request",
+      side,
+      text: `Requested recovery checkpoint from Main AI ${side} after cycle ${state.cycleCount}`
+    });
+    await saveState();
+    return { requested: true, side };
+  } catch (err) {
+    state.checkpointPending = false;
+    state.checkpointRequestId = null;
+    state.postCheckpointResume = null;
+    appendLog({
+      time: Date.now(),
+      type: "checkpoint-skip",
+      side,
+      text: `Checkpoint request failed; resuming normal work: ${err.message}`
+    });
+    await saveState();
+    return { requested: false, skipped: true, error: err.message };
+  }
+}
+
+async function resumeAfterCheckpoint(resume) {
+  if (!resume || !state.sessionActive || !state.running || state.awaitingHuman) return;
+  if (resume.kind === "batch") {
+    resetBatchPhase(resume.phase || "primary");
+    await saveState();
+    await sendBatchPhase();
+    return;
+  }
+  const targetSide = SIDES.includes(resume.nextSide) ? resume.nextSide : nextSide(state.currentSide || state.startSide);
+  state.currentSide = targetSide;
+  await saveState();
+  await new Promise(resolve => setTimeout(resolve, state.delayMs));
+  if (!state.sessionActive || !state.running || state.awaitingHuman || state.checkpointPending) return;
+  const outgoing = normalTurnMessage(targetSide);
+  await sendToSide(targetSide, outgoing.text, {
+    deliveredSeq: outgoing.deliveredSeq,
+    deliveredSources: outgoing.deliveredSources,
+    artifactIds: outgoing.artifactIds,
+    artifacts: outgoing.artifacts,
+    mainInterjectionIds: outgoing.mainInterjectionIds || []
+  });
+}
+
+async function handleCheckpointResponse(side, text, { completedAt = null } = {}) {
+  const round = completeRoundTimer(side, completedAt);
+  storeRecoveryCheckpoint(side, text, { durationMs: round.durationMs });
+  state.checkpointPending = false;
+  state.checkpointRequestId = null;
+  const resume = state.postCheckpointResume;
+  state.postCheckpointResume = null;
+  recordTranscript("checkpoint", {
+    side,
+    text: String(text || "").trim().slice(0, MAX_CHECKPOINT_CHARS),
+    workMode: state.workMode,
+    cycleCount: Number(state.cycleCount) || 0,
+    ...(round.durationMs !== null ? { roundDurationMs: round.durationMs, roundNumber: round.roundNumber, roundCompletedAt: round.completedAt } : {})
+  });
+  appendLog({
+    time: Date.now(),
+    type: "checkpoint",
+    side,
+    text: `Stored recovery checkpoint after cycle ${state.cycleCount}`
+  });
+  await saveState();
+  if (resume && state.running && state.sessionActive && !state.awaitingHuman) {
+    try {
+      await resumeAfterCheckpoint(resume);
+    } catch (err) {
+      await pauseBridge(`Could not resume after recovery checkpoint: ${err.message}`);
+    }
+  }
+  return { ok: true, checkpoint: true };
+}
+
+async function skipStalledCheckpoint(side) {
+  completeRoundTimer(side);
+  state.checkpointPending = false;
+  state.checkpointRequestId = null;
+  const resume = state.postCheckpointResume;
+  state.postCheckpointResume = null;
+  appendLog({
+    time: Date.now(),
+    type: "checkpoint-skip",
+    side,
+    text: "Recovery checkpoint stalled; skipping and resuming normal work"
+  });
+  await saveState();
+  if (resume && state.sessionActive && state.running && !state.awaitingHuman) {
+    try {
+      await resumeAfterCheckpoint(resume);
+    } catch (err) {
+      await pauseBridge(`Could not resume after skipped checkpoint: ${err.message}`);
+    }
+  }
+  return { skipped: true };
+}
+
+async function queryGenerationStatus(side) {
+  const tabId = tabForSide(side);
+  if (!Number.isInteger(Number(tabId))) return null;
+  try {
+    const result = await chrome.tabs.sendMessage(Number(tabId), { type: "AI_BRIDGE_GENERATION_STATUS" });
+    if (result && result.ok !== false) return result;
+  } catch (_) {}
+  return null;
+}
+
+async function recoverStuckSide(side) {
+  if (!SIDES.includes(side)) return { recovered: false };
+  state.recoveryAttemptBySide = { A: 0, B: 0, C: 0, ...(state.recoveryAttemptBySide || {}) };
+  const attempts = Number(state.recoveryAttemptBySide[side]) || 0;
+  if (!nextRecoveryAttemptAllowed(attempts)) {
+    await pauseBridge(`AI ${side} stalled again after one automatic recovery.`);
+    await queueHumanRequest(
+      side,
+      String(state.lastSentBySide?.[side] || ""),
+      `AI ${side} appears stuck after one automatic recovery. Resume, resend, rebind the tab, or Stop.`
+    );
+    await saveState();
+    return { recovered: false, human: true };
+  }
+
+  completeRoundTimer(side);
+  try {
+    const tabId = tabForSide(side);
+    if (Number.isInteger(Number(tabId))) {
+      await chrome.tabs.sendMessage(Number(tabId), { type: "AI_BRIDGE_STOP_GENERATION" });
+    }
+  } catch (_) {}
+
+  state.recoveryAttemptBySide[side] = attempts + 1;
+  state.sourceDeliveredBySide[side] = false;
+  delete state.lastResponseBySide[side];
+  try {
+    await resetChatTab(tabForSide(side));
+  } catch (err) {
+    await pauseBridge(`Stuck recovery could not reset AI ${side}: ${err.message}`);
+    return { recovered: false, error: err.message };
+  }
+
+  const outgoing = stuckRecoveryMessage(side);
+  try {
+    await sendToSide(side, outgoing.text, {
+      deliveredSeq: outgoing.deliveredSeq,
+      deliveredSources: outgoing.deliveredSources,
+      artifactIds: outgoing.artifactIds,
+      artifacts: outgoing.artifacts,
+      recovery: true
+    });
+  } catch (err) {
+    await pauseBridge(`Stuck recovery could not send to AI ${side}: ${err.message}`);
+    return { recovered: false, error: err.message };
+  }
+  appendLog({
+    time: Date.now(),
+    type: "stuck-recovery",
+    side,
+    text: `Automatic recovery attempt 1 for AI ${side}`
+  });
+  await saveState();
+  return { recovered: true };
+}
+
+async function runWatchdogTick(now = Date.now()) {
+  if (!state.sessionActive || !state.running || state.awaitingHuman) return { checked: false };
+  const timeoutMs = clampStuckTimeoutMinutes(state.stuckTimeoutMinutes) * 60 * 1000;
+  const results = [];
+  for (const side of normalizeActiveSides(state.activeSides)) {
+    const startedAt = Number(state.roundStartedAtBySide?.[side]);
+    if (!Number.isFinite(startedAt) || startedAt <= 0) continue;
+    const status = await queryGenerationStatus(side);
+    const lastChangeAt = Number(status?.lastChangeAt) || 0;
+    state.lastProgressAtBySide = { A: null, B: null, C: null, ...(state.lastProgressAtBySide || {}) };
+    if (lastChangeAt > Number(state.lastProgressAtBySide[side] || 0)) {
+      state.lastProgressAtBySide[side] = lastChangeAt;
+      await saveState();
+    }
+    const progressing = Boolean(status?.generating) && lastChangeAt > 0 && (Number(now) - lastChangeAt) < timeoutMs;
+    if (progressing) {
+      results.push({ side, progressing: true });
+      continue;
+    }
+    if (!shouldDeclareStuck({
+      startedAt,
+      lastProgressAt: state.lastProgressAtBySide[side],
+      now,
+      timeoutMs
+    })) {
+      results.push({ side, stuck: false });
+      continue;
+    }
+
+    if (state.checkpointPending && generationMatches(state.checkpointRequestId || state.generationIdBySide?.[side], state.generationIdBySide?.[side])) {
+      await skipStalledCheckpoint(side);
+      results.push({ side, checkpointSkipped: true });
+      continue;
+    }
+    const recovered = await recoverStuckSide(side);
+    results.push({ side, stuck: true, ...recovered });
+  }
+  return { checked: true, results };
+}
+
+function cycleLimitLabel() {
+  const max = Number.isInteger(Number(state.maxCycles)) ? Number(state.maxCycles) : Number(state.maxTurns);
+  return max === INFINITE_TURNS ? "∞" : String(max);
+}
+
 
 function normalizeSourcePath(raw, fallback = "file.txt") {
   const cleaned = String(raw || fallback)
@@ -919,6 +1385,11 @@ async function loadState() {
       roundNumberBySide: { A: 0, B: 0, C: 0, ...(bridgeState.roundNumberBySide || {}) },
       lastRoundDurationMsBySide: { A: null, B: null, C: null, ...(bridgeState.lastRoundDurationMsBySide || {}) },
       lastRoundCompletedAtBySide: { A: null, B: null, C: null, ...(bridgeState.lastRoundCompletedAtBySide || {}) },
+      totalWorkMsBySide: { A: 0, B: 0, C: 0, ...(bridgeState.totalWorkMsBySide || {}) },
+      generationIdBySide: { A: null, B: null, C: null, ...(bridgeState.generationIdBySide || {}) },
+      recoveryAttemptBySide: { A: 0, B: 0, C: 0, ...(bridgeState.recoveryAttemptBySide || {}) },
+      lastProgressAtBySide: { A: null, B: null, C: null, ...(bridgeState.lastProgressAtBySide || {}) },
+      cycleParticipants: Array.isArray(bridgeState.cycleParticipants) ? bridgeState.cycleParticipants.filter(side => SIDES.includes(side)) : [],
       phasePendingSides: Array.isArray(bridgeState.phasePendingSides) ? bridgeState.phasePendingSides.filter(side => SIDES.includes(side)) : [],
       phaseSentSides: Array.isArray(bridgeState.phaseSentSides) ? bridgeState.phaseSentSides.filter(side => SIDES.includes(side)) : [],
       phaseCompletedSides: Array.isArray(bridgeState.phaseCompletedSides) ? bridgeState.phaseCompletedSides.filter(side => SIDES.includes(side)) : [],
@@ -948,6 +1419,18 @@ async function loadState() {
       state.maxTurns = normalizeMaxTurns(state.maxTurns);
     } catch (_) {
       state.maxTurns = INFINITE_TURNS;
+    }
+    const migrated = migrateTimerState(state);
+    state.activeSides = migrated.activeSides;
+    state.maxCycles = migrated.maxCycles;
+    state.cycleCount = migrated.cycleCount;
+    state.checkpointEveryNCycles = clampCheckpointEvery(state.checkpointEveryNCycles);
+    state.stuckTimeoutMinutes = clampStuckTimeoutMinutes(state.stuckTimeoutMinutes);
+    if (state.recoveryCheckpoint && typeof state.recoveryCheckpoint === "object") {
+      const text = String(state.recoveryCheckpoint.text || "").slice(0, MAX_CHECKPOINT_CHARS);
+      state.recoveryCheckpoint = text ? { ...state.recoveryCheckpoint, text } : null;
+    } else {
+      state.recoveryCheckpoint = null;
     }
     try {
       state.sourceFiles = normalizeSourceFiles(state.sourceFiles);
@@ -988,6 +1471,12 @@ async function loadState() {
     await showHumanAttention(state.pendingHuman.requestingSide, state.pendingHuman.prompt);
   } else {
     await clearAttention();
+  }
+
+  if (state.sessionActive && state.running && !state.awaitingHuman) {
+    await ensureWatchdogAlarm();
+  } else {
+    await clearWatchdogAlarm();
   }
 }
 
@@ -1280,10 +1769,15 @@ function recordTranscript(type, { side = null, text = "", ...extra } = {}) {
 
 function beginRoundTimer(side, startedAt = Date.now()) {
   if (!SIDES.includes(side)) return null;
+  if (Number(state.roundStartedAtBySide?.[side]) > 0) {
+    completeRoundTimer(side, startedAt);
+  }
   const when = Number.isFinite(Number(startedAt)) ? Number(startedAt) : Date.now();
   state.roundStartedAtBySide = { A: null, B: null, C: null, ...(state.roundStartedAtBySide || {}) };
   state.roundNumberBySide = { A: 0, B: 0, C: 0, ...(state.roundNumberBySide || {}) };
+  state.lastProgressAtBySide = { A: null, B: null, C: null, ...(state.lastProgressAtBySide || {}) };
   state.roundStartedAtBySide[side] = when;
+  state.lastProgressAtBySide[side] = when;
   state.roundNumberBySide[side] = Math.max(0, Number(state.roundNumberBySide[side]) || 0) + 1;
   return { startedAt: when, roundNumber: state.roundNumberBySide[side] };
 }
@@ -1308,6 +1802,8 @@ function completeRoundTimer(side, completedAt = Date.now()) {
   state.roundStartedAtBySide[side] = null;
   state.lastRoundDurationMsBySide[side] = durationMs;
   state.lastRoundCompletedAtBySide[side] = safeEnd;
+  state.totalWorkMsBySide = { A: 0, B: 0, C: 0, ...(state.totalWorkMsBySide || {}) };
+  state.totalWorkMsBySide[side] = accumulateTotalWorkMs(state.totalWorkMsBySide[side], durationMs);
   return { roundNumber, durationMs, completedAt: safeEnd };
 }
 
@@ -1552,6 +2048,7 @@ async function sendBatchPhase(sides = pendingUnsentSides()) {
 
 async function advanceBatchIfReady() {
   if (!isBatchWorkMode() || state.awaitingHuman || state.phasePendingSides.length) return { advanced: false };
+  if (state.checkpointPending) return { advanced: false, checkpoint: true };
   if (!state.running) {
     state.paused = true;
     state.pauseReason = `${workModeLabel()} ${phaseLabel()} phase completed while paused.`;
@@ -1560,7 +2057,7 @@ async function advanceBatchIfReady() {
   }
   if (state.workMode === "review" && state.workPhase === "primary") {
     await new Promise(resolve => setTimeout(resolve, state.delayMs));
-    if (!state.sessionActive || !state.running || state.awaitingHuman) return { advanced: false };
+    if (!state.sessionActive || !state.running || state.awaitingHuman || state.checkpointPending) return { advanced: false };
     resetBatchPhase("review");
     await saveState();
     try {
@@ -1571,11 +2068,30 @@ async function advanceBatchIfReady() {
       return { advanced: false, error: err.message };
     }
   }
-  const reason = state.workMode === "review"
-    ? "Peer-review cycle complete"
-    : `${workModeLabel()} pass complete`;
-  await endBridge(reason);
-  return { advanced: true, finished: true };
+
+  if (hasReachedCycleLimit()) {
+    await endBridge(`Reached maximum of ${cycleLimitLabel()} team cycles`);
+    return { advanced: true, finished: true };
+  }
+
+  if (checkpointDue(state.cycleCount, state.checkpointEveryNCycles)) {
+    const checkpoint = await maybeRequestCheckpointThen({ kind: "batch", phase: "primary" });
+    if (checkpoint.requested) return { advanced: true, checkpoint: true };
+  }
+
+  await new Promise(resolve => setTimeout(resolve, state.delayMs));
+  if (!state.sessionActive || !state.running || state.awaitingHuman || state.checkpointPending) {
+    return { advanced: false };
+  }
+  resetBatchPhase("primary");
+  await saveState();
+  try {
+    await sendBatchPhase();
+    return { advanced: true, phase: "primary", nextCycle: true };
+  } catch (err) {
+    await pauseBridge(`Could not start the next ${workModeLabel()} cycle: ${err.message}`);
+    return { advanced: false, error: err.message };
+  }
 }
 
 function recoveryMessage(side) {
@@ -1732,17 +2248,25 @@ async function ensureTabListener(tabId) {
   throw new Error("The page listener could not be established after reinjection.");
 }
 
-async function sendToSide(side, text, { record = true, deliveredSeq = null, deliveredSources = false, artifactIds = [], artifacts = [], mainInterjectionIds = [], saveRecord = true } = {}) {
+async function sendToSide(side, text, { record = true, deliveredSeq = null, deliveredSources = false, artifactIds = [], artifacts = [], mainInterjectionIds = [], saveRecord = true, recovery = false } = {}) {
   const tabId = tabForSide(side);
   await ensureTabListener(tabId);
+
+  const generationId = newGenerationId(side);
+  state.generationIdBySide = { A: null, B: null, C: null, ...(state.generationIdBySide || {}) };
+  state.generationIdBySide[side] = generationId;
+  if (!recovery) {
+    state.recoveryAttemptBySide = { A: 0, B: 0, C: 0, ...(state.recoveryAttemptBySide || {}) };
+    state.recoveryAttemptBySide[side] = 0;
+  }
 
   const expectedArtifacts = Array.isArray(artifacts) ? artifacts.length : 0;
   let result;
   try {
-    result = await chrome.tabs.sendMessage(Number(tabId), { type: "AI_BRIDGE_SEND", text, artifacts });
+    result = await chrome.tabs.sendMessage(Number(tabId), { type: "AI_BRIDGE_SEND", text, artifacts, generationId });
   } catch (_) {
     await ensureTabListener(tabId);
-    result = await chrome.tabs.sendMessage(Number(tabId), { type: "AI_BRIDGE_SEND", text, artifacts });
+    result = await chrome.tabs.sendMessage(Number(tabId), { type: "AI_BRIDGE_SEND", text, artifacts, generationId });
   }
 
   const attachmentFailed = !result?.ok || (expectedArtifacts && Number(result.uploadedCount) !== expectedArtifacts);
@@ -1750,7 +2274,7 @@ async function sendToSide(side, text, { record = true, deliveredSeq = null, deli
     // ZIP/text artifacts already have bounded previews embedded in `text`.
     // Send the same handoff without raw files so a provider DOM change cannot
     // block code review indefinitely. Binary-only artifacts still fail closed.
-    result = await chrome.tabs.sendMessage(Number(tabId), { type: "AI_BRIDGE_SEND", text, artifacts: [] });
+    result = await chrome.tabs.sendMessage(Number(tabId), { type: "AI_BRIDGE_SEND", text, artifacts: [], generationId });
     if (!result?.ok) throw new Error(result?.error || "The page did not accept the text fallback handoff.");
     appendLog({ time: Date.now(), type: "artifact-fallback", side, text: `AI ${side} received vault text fallback after raw attachment failed`, artifacts: expectedArtifacts });
   } else if (!result?.ok) {
@@ -1913,10 +2437,12 @@ async function pauseBridge(reason = "Paused by user") {
   state.paused = true;
   state.pauseReason = reason;
   appendLog({ time: Date.now(), type: "system", text: reason });
+  await clearWatchdogAlarm();
   await saveState();
 }
 
 async function endBridge(reason = "Stopped") {
+  settleRunningTimers();
   state.sessionActive = false;
   state.running = false;
   state.paused = false;
@@ -1927,8 +2453,12 @@ async function endBridge(reason = "Stopped") {
   state.pendingHumanQueue = [];
   state.pendingMainInterjections = [];
   state.suppressedHumanRequests = [];
+  state.checkpointPending = false;
+  state.checkpointRequestId = null;
+  state.postCheckpointResume = null;
   state.roundStartedAtBySide = { A: null, B: null, C: null };
   appendLog({ time: Date.now(), type: "system", text: reason });
+  await clearWatchdogAlarm();
   await clearAttention();
   await saveState();
 }
@@ -2057,12 +2587,20 @@ async function handleBatchCompletedResponse(side, text, { relay = true, artifact
   else state.primaryResponseSeqBySide[side] = entry.seq;
   appendLog({ time: Date.now(), type: "response", side, seq: entry.seq, roundNumber: round.roundNumber, durationMs: round.durationMs, text: `AI ${side} completed ${phaseLabel(phase).toLowerCase()} response #${entry.seq}${round.durationMs !== null ? ` in ${round.durationMs} ms` : ""}`, chars: String(text || "").length });
 
+  if (!state.phasePendingSides.length) {
+    const cycleDone = !(state.workMode === "review" && state.workPhase === "primary");
+    if (cycleDone) {
+      state.cycleCount = (Number(state.cycleCount) || 0) + 1;
+      state.cycleParticipants = [];
+    }
+  }
+
   const humanPrompt = extractHumanRequest(text);
   if (humanPrompt) await queueHumanRequest(side, text, humanPrompt);
   await saveState();
 
-  if (hasReachedTurnLimit()) {
-    await endBridge(`Reached maximum of ${state.maxTurns} AI turns`);
+  if (hasReachedCycleLimit()) {
+    await endBridge(`Reached maximum of ${cycleLimitLabel()} team cycles`);
     return { ok: true, finished: true };
   }
 
@@ -2077,7 +2615,10 @@ async function handleBatchCompletedResponse(side, text, { relay = true, artifact
   return { ok: true, ...transition };
 }
 
-async function handleCompletedResponse(side, text, { relay = true, artifacts = [], completedAt = null } = {}) {
+async function handleCompletedResponse(side, text, { relay = true, artifacts = [], completedAt = null, generationId = null } = {}) {
+  if (state.checkpointPending && generationMatches(state.checkpointRequestId || state.generationIdBySide?.[side], generationId)) {
+    return handleCheckpointResponse(side, text, { completedAt });
+  }
   if (isBatchWorkMode()) return handleBatchCompletedResponse(side, text, { relay, artifacts, completedAt });
   if (!side || side !== state.currentSide) return { ok: false, ignored: true };
   if (!text) return { ok: false, ignored: true };
@@ -2102,6 +2643,11 @@ async function handleCompletedResponse(side, text, { relay = true, artifacts = [
   const artifactIds = await storeResponseArtifacts(side, entry.seq, artifacts);
   if (artifactIds.length) entry.artifactIds = artifactIds;
   state.turn += 1;
+  const participation = recordSequentialParticipation(state.cycleParticipants, side, state.activeSides);
+  state.cycleParticipants = participation.participants;
+  if (participation.cycleCompleted) {
+    state.cycleCount = (Number(state.cycleCount) || 0) + 1;
+  }
   appendLog({ time: Date.now(), type: "response", side, seq: entry.seq, roundNumber: round.roundNumber, durationMs: round.durationMs, text: `AI ${side} completed response #${entry.seq}${round.durationMs !== null ? ` in ${round.durationMs} ms` : ""}`, chars: String(entryText || "").length });
 
   const humanPrompt = extractHumanRequest(entryText);
@@ -2121,8 +2667,8 @@ async function handleCompletedResponse(side, text, { relay = true, artifacts = [
     return { ok: false, paused: true, commandError: state.pauseReason };
   }
 
-  if (hasReachedTurnLimit()) {
-    await endBridge(`Reached maximum of ${state.maxTurns} AI turns`);
+  if (participation.cycleCompleted && hasReachedCycleLimit()) {
+    await endBridge(`Reached maximum of ${cycleLimitLabel()} team cycles`);
     return { ok: true, finished: true };
   }
 
@@ -2142,6 +2688,15 @@ async function handleCompletedResponse(side, text, { relay = true, artifacts = [
       : `Paused after AI ${side} completed. Next: AI ${targetSide}.`;
     await saveState();
     return { ok: true, paused: true };
+  }
+
+  if (participation.cycleCompleted) {
+    const checkpoint = await maybeRequestCheckpointThen({
+      kind: "sequential",
+      nextSide: targetSide,
+      fromSide: side
+    });
+    if (checkpoint.requested) return { ok: true, checkpoint: true };
   }
 
   await new Promise(resolve => setTimeout(resolve, state.delayMs));
@@ -2205,6 +2760,8 @@ function sanitizeCloudSettings(raw, options = {}) {
   const stamp = options.stamp !== false;
   let maxTurns = INFINITE_TURNS;
   try { maxTurns = normalizeMaxTurns(src.maxTurns); } catch (_) { maxTurns = INFINITE_TURNS; }
+  let maxCycles = maxTurns;
+  try { maxCycles = normalizeMaxTurns(src.maxCycles ?? src.maxTurns); } catch (_) { maxCycles = maxTurns; }
   const delay = Number(src.delayMs);
   const incomingUpdated = Number(src.updatedAt);
   return {
@@ -2215,6 +2772,9 @@ function sanitizeCloudSettings(raw, options = {}) {
     workMode: normalizeWorkMode(src.workMode),
     startSide: SIDES.includes(src.startSide) ? src.startSide : "A",
     maxTurns,
+    maxCycles,
+    checkpointEveryNCycles: clampCheckpointEvery(src.checkpointEveryNCycles),
+    stuckTimeoutMinutes: clampStuckTimeoutMinutes(src.stuckTimeoutMinutes),
     delayMs: Math.max(0, Math.min(30000, Number.isFinite(delay) ? delay : 1500)),
     freshOnStart: Boolean(src.freshOnStart),
     jobA: String(src.jobA || "").trim().slice(0, 4000),
@@ -2797,11 +3357,17 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
       fresh.workMode = normalizeWorkMode(msg.workMode);
       fresh.workPhase = isBatchWorkMode(fresh.workMode) ? "primary" : (fresh.workMode === "collaborate" ? "collaborate" : (fresh.workMode === "mesh" ? "mesh" : "relay"));
       fresh.currentSide = isBatchWorkMode(fresh.workMode) ? null : fresh.startSide;
-      fresh.maxTurns = normalizeMaxTurns(msg.maxTurns);
-      const minimumTurns = minimumTurnsForWorkMode(fresh.workMode);
-      if (fresh.maxTurns !== INFINITE_TURNS && fresh.maxTurns < minimumTurns) {
-        throw new Error(`${workModeLabel(fresh.workMode)} mode needs at least ${minimumTurns} AI turns to complete one full cycle, or use -1.`);
-      }
+      fresh.maxTurns = normalizeMaxTurns(msg.maxCycles ?? msg.maxTurns);
+      fresh.maxCycles = fresh.maxTurns;
+      fresh.cycleCount = 0;
+      fresh.activeSides = normalizeActiveSides(msg.activeSides || SIDES);
+      fresh.cycleParticipants = [];
+      fresh.checkpointEveryNCycles = clampCheckpointEvery(msg.checkpointEveryNCycles);
+      fresh.stuckTimeoutMinutes = clampStuckTimeoutMinutes(msg.stuckTimeoutMinutes);
+      fresh.recoveryCheckpoint = null;
+      fresh.checkpointPending = false;
+      fresh.checkpointRequestId = null;
+      fresh.postCheckpointResume = null;
       const requestedDelay = Number(msg.delayMs);
       fresh.delayMs = Math.max(0, Math.min(30000, Number.isFinite(requestedDelay) ? requestedDelay : 1500));
       fresh.initialPrompt = String(msg.initialPrompt || "").trim();
@@ -2835,6 +3401,7 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
       state.running = true;
       resetSessionArtifactRouting();
       await clearAttention();
+      await ensureWatchdogAlarm();
       await saveState();
 
       try {
@@ -2887,6 +3454,7 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
       state.paused = false;
       state.pauseReason = "";
       await clearAttention();
+      await ensureWatchdogAlarm();
       await saveState();
 
       try {
@@ -3063,6 +3631,17 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
         return;
       }
       const text = String(msg.text || "").trim();
+      const incomingGenerationId = msg.generationId == null ? "" : String(msg.generationId);
+      if (!generationMatches(state.generationIdBySide?.[side], incomingGenerationId)) {
+        appendLog({
+          time: Date.now(),
+          type: "stale-response",
+          side,
+          text: `Ignored late response from AI ${side} because generationId did not match the active prompt`
+        });
+        sendResponse({ ok: false, ignored: true, stale: true });
+        return;
+      }
 
       // If the user manually paused while the current AI was still generating,
       // capture that completed work and advance the cursor, but do not relay it.
@@ -3078,7 +3657,7 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
           errors: Array.isArray(diagnostics.errors) ? diagnostics.errors.slice(0, 8) : []
         });
       }
-      const task = () => handleCompletedResponse(side, text, { relay, artifacts: msg.artifacts, completedAt });
+      const task = () => handleCompletedResponse(side, text, { relay, artifacts: msg.artifacts, completedAt, generationId: incomingGenerationId });
       responseCommitQueue = responseCommitQueue.catch(() => {}).then(task);
       const result = await responseCommitQueue;
       sendResponse(result);
@@ -3114,5 +3693,17 @@ chrome.tabs.onRemoved.addListener(async tabId => {
   state.paused = true;
   state.pauseReason = `AI ${side} tab was closed. Open/reselect it and press Resume.`;
   appendLog({ time: Date.now(), type: "system", text: state.pauseReason });
+  await clearWatchdogAlarm();
   await saveState();
+});
+
+
+chrome.alarms.onAlarm.addListener(async alarm => {
+  if (alarm?.name !== WATCHDOG_ALARM) return;
+  await stateReady;
+  try {
+    await runWatchdogTick();
+  } catch (err) {
+    console.warn("AI Bridge watchdog tick failed", err);
+  }
 });

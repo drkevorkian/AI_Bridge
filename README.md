@@ -1,10 +1,10 @@
 # AI Bridge
 
-**Current version: 1.13.1**
+**Current version: 1.14.0**
 
-1.13.0 is live on main. 1.13.1 adds the optional Google Drive `appDataFolder` write/read path on top of that release.
+1.14.0 is the session-timer, team-cycle, and stuck-recovery release. 1.13.1 Google Drive `appDataFolder` sync remains in this build.
 
-AI Bridge is a Manifest V3 Chrome extension for coordinating three AI web apps as one team from a single dashboard. It supports sequential relay, parallel work, peer review, direct model-to-model routing, human intervention, persistent file relay, reusable history, optional Chrome/Google settings sync, and extension-side round timing.
+AI Bridge is a Manifest V3 Chrome extension for coordinating three AI web apps as one team from a single dashboard. It supports sequential relay, parallel work, peer review, direct model-to-model routing, human intervention, persistent file relay, reusable history, optional Chrome/Google settings sync, team-cycle timing, recovery checkpoints, and a `chrome.alarms` stuck watchdog.
 
 ## Supported providers
 
@@ -55,7 +55,9 @@ Synced whitelist:
 - pane width
 - work strategy
 - Main AI preference
-- turn / delay defaults
+- turn / delay / team-cycle defaults
+- recovery-summary interval
+- stuck-timeout minutes
 - fresh-chat preference
 - A/B/C jobs
 - Team rules
@@ -70,6 +72,8 @@ Never synced:
 - OAuth tokens
 - live session state
 - human answers
+- recovery checkpoints
+- generation IDs / watchdog recovery state
 
 ## Team configuration
 
@@ -96,7 +100,7 @@ Each strategy is defined by timing, peer visibility, cycle size, Main AI meaning
 
 Timing: sequential `A → B → C`. One AI at a time.
 Peer visibility: later AIs see accumulated shared updates.
-Cycle: 3 responses make one lap.
+Cycle: every selected LLM has participated once. The counter ticks only after that full lap.
 Main AI: first speaker and recipient of queued human interjections.
 Best for: investigations, debugging, and iterative design.
 
@@ -108,7 +112,7 @@ Best for: writing one final design, spec, or codebase.
 ### Compete
 
 A/B/C start simultaneously with the same objective and do not see each other during the primary pass.
-Cycle: 3 independent submissions.
+Cycle: the whole simultaneous batch. The counter ticks after every selected LLM has submitted.
 Best for: independent solutions, avoiding anchoring.
 
 ### Parallel Independent
@@ -119,12 +123,13 @@ Best for: work that decomposes into backend / frontend / research / security tra
 ### Peer Review
 
 Phase 1: independent primary responses. Phase 2: each AI critiques the other two.
-Cycle: 6 responses.
+Cycle: the full primary+critique pass. The counter ticks only after both phases finish.
 Best for: high-confidence validation.
 
 ### Direct Mesh
 
 One AI at a time. The responding AI may choose the next teammate with a final-line `SEND TO:` command. Without a valid target, normal next-agent routing applies.
+Cycle: every selected LLM has participated at least once. Routing the same teammate twice does not complete the cycle.
 Best for: dynamic workflows.
 
 ## Agreed upcoming features
@@ -135,13 +140,15 @@ Best for: dynamic workflows.
 4. Diagnostics Report
 5. Session Checkpoints
 
-`content.js` remains on the 1.11.3 content-script protocol because 1.13.x does not change provider DOM handling.
+`content.js` is on the 1.14.0 content-script protocol (`generationId`, `AI_BRIDGE_GENERATION_STATUS`, optional `AI_BRIDGE_STOP_GENERATION`). AI Bridge reloads a stale provider tab when the ping version does not match.
 
 ## Dashboard
 
 The dashboard uses a resizable control/transcript split. Default is **40% / 60%**.
 
-Core controls include bind A/B/C, jobs, Team rules, work strategy, Main AI, objective, turn limits, Start/Pause/Resume/Stop/Resend, fresh chats, human interjection, Suppressed Requests, Shared Vault, history, round timers, and optional Account & sync.
+Core controls include bind A/B/C, jobs, Team rules, work strategy, Main AI, objective, **Max team cycles**, recovery-summary interval, stuck timeout, Start/Pause/Resume/Stop/Resend, fresh chats, human interjection, Suppressed Requests, Shared Vault, history, dual Total/Current timers per LLM, and optional Account & sync.
+
+The runtime header shows `Cycle X / Y`. Each AI card shows **Total** (session working time, including aborted/stuck attempts) and **Current** (the live turn, or the last completed duration when idle).
 
 ## Persistence
 
@@ -165,7 +172,21 @@ The packaged extension contains:
 
 Command-line tests live in `tests/`.
 
-## Current release — 1.13.1
+## Current release — 1.14.0
+
+- two timers per LLM: Total session work and Current turn
+- team-cycle counter replaces the user-facing per-response counter; internal `turn` remains for diagnostics
+- Max team cycles (`-1` infinite); old saved `maxTurns` migrates safely
+- cycle semantics: Relay/Collaborate after every selected LLM has gone once; Compete/Parallel after the simultaneous batch; Peer Review after primary+critique; Direct Mesh after every selected side has participated at least once (duplicates do not complete the cycle)
+- recovery checkpoint after cycle 1, then every N cycles (default 5). Maintenance-only: does not consume a team cycle. Local-only, size-capped, never synced
+- stuck watchdog via `chrome.alarms` (`ai-bridge-watchdog`, 1 minute period). Recreated when the service worker starts
+- default stuck threshold 30 minutes (5–120). Visible generation progress reschedules instead of restarting
+- one automatic recovery (stop generation, fresh chat, reset source-delivery, new `generationId`, recovery prompt). A second stall pauses and requests human input
+- if a checkpoint request stalls, skip it and resume normal work
+- late responses from an abandoned generation are rejected by `generationId`
+- content-script protocol bumped to 1.14.0
+
+## Previous release — 1.13.1
 
 - optional Google Drive `appDataFolder` settings file (`ai-bridge-settings.json`)
 - Push writes Chrome Sync and, when linked, Drive

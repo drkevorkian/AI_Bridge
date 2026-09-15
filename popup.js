@@ -14,7 +14,8 @@ async function loadTheme() {
 }
 
 function limitLabel(s) {
-  return Number(s?.maxTurns) === -1 ? "∞" : String(s?.maxTurns ?? "?");
+  const max = Number(s?.maxCycles ?? s?.maxTurns);
+  return max === -1 ? "∞" : String(Number.isInteger(max) ? max : "?");
 }
 
 function formatDurationMs(ms) {
@@ -65,12 +66,13 @@ async function refresh() {
     if (!s) return;
     updatePill(s);
     const limit = limitLabel(s);
+    const cycles = Number(s?.cycleCount) || 0;
     if (s.sessionActive && s.awaitingHuman) {
-      $("status").textContent = `Human input needed\n${s.pendingHuman?.requestingLabel || `AI ${s.pendingHuman?.requestingSide || ""}`} is waiting.\nTurns: ${s.turn}/${limit}`;
+      $("status").textContent = `Human input needed\n${s.pendingHuman?.requestingLabel || `AI ${s.pendingHuman?.requestingSide || ""}`} is waiting.\nCycles: ${cycles}/${limit}`;
     } else if (s.sessionActive && s.running) {
-      $("status").textContent = `Running · turns ${s.turn}/${limit}\nCurrent: AI ${s.currentSide || "?"}${liveRoundLine(s)}`;
+      $("status").textContent = `Running · cycle ${cycles}/${limit}\nCurrent: AI ${s.currentSide || "?"}${liveRoundLine(s)}`;
     } else if (s.sessionActive) {
-      $("status").textContent = `Paused · turns ${s.turn}/${limit}\n${s.pauseReason || "Session saved."}`;
+      $("status").textContent = `Paused · cycle ${cycles}/${limit}\n${s.pauseReason || "Session saved."}`;
     } else {
       $("status").textContent = "Idle — open the dashboard to configure or start a session.";
     }
