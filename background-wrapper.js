@@ -26,5 +26,12 @@ if (globalThis.__AI_BRIDGE_GENERATION_SECURITY__?.failClosedWhenUnarmed !== true
 // Human-input detection is a control-plane concern.
 importScripts("human-input-runtime-hardening.js");
 
+// Watchdog recovery must examine only agents that are expected to be generating
+// in the current mode, and `pendingSend` alone must not count as model progress.
+importScripts("watchdog-runtime-hardening.js");
+if (globalThis.__AI_BRIDGE_WATCHDOG_SECURITY__?.pendingSendCountsAsModelProgress !== false) {
+  throw new Error("AI Bridge watchdog hardening failed to initialize.");
+}
+
 // Reconnect recovery is isolated from the coordinator.
 importScripts("reconnect-runtime-hardening.js");
