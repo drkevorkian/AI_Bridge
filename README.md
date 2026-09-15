@@ -1,8 +1,8 @@
 # AI Bridge
 
-**Current version: 1.12.1**
+**Current version: 1.13.0 (workstream — not yet on main)**
 
-AI Bridge is a Manifest V3 Chrome extension for coordinating three AI web apps as one team from a single dashboard. It supports sequential relay, parallel work, peer review, direct model-to-model routing, human intervention, persistent file relay, reusable history, and extension-side round timing.
+AI Bridge is a Manifest V3 Chrome extension for coordinating three AI web apps as one team from a single dashboard. It supports sequential relay, parallel work, peer review, direct model-to-model routing, human intervention, persistent file relay, reusable history, optional Chrome/Google settings sync, and extension-side round timing.
 
 ## Supported providers
 
@@ -24,6 +24,38 @@ The provider tabs must remain open. AI Bridge coordinates those tabs; it does no
 6. Open three supported AI chats.
 7. Open the AI Bridge dashboard and bind them as AI A, AI B, and AI C.
 
+## Account & sync (optional)
+
+Login is **never required**. Local-only behavior is unchanged.
+
+**Push settings** / **Pull settings** copy configuration through Chrome Sync when you are signed into Chrome. This is the working cross-profile path today.
+
+**Link Google account** is the future Google Drive `appDataFolder` path. It stays disabled-by-architecture until a real Google Cloud OAuth client ID is packaged in `manifest.json` (`oauth2.client_id`). No placeholder client ID is shipped. Tokens stay in Chrome's identity cache and are never written into AI Bridge storage.
+
+Synced whitelist:
+
+- theme
+- pane width
+- work strategy
+- Main AI preference
+- turn / delay defaults
+- fresh-chat preference
+- A/B/C jobs
+- Team rules
+- reusable job / command / Team-rule history
+
+Never synced:
+
+- transcripts
+- Vault binaries
+- uploaded source files
+- tab IDs
+- OAuth tokens
+- live session state
+- human answers
+
+Pull refuses to run during an active session so a cloud copy cannot overwrite a live run.
+
 ## Team configuration
 
 Each session has four separate instruction layers:
@@ -33,107 +65,67 @@ Each session has four separate instruction layers:
 3. **Primary objective** — the task the team is solving now.
 4. **Working rules** — AI Bridge's built-in coordination protocol.
 
-### Team rules
-
-v1.12.0 adds a dedicated **Team rules** field between **Main AI / first speaker** and **Primary objective**.
-
-Team rules are injected into every A/B/C prompt using this header:
+Team rules are injected into every A/B/C prompt using:
 
 ```text
 TEAM RULES (ALL MEMBERS):
 ```
 
-They are inserted after the team roster and before the built-in working rules. They apply to every teammate regardless of assigned job or current work mode.
-
-Examples of good Team rules:
-
-```text
-- Never publish to main until another teammate has reviewed the change.
-- Preserve backwards compatibility unless the human explicitly approves a breaking change.
-- Challenge any teammate's conclusion if tests or source evidence disagree.
-- Keep README.md updated whenever user-visible behavior changes.
-```
-
-Behavior:
-
-- rules are captured when **Start** is pressed
-- the field locks while a session is active
-- empty rules are omitted from prompts
-- rules survive pause/resume and normal state recovery
-- previous rule sets are stored separately from jobs and objectives
-- saved rules can be reused from **Previous team rules**
-- rule history is capped and de-duplicated
-
-## Dashboard
-
-The dashboard uses a resizable control/transcript split. Default is **40% / 60%**.
-
-Core controls include:
-
-- bind AI A / B / C to open provider tabs
-- assign a separate role to each AI
-- set Team rules for all members
-- choose the Main AI / first speaker
-- choose a work mode
-- set the primary objective
-- finite or infinite turn limits
-- Start / Pause / Resume / Stop / Resend
-- Human interjection
-- Suppressed Requests
-- Shared Vault
-- reusable role, command, and Team-rule history
-- extension-side round timers
-
-The divider can be dragged, adjusted with the keyboard, or reset to 40%. Its width is remembered.
+They are inserted after the team roster and before the built-in working rules. **Apply to all members** updates a live session without Stop/Start.
 
 ## Work modes
 
+Each strategy is defined by timing, peer visibility, cycle size, Main AI meaning, and best use.
+
 ### Relay
 
-Normal sequential handoff:
-
-`A → B → C → A ...`
+- Timing: sequential A → B → C. One AI at a time.
+- Peer visibility: every later AI sees accumulated shared updates and continues the same problem.
+- Cycle: 3 responses make one lap.
+- Main AI: first speaker, and the recipient of queued human interjections.
+- Best for: investigations, debugging, and iterative design.
 
 ### Collaborate
 
-Sequential shared-deliverable mode. Each AI improves the same result using its assigned role.
+- Timing: sequential like Relay.
+- Peer visibility: later AIs revise one shared deliverable.
+- Cycle: 3 responses make one lap of the shared artifact.
+- Main AI: first speaker + queued interjections.
+- Best for: one final design, spec, or codebase.
 
 ### Compete
 
-A, B, and C receive the same objective simultaneously and respond independently.
+- Timing: A, B, and C start simultaneously.
+- Peer visibility: they do not see each other during the primary pass.
+- Cycle: 3 independent submissions.
+- Main AI: recipient of queued interjections.
+- Best for: independent solutions, avoiding anchoring.
 
 ### Parallel Independent
 
-A, B, and C work simultaneously on independent or complementary tasks.
+- Timing: A, B, and C start simultaneously.
+- Peer visibility: each executes its assigned job rather than solving the identical problem three times.
+- Cycle: 3 parallel job completions.
+- Main AI: queued interjections.
+- Best for: work that decomposes into backend / frontend / research / security tracks.
 
 ### Peer Review
 
-Two-phase mode:
-
-1. all three produce independent primary responses
-2. each AI receives the other two primary responses and critiques them
-
-A complete cycle uses six AI responses.
+- Timing: two simultaneous phases.
+- Peer visibility: phase 1 independent; phase 2 each AI receives the other two results and critiques them.
+- Cycle: 6 responses (3 primary + 3 critiques).
+- Main AI: queued interjections.
+- Best for: high-confidence validation and catching mistakes or bias.
 
 ### Direct Mesh
 
-One AI speaks at a time but may explicitly choose the next teammate by placing a routing command on the final non-empty line:
-
-```text
-SEND TO: Gemini
-```
-
-or:
-
-```text
-SEND TO: AI C
-```
-
-Accepted targets include AI A/B/C and unambiguous configured labels. Ambiguous or self-targeted aliases fail closed. Without `SEND TO:`, Mesh uses the normal next-AI route.
+- Timing: one AI at a time.
+- Peer visibility: accumulated shared updates, then an optional explicit handoff.
+- Cycle: 1 response per handoff. Put `SEND TO: AI A|B|C` (or an unambiguous label) on the final non-empty line. Without a valid target, normal next-agent routing applies.
+- Main AI: first speaker unless a prior handoff changed the cursor, plus queued interjections.
+- Best for: dynamic workflows where the right next specialist depends on what was just discovered.
 
 ## Human control
-
-### Human-input requests
 
 Preferred explicit marker:
 
@@ -141,159 +133,35 @@ Preferred explicit marker:
 [[HUMAN_INPUT: specific question for the human]]
 ```
 
-AI Bridge can also detect clear blocking requests near the end of an AI response.
+Modal actions: **Send response & continue**, **Suppress request**, **Stop session**.
 
-When human input is required, the dashboard shows a centered modal with:
+Interjections wait for the configured **Main AI** and are delivered on that model's next group turn.
 
-- **Send response & continue**
-- **Suppress request**
-- **Stop session**
+## Security notes for 1.13.0
 
-Suppressed questions remain available in the **Suppressed Requests** drawer and can be reopened later with **Answer**.
+- Artifact background fetch is HTTPS-only. HTTP, embedded credentials, and `javascript:` / `data:` URLs fail closed.
+- `redirect: follow` re-validates `response.url` against the same HTTPS allowlist.
+- Privileged messages (`START`, `GET_STATE`, Vault download, Team rules, cloud ops, …) are restricted to extension pages (dashboard / popup).
+- Content scripts may send only `AI_BRIDGE_FETCH_ARTIFACT` and `AI_BRIDGE_RESPONSE`.
+- Artifact fetch and inbound responses require an active session and a currently bound A/B/C tab.
+- `chrome.storage.local` and `chrome.storage.sync` are locked to `TRUSTED_CONTEXTS` so provider-page scripts cannot read transcripts, Vault bytes, or synced settings.
+- Chrome Sync settings are chunked under the 8 KB per-item quota.
 
-Human replies use send-before-clear behavior, so a failed provider send does not discard the pending question.
+`content.js` remains on the 1.11.3 content-script protocol because 1.13.0 does not change provider DOM handling.
 
-### Human interjections
+## Dashboard
 
-Interjections are recorded immediately but wait for the configured **Main AI**. They are delivered on that model's next turn rather than to whichever secondary AI happens to be queued.
+The dashboard uses a resizable control/transcript split. Default is **40% / 60%**.
 
-## Turn limits
-
-`Max AI turns` accepts:
-
-- `-1` — infinite
-- `1` through `10000` — finite completed AI responses
-
-Human replies, interjections, pauses, file relay, and suppression actions do not consume AI turns.
-
-Minimum finite cycles:
-
-- Compete / Parallel: 3
-- Peer Review: 6
-
-## Independent round timers
-
-AI Bridge measures each model round independently of provider-reported timing.
-
-- clock starts after the provider accepts the prompt
-- clock stops at the final response-text change recognized as complete
-- active timers survive service-worker suspension
-- Parallel / Compete / Review keep separate A/B/C clocks
-- Resend starts a new numbered round
-- Direct Mesh starts a timer only for the routed recipient
-
-Transcript metadata uses the form:
-
-```text
-R3 · 42.1s
-```
-
-Artifact download/post-processing time is excluded.
-
-## Shared Vault and file relay
-
-AI-generated artifact bytes are retained in a persistent Shared Vault.
-
-The Vault survives:
-
-- Manifest V3 service-worker suspension
-- browser restarts
-- Stop / Start
-- fresh provider chats
-- new Bridge sessions
-
-Old files remain downloadable but are not automatically attached to a new project. Current-session routing is tracked separately.
-
-Vault controls include:
-
-- **Download**
-- **Clear vault**
-
-Artifact capture supports normal links, download buttons, rendered file controls, common `data-*` URL attributes, HTTP(S), blob/data URLs, and supported ChatGPT interpreter downloads.
-
-If page-context fetching fails because of CORS, AI Bridge can retry through the extension service worker on approved provider/CDN hosts. Capture failures are logged instead of disappearing silently.
-
-### ZIP handling
-
-ZIPs retain their original binary bytes while AI Bridge also performs bounded local inspection of text/code entries.
-
-Current limits:
-
-- 8 artifacts per AI response
-- 12 MiB per artifact
-- 24 MiB combined per response
-- 24 retained Vault files
-- 60 MiB retained raw Vault data
-
-## Local source files
-
-Before starting a session, the dashboard can load local code/files using **Add files**, **Add folder**, or drag-and-drop.
-
-Limits:
-
-- 100 source files
-- 200,000 characters per file
-- 400,000 characters combined
-
-Binary source files are rejected. Common dependency/build folders such as `.git`, `node_modules`, `.venv`, `dist`, and `build` are ignored when loading folders.
-
-Local source is treated as project data and must not override the human objective or Team rules.
-
-## Fresh-chat controls
-
-AI Bridge can reset provider conversations without requiring manual navigation to each site.
-
-- **Start in fresh AI chats**
-- **New AI chats** — reset all three selected providers
-- **New chat** — reset one provider
-
-Fresh-chat controls stay locked while a resumable session remains attached to the current provider conversations.
-
-## History
-
-AI Bridge keeps reusable history separate from the live transcript:
-
-- previous roles — reusable on any A/B/C slot
-- previous objectives / commands
-- previous Team rules
-
-Repeated identical history entries are promoted instead of endlessly duplicated.
-
-## Themes
-
-- Blizzard Blue — default, `#ACE5EE`
-- Ghost White
-- Midnight
-- Slate
-- Light
-- Solarized Light
-- Ocean
-- Terminal
-
-Theme choice is stored in `chrome.storage.local` and shared by dashboard and popup. Motion-sensitive users are respected through `prefers-reduced-motion`.
+Core controls include bind A/B/C, jobs, Team rules, work strategy, Main AI, objective, turn limits, Start/Pause/Resume/Stop/Resend, fresh chats, human interjection, Suppressed Requests, Shared Vault, history, round timers, and optional Account & sync.
 
 ## Persistence
 
-Session state is stored in `chrome.storage.local`, including:
-
-- AI bindings and labels
-- roles
-- Team rules
-- objective
-- transcript
-- active / paused session state
-- work-mode phase state
-- turn cursor and limits
-- suppressed human requests
-- history
-- timer state
-- persistent Vault metadata and bytes
-
-`unlimitedStorage` is requested for long-running sessions and binary artifact retention.
+Session state remains in `chrome.storage.local`. Optional configuration copies use `chrome.storage.sync`. Google Drive `appDataFolder` is the planned explicit Google-account path once the human supplies an OAuth client ID.
 
 ## Release files
 
-The extension contains exactly 11 release files:
+The packaged extension contains:
 
 - `manifest.json`
 - `background.js`
@@ -307,25 +175,22 @@ The extension contains exactly 11 release files:
 - `README.md`
 - `icon128.png`
 
-## Current release — 1.12.0
+Command-line tests live in `tests/`.
 
-- standing Team rules for all members
-- Team rules injected into every prompt path built through `teamContext()`
-- independent Team-rule history with Use / Clear controls
-- active-session lock for Team rules
-- resizable dashboard panes retained from 1.11.4
-- persistent Vault, Direct Mesh, resumable human requests, Main-AI interjections, and independent round timers retained from 1.11.x
+## Current release — 1.13.0
 
-`content.js` remains on the 1.11.3 content-script protocol because 1.12.0 does not change provider DOM handling.
+- optional Chrome Sync settings push/pull (login never required)
+- Google account button present, fail-closed until a real OAuth client ID is packaged
+- expanded work-strategy explanations (timing, visibility, cycle, Main AI, best use)
+- HTTPS-only artifact fetch + redirect re-validation
+- extension-page vs content-script message authorization
+- bound-tab check for artifact fetch and inbound responses
+- `chrome.storage` locked to trusted extension contexts
+- live Apply team rules retained from 1.12.1
 
-## Current release notes — 1.12.1
-
-**This release is 1.12.1.**
+## Previous release — 1.12.1
 
 - **Apply to all members** updates standing team rules on a live session
 - Later A/B/C turns receive the new `TEAM RULES (ALL MEMBERS)` block without Stop/Start
-- A live apply also records a human-controller transcript note so shared updates carry the change
-- The Team rules field stays editable during a run so you can correct governance mid-session
-
-It also retains 1.12.0 standing team rules and the 1.11.4 resizable panes.
-
+- A live apply also records a human-controller transcript note
+- The Team rules field stays editable during a run

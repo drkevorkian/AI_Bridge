@@ -15,7 +15,7 @@
     <aside id="controlPanel" class="control-panel">
       <header class="brand-block">
         <div>
-          <div class="eyebrow">AI BRIDGE <span id="versionBadge" class="version-badge">v1.12.1</span></div>
+          <div class="eyebrow">AI BRIDGE <span id="versionBadge" class="version-badge">v1.13.0</span></div>
           <h1>Three agents. One workspace.</h1>
         </div>
         <div class="header-tools">
@@ -53,6 +53,20 @@
           <button id="newAllChats" class="tiny ghost" type="button">New AI chats</button>
         </div>
         <div class="field-help">Uses the three selected, already-open AI tabs. AI Bridge never opens replacement AI tabs for this action.</div>
+      </section>
+
+      <section class="panel-section account-section" aria-labelledby="accountHeading">
+        <div class="section-heading">
+          <span id="accountHeading">Account & sync</span>
+          <span id="cloudStatusPill" class="muted">Local only</span>
+        </div>
+        <div class="field-help">Optional. Login is never required. Local-only behavior stays unchanged. Synced data is configuration only: theme, pane width, strategy, Main AI, turn/delay defaults, jobs, Team rules, and reusable history. Transcripts, Vault files, source uploads, tab IDs, tokens, and live session state stay on this machine.</div>
+        <div class="account-actions">
+          <button id="cloudPush" class="ghost" type="button">Push settings</button>
+          <button id="cloudPull" class="ghost" type="button">Pull settings</button>
+          <button id="cloudConnect" class="ghost" type="button">Link Google account</button>
+        </div>
+        <div id="cloudNotice" class="source-notice hidden"></div>
       </section>
 
       <section class="panel-section">
@@ -134,7 +148,7 @@
               <option value="mesh">Direct Mesh — AI-directed routing</option>
             </select>
           </div>
-          <div id="workModeHelp" class="field-help work-mode-help">Normal sequential relay. Each AI receives shared updates from the previous agents.</div>
+          <div id="workModeHelp" class="field-help work-mode-help">Relay: sequential A → B → C. Each later AI sees accumulated shared updates and continues the same problem. One lap is 3 responses. Main AI is the first speaker and the recipient of queued human interjections. Best for investigations, debugging, and iterative design.</div>
         </div>
 
         <div class="field-row">
