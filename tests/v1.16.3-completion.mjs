@@ -41,12 +41,13 @@ assert.match(hardening, /completed < start/);
 assert.match(hardening, /state\?\.lastResponseBySide/);
 assert.match(hardening, /baseHandleCompletedResponse/);
 assert.match(hardening, /staleBaseline: true/);
-assert.match(guard, /sameNode && sameText/);
+assert.match(guard, /sameNode && sameText && !baseline\.changed/);
+assert.match(guard, /MutationObserver/);
 assert.match(guard, /AI_BRIDGE_COMPLETION_GUARD_STATUS/);
 assert.doesNotMatch(`${hardening}\n${guard}`, /innerHTML|eval\s*\(|new Function/);
 
-// Timestamp fallback is now intentionally directional. The stale DOM timestamp
-// is created before sendToSide() starts the new round timer. A genuine response,
+// Timestamp fallback is intentionally directional. The stale DOM timestamp is
+// created before sendToSide() starts the new round timer. A genuine response,
 // even an identical one, observed after the timer starts must be accepted.
 const classifierSandbox = { Number, String };
 vm.runInNewContext(
@@ -125,10 +126,13 @@ result = await runtimeSandbox.handleCompletedResponse("A", "previous answer", {
 assert.equal(result.ok, true);
 assert.equal(accepted.length, 1);
 
-// Content-guard integration: same node + same text is suppressed, while a new
-// DOM node carrying identical text is allowed through to the real runtime API.
+// Content-guard integration covers three distinct cases:
+// 1) unchanged old node + old text => suppress;
+// 2) new node + identical text => allow;
+// 3) reused node changed during generation then restored => allow.
 const listeners = [];
 const outbound = [];
+let observerCallback = null;
 function makeNode(text) {
   const node = {
     innerText: text,
@@ -139,6 +143,10 @@ function makeNode(text) {
   return node;
 }
 let currentNode = makeNode("identical answer");
+class FakeMutationObserver {
+  constructor(callback) { observerCallback = callback; }
+  observe() {}
+}
 const contentSandbox = {
   window: {},
   location: { hostname: "chatgpt.com" },
@@ -146,7 +154,9 @@ const contentSandbox = {
   Map,
   Promise,
   String,
+  MutationObserver: FakeMutationObserver,
   document: {
+    documentElement: {},
     querySelectorAll: () => [currentNode]
   },
   getComputedStyle: () => ({ visibility: "visible", display: "block" }),
@@ -164,6 +174,8 @@ const contentSandbox = {
 };
 vm.runInNewContext(guard, contentSandbox);
 assert.equal(listeners.length, 1);
+assert.equal(typeof observerCallback, "function");
+
 listeners[0]({ type: "AI_BRIDGE_SEND", generationId: "gen-1" }, {}, () => {});
 result = await contentSandbox.chrome.runtime.sendMessage({
   type: "AI_BRIDGE_RESPONSE",
@@ -181,5 +193,19 @@ result = await contentSandbox.chrome.runtime.sendMessage({
 });
 assert.equal(result.ok, true);
 assert.equal(outbound.length, 1);
+
+listeners[0]({ type: "AI_BRIDGE_SEND", generationId: "gen-2" }, {}, () => {});
+currentNode.innerText = "streaming intermediate text";
+currentNode.textContent = "streaming intermediate text";
+observerCallback();
+currentNode.innerText = "identical answer";
+currentNode.textContent = "identical answer";
+result = await contentSandbox.chrome.runtime.sendMessage({
+  type: "AI_BRIDGE_RESPONSE",
+  text: "identical answer",
+  generationId: "gen-2"
+});
+assert.equal(result.ok, true);
+assert.equal(outbound.length, 2);
 
 console.log("v1.16.3 completion identity + stale-baseline regression ok");
