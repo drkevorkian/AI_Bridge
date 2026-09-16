@@ -54,15 +54,15 @@ assert.equal(pendingStatus.generating, false, "pendingSend alone must not count 
 assert.equal(pendingStatus.sending, true);
 
 let result = await context.runWatchdogTick(500);
-assert.deepEqual(result.results.map(item => item.side), ["B"], "sequential watchdog must inspect currentSide only");
-assert.deepEqual([...context.state.activeSides], ["A", "B", "C"], "watchdog must never rewrite configured team membership");
+assert.equal(Array.from(result.results, item => item.side).join(","), "B", "sequential watchdog must inspect currentSide only");
+assert.equal(Array.from(context.state.activeSides).join(","), "A,B,C", "watchdog must never rewrite configured team membership");
 
 context.state.workMode = "parallel";
 context.state.currentSide = null;
 context.state.phasePendingSides = ["A", "C", "A"];
 result = await context.runWatchdogTick(600);
-assert.deepEqual(result.results.map(item => item.side), ["A", "C"], "batch watchdog must inspect pending phase sides only");
-assert.deepEqual([...context.state.activeSides], ["A", "B", "C"]);
+assert.equal(Array.from(result.results, item => item.side).join(","), "A,C", "batch watchdog must inspect pending phase sides only");
+assert.equal(Array.from(context.state.activeSides).join(","), "A,B,C");
 
 context.state.awaitingHuman = true;
 result = await context.runWatchdogTick(700);
