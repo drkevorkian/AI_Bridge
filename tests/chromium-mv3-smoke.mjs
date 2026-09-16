@@ -15,12 +15,13 @@ const certDir = fs.mkdtempSync(path.join(os.tmpdir(), "ai-bridge-cert-"));
 const keyPath = path.join(certDir, "key.pem");
 const certPath = path.join(certDir, "cert.pem");
 
-if (!fs.existsSync(chromeBin)) throw new Error(`Chromium executable not found at ${chromeBin}. Set CHROME_BIN explicitly.`);
+if (!fs.existsSync(chromeBin)) throw new Error(`Chrome not found at ${chromeBin}`);
+if (!process.env.DISPLAY) throw new Error("DISPLAY is not set; run this integration test under Xvfb.");
 
 execFileSync("openssl", [
-  "req", "-x509", "-newkey", "rsa:2048", "-nodes",
-  "-keyout", keyPath, "-out", certPath, "-days", "1",
-  "-subj", "/CN=chatgpt.com", "-addext", "subjectAltName=DNS:chatgpt.com"
+  "req", "-x509", "-newkey", "rsa:2048", "-nodes", "-keyout", keyPath,
+  "-out", certPath, "-days", "1", "-subj", "/CN=chatgpt.com",
+  "-addext", "subjectAltName=DNS:chatgpt.com"
 ], { stdio: "ignore" });
 
 const pageHtml = `<!doctype html><html><body>
@@ -56,22 +57,22 @@ await new Promise((resolve, reject) => {
   server.listen(mockPort, "127.0.0.1", resolve);
 });
 
+const mockUrl = `https://chatgpt.com:${mockPort}/mock`;
 const chrome = spawn(chromeBin, [
-  "--headless=new", "--no-sandbox", "--disable-gpu", "--disable-dev-shm-usage",
-  "--disable-background-networking", "--disable-component-update", "--disable-default-apps",
-  "--disable-sync", "--no-first-run", "--ignore-certificate-errors",
+  "--no-sandbox", "--disable-gpu", "--disable-dev-shm-usage", "--disable-background-networking",
+  "--disable-component-update", "--disable-default-apps", "--disable-sync", "--no-first-run",
+  "--ignore-certificate-errors", "--no-proxy-server", "--disable-features=OptimizationHints,MediaRouter",
   `--user-data-dir=${profileDir}`, `--remote-debugging-port=${remotePort}`,
   `--disable-extensions-except=${root}`, `--load-extension=${root}`,
-  "--disable-features=OptimizationHints,MediaRouter",
   `--host-resolver-rules=MAP chatgpt.com 127.0.0.1,EXCLUDE localhost,EXCLUDE 127.0.0.1`,
-  "about:blank"
+  mockUrl
 ], { stdio: ["ignore", "pipe", "pipe"] });
 
 let chromeStderr = "";
 chrome.stderr.on("data", chunk => { chromeStderr += String(chunk); });
 const delay = ms => new Promise(resolve => setTimeout(resolve, ms));
 
-async function eventually(fn, { timeoutMs = 15000, intervalMs = 100, label = "condition" } = {}) {
+async function eventually(fn, { timeoutMs = 20000, intervalMs = 100, label = "condition" } = {}) {
   const deadline = Date.now() + timeoutMs;
   let lastError = null;
   while (Date.now() < deadline) {
@@ -111,9 +112,9 @@ function connectCdp(wsUrl) {
     async call(method, params = {}) {
       await ready;
       const id = nextId++;
-      const promise = new Promise((resolve, reject) => pending.set(id, { resolve, reject }));
+      const result = new Promise((resolve, reject) => pending.set(id, { resolve, reject }));
       socket.send(JSON.stringify({ id, method, params }));
-      return promise;
+      return result;
     },
     close() { try { socket.close(); } catch (_) {} }
   };
@@ -130,30 +131,29 @@ let pageClient = null;
 try {
   await eventually(() => jsonEndpoint("/json/version"), { label: "Chrome DevTools endpoint" });
 
-  // Hosted runners may contain unrelated preinstalled extension workers. Match
-  // AI Bridge by its declared service-worker filename rather than accepting the
-  // first chrome-extension:// target.
-  const workerTarget = await eventually(async () => {
-    const targets = await jsonEndpoint("/json/list");
-    return targets.find(target =>
-      target.type === "service_worker" &&
-      /^chrome-extension:\/\//.test(target.url) &&
-      target.url.endsWith("/background-wrapper.js")
-    );
-  }, { label: "AI Bridge background-wrapper.js service worker" });
-
-  workerClient = connectCdp(workerTarget.webSocketDebuggerUrl);
-  await workerClient.ready;
-  await workerClient.call("Runtime.enable");
-  const manifestVersion = await evaluate(workerClient, "chrome.runtime.getManifest().version");
-  assert.equal(manifestVersion, "1.16.4");
-
-  const mockUrl = `https://chatgpt.com:${mockPort}/mock`;
-  const pageTarget = await jsonEndpoint(`/json/new?${encodeURIComponent(mockUrl)}`, { method: "PUT" });
+  const targets = () => jsonEndpoint("/json/list");
+  const pageTarget = await eventually(async () => {
+    const list = await targets();
+    return list.find(target => target.type === "page" && String(target.url).includes(`chatgpt.com:${mockPort}/mock`));
+  }, { label: "mock provider page target" });
   pageClient = connectCdp(pageTarget.webSocketDebuggerUrl);
   await pageClient.ready;
   await pageClient.call("Runtime.enable");
   await eventually(async () => ["complete", "interactive"].includes(await evaluate(pageClient, "document.readyState")), { label: "mock provider DOM" });
+
+  // A headed Chrome session under Xvfb exercises the extension-capable browser
+  // path. Select the worker by AI Bridge's exact MV3 service-worker filename so
+  // unrelated runner extensions cannot satisfy this test.
+  const workerTarget = await eventually(async () => {
+    const list = await targets();
+    return list.find(target => target.type === "service_worker" && /^chrome-extension:\/\//.test(target.url) && target.url.endsWith("/background-wrapper.js"));
+  }, { label: "AI Bridge background-wrapper.js service worker" });
+  workerClient = connectCdp(workerTarget.webSocketDebuggerUrl);
+  await workerClient.ready;
+  await workerClient.call("Runtime.enable");
+
+  const manifestVersion = await evaluate(workerClient, "chrome.runtime.getManifest().version");
+  assert.equal(manifestVersion, "1.16.4");
 
   const tabLookup = `(await chrome.tabs.query({})).find(item=>String(item.url||'').includes('chatgpt.com:${mockPort}/mock'))`;
   const ping = await eventually(async () => evaluate(workerClient, `(async()=>{const tab=${tabLookup};if(!tab?.id)return null;try{return await chrome.tabs.sendMessage(tab.id,{type:'AI_BRIDGE_PING'});}catch(_){return null;}})()`), { label: "manifest content-script injection" });
@@ -170,10 +170,9 @@ try {
   await eventually(async () => (await evaluate(pageClient, "window.__mockSendCount")) === 1, { label: "exactly one provider DOM submission" });
   assert.equal(await evaluate(pageClient, "document.querySelector('#prompt-textarea').value"), "integration smoke prompt");
   assert.equal(await evaluate(pageClient, "document.querySelectorAll('[data-message-author-role=assistant]').length"), 1);
-
   console.log(`Chromium MV3 smoke passed (extension ${manifestVersion}, content runtime ${ping.runtimeVersion}).`);
 } catch (error) {
-  throw new Error(`${error.message}\nChrome stderr tail:\n${chromeStderr.slice(-4000)}`);
+  throw new Error(`${error.message}\nChrome stderr tail:\n${chromeStderr.slice(-5000)}`);
 } finally {
   pageClient?.close();
   workerClient?.close();
