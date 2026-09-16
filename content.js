@@ -659,8 +659,6 @@
     }
   }
 
-  const observer = new MutationObserver(() => {});
-  observer.observe(document.documentElement, { childList: true, subtree: true, characterData: true });
   setInterval(monitor, 650);
 
   function stopGeneration() {
