@@ -11,6 +11,14 @@ if (!globalThis.__AI_BRIDGE_COORDINATOR_MUTEX__) {
 // Keep the existing background.js runtime intact and load established helpers.
 importScripts("background.js", "completion-runtime-hardening.js", "oauth-runtime-hardening.js", "power.js");
 
+// Never submit a replacement prompt while the provider still reports that the
+// previous generation is active. This protects RESEND, recovery, and future
+// send call sites with one fail-closed overlap invariant.
+importScripts("resend-runtime-hardening.js");
+if (globalThis.__AI_BRIDGE_RESEND_HARDENING_V1__?.stopBeforeReplacement !== true) {
+  throw new Error("AI Bridge resend hardening failed to initialize.");
+}
+
 // Artifact relay URLs come from provider DOM and are therefore untrusted.
 importScripts("artifact-fetch-runtime-hardening.js");
 if (globalThis.__AI_BRIDGE_ARTIFACT_FETCH_SECURITY__?.credentials !== "omit") {
