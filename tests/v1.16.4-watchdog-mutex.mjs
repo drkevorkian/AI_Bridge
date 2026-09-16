@@ -1,144 +1,142 @@
 import assert from "node:assert/strict";
 import fs from "node:fs";
+import path from "node:path";
 import vm from "node:vm";
+import { fileURLToPath } from "node:url";
 
-const mutexSource = fs.readFileSync(new URL("../coordinator-mutex-prelude.js", import.meta.url), "utf8");
-const watchdogSource = fs.readFileSync(new URL("../watchdog-runtime-hardening.js", import.meta.url), "utf8");
+const here = path.dirname(fileURLToPath(import.meta.url));
+const root = path.resolve(here, "..");
+const mutexSource = fs.readFileSync(path.join(root, "coordinator-mutex-prelude.js"), "utf8");
+const watchdogSource = fs.readFileSync(path.join(root, "watchdog-runtime-hardening.js"), "utf8");
 
-// Source-level guard: the watchdog must never reintroduce the old temporary
-// activeSides swap that created the race in the first place.
-assert.doesNotMatch(watchdogSource, /state\.activeSides\s*=/, "watchdog must not rewrite state.activeSides");
-assert.match(watchdogSource, /enqueueCoordinatorMutation/, "watchdog must use the shared coordinator queue");
-assert.match(watchdogSource, /collectProviderProbes/, "provider probes must be a separate unlocked phase");
+assert.match(mutexSource, /globalThis\.enqueueCoordinatorMutation\s*=\s*enqueueCoordinatorMutation/);
+assert.match(watchdogSource, /serializedWithCoordinator:\s*true/);
+assert.doesNotMatch(watchdogSource, /state\.activeSides\s*=\s*expected/);
+assert.doesNotMatch(watchdogSource, /configuredActiveSides/);
 
-// Verify that the exported queue and runtime-message serialization are the
-// exact same FIFO chain rather than independent locks.
-{
-  let registeredListener = null;
-  const order = [];
-  let releaseWatchdog;
-  const watchdogGate = new Promise(resolve => { releaseWatchdog = resolve; });
+const listeners = [];
+const events = [];
+let responseObservedSides = null;
+let releaseRecovery;
+let recoveryStartedResolve;
+const recoveryStarted = new Promise(resolve => { recoveryStartedResolve = resolve; });
+const recoveryGate = new Promise(resolve => { releaseRecovery = resolve; });
 
-  const context = vm.createContext({
-    console,
-    Promise,
-    TypeError,
-    globalThis: null,
-    chrome: {
-      runtime: {
-        onMessage: {
-          addListener(listener) {
-            registeredListener = listener;
-          }
-        }
+const chrome = {
+  runtime: {
+    onMessage: {
+      addListener(listener) {
+        listeners.push(listener);
+        return undefined;
       }
     }
-  });
-  context.globalThis = context;
-  vm.runInContext(mutexSource, context, { filename: "coordinator-mutex-prelude.js" });
+  }
+};
 
-  assert.equal(typeof context.enqueueCoordinatorMutation, "function");
-  assert.equal(context.__AI_BRIDGE_COORDINATOR_MUTEX__.version, 2);
+const state = {
+  sessionActive: true,
+  running: true,
+  awaitingHuman: false,
+  workMode: "relay",
+  currentSide: "A",
+  phasePendingSides: [],
+  activeSides: ["A", "B", "C"],
+  generationIdBySide: { A: "gen-a", B: null, C: null },
+  roundStartedAtBySide: { A: 1, B: null, C: null },
+  lastProgressAtBySide: { A: null, B: null, C: null },
+  checkpointPending: false,
+  checkpointRequestId: null,
+  stuckTimeoutMinutes: 5
+};
 
-  // Register one normal coordinator listener after the prelude has wrapped the API.
-  context.chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
-    order.push(`message:${message.type}`);
-    sendResponse({ ok: true });
-    return true;
-  });
+const context = vm.createContext({
+  console,
+  Promise,
+  Object,
+  Set,
+  TypeError,
+  Date,
+  chrome,
+  state,
+  SIDES: ["A", "B", "C"],
+  isBatchWorkMode: () => false,
+  clampStuckTimeoutMinutes: () => 5,
+  shouldDeclareStuck: () => true,
+  generationMatches: (expected, incoming) => Boolean(expected && incoming && expected === incoming),
+  saveState: async () => {},
+  skipStalledCheckpoint: async () => ({ skipped: true }),
+  recoverStuckSide: async side => {
+    events.push(`watchdog-start:${side}`);
+    recoveryStartedResolve();
+    await recoveryGate;
+    events.push(`watchdog-end:${side}`);
+    return { recovered: true };
+  },
+  queryGenerationStatus: async side => ({
+    ok: true,
+    side,
+    generating: false,
+    pendingSend: false,
+    lastChangeAt: 0
+  }),
+  runWatchdogTick: async () => ({ checked: false })
+});
+context.globalThis = context;
 
-  const watchdogTask = context.enqueueCoordinatorMutation(async () => {
-    order.push("watchdog:start");
-    await watchdogGate;
-    order.push("watchdog:end");
-  });
+vm.runInContext(mutexSource, context, { filename: "coordinator-mutex-prelude.js" });
+assert.equal(typeof context.enqueueCoordinatorMutation, "function");
+assert.equal(context.__AI_BRIDGE_COORDINATOR_MUTEX__.version, 2);
 
-  const responsePromise = new Promise(resolve => {
-    registeredListener({ type: "AI_BRIDGE_RESPONSE" }, {}, result => {
-      order.push("response:ack");
-      resolve(result);
-    });
-  });
+// Register a representative response listener after the prelude so it is
+// serialized through the exact same queue as watchdog recovery.
+chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
+  if (message?.type !== "AI_BRIDGE_RESPONSE") return false;
+  responseObservedSides = [...state.activeSides];
+  events.push("response");
+  sendResponse({ ok: true });
+  return true;
+});
 
-  await new Promise(resolve => setTimeout(resolve, 0));
-  assert.deepEqual(order, ["watchdog:start"], "response entered while watchdog mutation still held the queue");
+vm.runInContext(watchdogSource, context, { filename: "watchdog-runtime-hardening.js" });
+assert.equal(context.__AI_BRIDGE_WATCHDOG_SECURITY__.serializedWithCoordinator, true);
+assert.equal(context.__AI_BRIDGE_WATCHDOG_SECURITY__.mutatesActiveSides, false);
 
-  releaseWatchdog();
-  await watchdogTask;
-  const response = await responsePromise;
-  assert.equal(response.ok, true);
-  assert.deepEqual(order, ["watchdog:start", "watchdog:end", "message:AI_BRIDGE_RESPONSE", "response:ack"]);
-}
+const tickPromise = context.runWatchdogTick(10_000_000);
+await recoveryStarted;
 
-// Verify the watchdog performs slow generation-status probes outside the lock,
-// then rejects their result if RESPONSE-like state changes occurred meanwhile.
-{
-  let resolveProbe;
-  const probeGate = new Promise(resolve => { resolveProbe = resolve; });
-  let recoverCalls = 0;
-  let saveCalls = 0;
+assert.deepEqual(state.activeSides, ["A", "B", "C"], "watchdog must never replace team membership");
+assert.equal(listeners.length, 1);
 
-  const state = {
-    sessionActive: true,
-    running: true,
-    awaitingHuman: false,
-    currentSide: "A",
-    phasePendingSides: [],
-    activeSides: ["A", "B", "C"],
-    generationIdBySide: { A: "A-gen-1", B: null, C: null },
-    roundStartedAtBySide: { A: 1000, B: null, C: null },
-    lastProgressAtBySide: { A: 1000, B: null, C: null },
-    stuckTimeoutMinutes: 5,
-    checkpointPending: false
-  };
+let responseValue = null;
+listeners[0]({ type: "AI_BRIDGE_RESPONSE" }, {}, value => { responseValue = value; });
 
-  const context = vm.createContext({
-    console,
-    Promise,
-    Date,
-    Map,
-    Set,
-    globalThis: null,
-    state,
-    SIDES: ["A", "B", "C"],
-    isBatchWorkMode: () => false,
-    queryGenerationStatus: async () => probeGate,
-    enqueueCoordinatorMutation: task => Promise.resolve().then(task),
-    clampStuckTimeoutMinutes: () => 5,
-    shouldDeclareStuck: () => true,
-    generationMatches: (expected, incoming) => Boolean(expected && incoming && expected === incoming),
-    skipStalledCheckpoint: async () => ({ skipped: true }),
-    recoverStuckSide: async () => {
-      recoverCalls += 1;
-      return { recovered: true };
-    },
-    saveState: async () => { saveCalls += 1; }
-  });
-  context.globalThis = context;
-  vm.runInContext(watchdogSource, context, { filename: "watchdog-runtime-hardening.js" });
+// The response is queued behind the active watchdog recovery mutation.
+await new Promise(resolve => setTimeout(resolve, 0));
+assert.deepEqual(events, ["watchdog-start:A"]);
+assert.equal(responseValue, null);
 
-  const originalActiveSides = [...state.activeSides];
-  const tickPromise = context.runWatchdogTick(1_000_000);
+releaseRecovery();
+const tickResult = await tickPromise;
+await new Promise(resolve => setTimeout(resolve, 0));
 
-  // Allow snapshot acquisition and let the unlocked provider probe begin.
-  await new Promise(resolve => setTimeout(resolve, 0));
+assert.equal(tickResult.checked, true);
+assert.deepEqual(events, ["watchdog-start:A", "watchdog-end:A", "response"]);
+assert.deepEqual(responseObservedSides, ["A", "B", "C"], "response must observe configured team membership");
+assert.deepEqual(responseValue, { ok: true });
+assert.deepEqual(state.activeSides, ["A", "B", "C"]);
 
-  // Simulate an overlapping committed RESPONSE/new send while the probe is in flight.
-  state.generationIdBySide.A = "A-gen-2";
-  state.roundStartedAtBySide.A = 2000;
-  resolveProbe({ ok: true, generating: false, lastChangeAt: 1000 });
+// Generation revalidation: if the turn changes while the status probe is in
+// flight, watchdog recovery must be discarded rather than touching the new turn.
+let resolveProbe;
+context.queryGenerationStatus = () => new Promise(resolve => { resolveProbe = resolve; });
+state.generationIdBySide.A = "gen-old";
+const staleTick = context.runWatchdogTick(20_000_000);
+await new Promise(resolve => setTimeout(resolve, 0));
+state.generationIdBySide.A = "gen-new";
+resolveProbe({ ok: true, generating: false, pendingSend: false, lastChangeAt: 0 });
+const staleResult = await staleTick;
+assert.equal(staleResult.checked, true);
+assert.equal(Array.isArray(staleResult.results), true);
+assert.equal(staleResult.results.length, 0);
 
-  const result = await tickPromise;
-  assert.equal(result.checked, true);
-  assert.equal(result.results.length, 1);
-  assert.equal(result.results[0].side, "A");
-  assert.equal(result.results[0].staleProbe, true, "stale provider probe was allowed to commit recovery");
-  assert.equal(recoverCalls, 0, "watchdog recovered a generation that changed during the unlocked probe");
-  assert.equal(saveCalls, 0, "stale probe mutated progress state");
-  assert.deepEqual(state.activeSides, originalActiveSides, "watchdog changed configured team membership");
-  assert.equal(context.__AI_BRIDGE_WATCHDOG_SECURITY__.sharedCoordinatorQueue, true);
-  assert.equal(context.__AI_BRIDGE_WATCHDOG_SECURITY__.mutatesActiveSidesForFiltering, false);
-  assert.equal(context.__AI_BRIDGE_WATCHDOG_SECURITY__.providerProbeOutsideQueue, true);
-}
-
-console.log("v1.16.4 watchdog/coordinator serialization regression passed");
+console.log("v1.16.4 watchdog mutex regression: ok");

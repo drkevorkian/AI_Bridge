@@ -15,22 +15,8 @@
     return SIDES.includes(state.currentSide) ? [state.currentSide] : [];
   }
 
-  function snapshotForSide(side) {
-    return {
-      side,
-      generationId: String(state.generationIdBySide?.[side] || ""),
-      startedAt: Number(state.roundStartedAtBySide?.[side]) || 0,
-      lastProgressAt: Number(state.lastProgressAtBySide?.[side]) || 0
-    };
-  }
-
-  function sideStillExpected(side) {
-    return expectedWatchdogSides().includes(side);
-  }
-
-  // `pendingSend` is a short local upload/handoff transition, not evidence that
-  // the model is actively producing output. Preserve it as a diagnostic field
-  // while keeping the watchdog's progress calculation conservative.
+  // `pendingSend` is a short handoff/upload transition, not proof that the
+  // provider is actively generating model output.
   queryGenerationStatus = async function hardenedQueryGenerationStatus(side) {
     const status = await originalQueryGenerationStatus(side);
     if (!status || typeof status !== "object") return status;
@@ -40,69 +26,65 @@
     return status;
   };
 
-  /**
-   * Probe provider pages outside the coordinator mutation queue.  tabs messaging
-   * can be slow and must not stall START/STOP/RESPONSE handling merely to learn
-   * whether a model is still generating.
-   */
-  async function collectProviderProbes(snapshots) {
-    const probes = new Map();
-    await Promise.all(snapshots.map(async snapshot => {
-      probes.set(snapshot.side, await queryGenerationStatus(snapshot.side));
+  async function probeExpectedSides(sides) {
+    const entries = await Promise.all(sides.map(async side => {
+      const status = await queryGenerationStatus(side);
+      return [side, status];
     }));
-    return probes;
+    return Object.fromEntries(entries);
   }
 
+  /**
+   * Watchdog provider probes happen outside the coordinator mutation queue.
+   * Once probing completes, all state reads that decide recovery and every
+   * recovery mutation execute on the same queue as AI_BRIDGE_RESPONSE and the
+   * rest of the control plane. This prevents an alarm tick from racing a late
+   * response commit.
+   */
   runWatchdogTick = async function hardenedRunWatchdogTick(now = Date.now()) {
+    const initialSides = expectedWatchdogSides();
+    if (!initialSides.length) {
+      if (!state.sessionActive || !state.running || state.awaitingHuman) {
+        return { checked: false };
+      }
+      return { checked: true, results: [] };
+    }
+
+    const generationSnapshot = Object.fromEntries(initialSides.map(side => [
+      side,
+      String(state.generationIdBySide?.[side] || "")
+    ]));
+
+    // tabs.sendMessage can be slow. Never hold the coordinator queue while
+    // waiting for provider pages to answer a status probe.
+    const statusBySide = await probeExpectedSides(initialSides);
+
     if (typeof globalThis.enqueueCoordinatorMutation !== "function") {
-      throw new Error("AI Bridge coordinator mutation queue is unavailable to watchdog.");
+      throw new Error("AI Bridge coordinator mutation queue is unavailable to watchdog recovery.");
     }
 
-    // Take a tiny serialized snapshot so a control-plane mutation cannot split
-    // the watchdog's initial view of currentSide/generation/timer state.
-    const snapshots = await globalThis.enqueueCoordinatorMutation(() => {
-      const expected = expectedWatchdogSides();
-      if (!expected.length) return [];
-      return expected.map(snapshotForSide);
-    });
-
-    if (!snapshots.length) {
-      return globalThis.enqueueCoordinatorMutation(() => ({
-        checked: Boolean(state.sessionActive && state.running && !state.awaitingHuman),
-        results: []
-      }));
-    }
-
-    // This is the deliberately unlocked portion of the watchdog.
-    const probes = await collectProviderProbes(snapshots);
-
-    // Re-enter the exact same queue used by AI_BRIDGE_RESPONSE and every other
-    // coordinator mutation.  Revalidate all state derived before the provider
-    // probes; stale probe results are ignored rather than committed.
     return globalThis.enqueueCoordinatorMutation(async () => {
       if (!state.sessionActive || !state.running || state.awaitingHuman) {
-        return { checked: false, results: [] };
+        return { checked: false };
       }
+
+      // Re-evaluate mode/side ownership after the asynchronous probes. A turn
+      // may have completed while the provider tabs were being queried.
+      const currentExpected = new Set(expectedWatchdogSides());
+      const sides = initialSides.filter(side =>
+        currentExpected.has(side) &&
+        String(state.generationIdBySide?.[side] || "") === generationSnapshot[side]
+      );
+      if (!sides.length) return { checked: true, results: [] };
 
       const timeoutMs = clampStuckTimeoutMinutes(state.stuckTimeoutMinutes) * 60 * 1000;
       const results = [];
 
-      for (const snapshot of snapshots) {
-        const side = snapshot.side;
-        if (!sideStillExpected(side)) {
-          results.push({ side, staleProbe: true });
-          continue;
-        }
+      for (const side of sides) {
+        const startedAt = Number(state.roundStartedAtBySide?.[side]);
+        if (!Number.isFinite(startedAt) || startedAt <= 0) continue;
 
-        const currentGenerationId = String(state.generationIdBySide?.[side] || "");
-        const currentStartedAt = Number(state.roundStartedAtBySide?.[side]) || 0;
-        if (currentGenerationId !== snapshot.generationId || currentStartedAt !== snapshot.startedAt) {
-          results.push({ side, staleProbe: true });
-          continue;
-        }
-        if (!Number.isFinite(currentStartedAt) || currentStartedAt <= 0) continue;
-
-        const status = probes.get(side);
+        const status = statusBySide[side];
         const lastChangeAt = Number(status?.lastChangeAt) || 0;
         state.lastProgressAtBySide = { A: null, B: null, C: null, ...(state.lastProgressAtBySide || {}) };
         if (lastChangeAt > Number(state.lastProgressAtBySide[side] || 0)) {
@@ -117,12 +99,19 @@
         }
 
         if (!shouldDeclareStuck({
-          startedAt: currentStartedAt,
+          startedAt,
           lastProgressAt: state.lastProgressAtBySide[side],
           now,
           timeoutMs
         })) {
           results.push({ side, stuck: false });
+          continue;
+        }
+
+        // Re-check generation immediately before committing recovery. This is
+        // intentionally redundant with the queue-entry validation above.
+        if (String(state.generationIdBySide?.[side] || "") !== generationSnapshot[side]) {
+          results.push({ side, stale: true });
           continue;
         }
 
@@ -135,9 +124,6 @@
           continue;
         }
 
-        // Recovery mutates several coupled coordinator fields and starts a new
-        // generation.  Keep that commit serialized with RESPONSE/STOP/RESEND so
-        // a late response can never observe or overwrite a half-applied recovery.
         const recovered = await recoverStuckSide(side);
         results.push({ side, stuck: true, ...recovered });
       }
@@ -150,8 +136,7 @@
     version: 2,
     expectedSides: expectedWatchdogSides,
     pendingSendCountsAsModelProgress: false,
-    sharedCoordinatorQueue: true,
-    mutatesActiveSidesForFiltering: false,
-    providerProbeOutsideQueue: true
+    serializedWithCoordinator: true,
+    mutatesActiveSides: false
   });
 })();

@@ -23,20 +23,17 @@
   const originalAddListener = chrome.runtime.onMessage.addListener.bind(chrome.runtime.onMessage);
 
   /**
-   * Run one coordinator state mutation on the same FIFO promise chain used by
-   * control-plane messages.  This is intentionally exported so non-message
-   * event sources (notably chrome.alarms watchdog ticks) cannot mutate bridge
-   * state concurrently with START/STOP/RESEND/RESPONSE handling.
-   *
-   * Callers should keep slow read-only provider probes outside this queue and
-   * revalidate their snapshot inside the task before committing state.
+   * Serialize one coordinator state mutation on the same promise chain used by
+   * message-driven control-plane actions. Callers should keep slow external
+   * probes outside this critical section and revalidate coordinator state
+   * inside the task immediately before committing mutations.
    */
   function enqueueCoordinatorMutation(task) {
     if (typeof task !== "function") {
       return Promise.reject(new TypeError("Coordinator mutation task must be a function."));
     }
 
-    const run = queue.catch(() => {}).then(async () => {
+    const result = queue.catch(() => {}).then(async () => {
       active += 1;
       try {
         return await task();
@@ -45,10 +42,10 @@
       }
     });
 
-    // Keep the internal chain usable even when an individual caller fails;
-    // return the original promise so that caller still observes its exception.
-    queue = run.then(() => undefined, () => undefined);
-    return run;
+    // Keep the internal queue alive after a failed task without hiding that
+    // failure from the caller that owns `result`.
+    queue = result.then(() => undefined, () => undefined);
+    return result;
   }
 
   function runSerialized(listener, message, sender, sendResponse) {
@@ -68,10 +65,9 @@
       };
 
       try {
-        const result = listener(message, sender, wrappedSendResponse);
-        if (result !== true) release();
+        const listenerResult = listener(message, sender, wrappedSendResponse);
+        if (listenerResult !== true) release();
       } catch (error) {
-        released = true;
         reject(error);
       }
     }));
@@ -83,17 +79,22 @@
       if (!serializedTypes.has(String(message?.type || ""))) {
         return listener(message, sender, sendResponse);
       }
+      // The listener owns response/error reporting. This catch prevents an
+      // unhandled rejection if a synchronous listener failure escapes.
       runSerialized(listener, message, sender, sendResponse).catch(error => {
-        console.error("AI Bridge serialized coordinator listener failed", error);
-        try { sendResponse({ ok: false, error: error?.message || String(error) }); } catch (_) {}
+        console.error("AI Bridge coordinator mutation failed", error);
       });
       return true;
     });
   };
 
+  // Alarm-driven watchdog recovery and future non-message mutation sources use
+  // this exact queue. Do not create independent locks for coordinator state.
   globalThis.enqueueCoordinatorMutation = enqueueCoordinatorMutation;
+
   globalThis.__AI_BRIDGE_COORDINATOR_MUTEX__ = Object.freeze({
     version: 2,
+    enqueue: enqueueCoordinatorMutation,
     isSerializedType(type) { return serializedTypes.has(String(type || "")); },
     enqueue: enqueueCoordinatorMutation,
     get active() { return active; }
