@@ -2,9 +2,13 @@
 //
 // Install the mutation-serialization prelude before background.js registers its
 // listeners. This lets the coordinator's existing anonymous message listener
-// run behind one queue without rewriting the large core file.
+// and alarm-driven watchdog recovery share one queue without rewriting the
+// large coordinator core.
 importScripts("coordinator-mutex-prelude.js");
-if (!globalThis.__AI_BRIDGE_COORDINATOR_MUTEX__) {
+if (
+  globalThis.__AI_BRIDGE_COORDINATOR_MUTEX__?.version !== 2 ||
+  typeof globalThis.enqueueCoordinatorMutation !== "function"
+) {
   throw new Error("AI Bridge coordinator mutex failed to initialize.");
 }
 
@@ -34,10 +38,15 @@ if (globalThis.__AI_BRIDGE_GENERATION_SECURITY__?.failClosedWhenUnarmed !== true
 // Human-input detection is a control-plane concern.
 importScripts("human-input-runtime-hardening.js");
 
-// Watchdog recovery must examine only agents that are expected to be generating
-// in the current mode, and `pendingSend` alone must not count as model progress.
+// Watchdog recovery must examine only agents that are expected to be generating,
+// must not treat `pendingSend` as model progress, and must serialize recovery
+// mutations through the same coordinator queue as model responses.
 importScripts("watchdog-runtime-hardening.js");
-if (globalThis.__AI_BRIDGE_WATCHDOG_SECURITY__?.pendingSendCountsAsModelProgress !== false) {
+if (
+  globalThis.__AI_BRIDGE_WATCHDOG_SECURITY__?.pendingSendCountsAsModelProgress !== false ||
+  globalThis.__AI_BRIDGE_WATCHDOG_SECURITY__?.serializedWithCoordinator !== true ||
+  globalThis.__AI_BRIDGE_WATCHDOG_SECURITY__?.mutatesActiveSides !== false
+) {
   throw new Error("AI Bridge watchdog hardening failed to initialize.");
 }
 
