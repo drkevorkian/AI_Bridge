@@ -1,7 +1,7 @@
 (() => {
   "use strict";
 
-  const FLAG = "__AI_BRIDGE_COORDINATOR_MUTEX_PRELUDE_V3__";
+  const FLAG = "__AI_BRIDGE_COORDINATOR_MUTEX_PRELUDE_V4__";
   if (globalThis[FLAG]) return;
   globalThis[FLAG] = true;
 
@@ -23,6 +23,9 @@
   let queue = Promise.resolve();
   let active = 0;
   const originalAddListener = chrome.runtime.onMessage.addListener.bind(chrome.runtime.onMessage);
+  const originalTabRemovedAddListener = chrome.tabs?.onRemoved?.addListener
+    ? chrome.tabs.onRemoved.addListener.bind(chrome.tabs.onRemoved)
+    : null;
 
   /**
    * Serialize one coordinator state mutation on the same promise chain used by
@@ -90,12 +93,26 @@
     });
   };
 
+  // background.js installs an anonymous chrome.tabs.onRemoved listener after
+  // this prelude runs. Wrap registration itself so a tab-close recovery cannot
+  // race an in-flight response, resend, manual relay, or Start/Stop mutation.
+  if (originalTabRemovedAddListener) {
+    chrome.tabs.onRemoved.addListener = function hardenedTabRemovedAddListener(listener) {
+      if (typeof listener !== "function") return originalTabRemovedAddListener(listener);
+      return originalTabRemovedAddListener((tabId, removeInfo) => {
+        enqueueCoordinatorMutation(() => listener(tabId, removeInfo)).catch(error => {
+          console.error("AI Bridge tab-removal mutation failed", error);
+        });
+      });
+    };
+  }
+
   // Alarm-, tab-, and future non-message mutation sources use this exact queue.
   // Do not create independent locks for coordinator state.
   globalThis.enqueueCoordinatorMutation = enqueueCoordinatorMutation;
 
   globalThis.__AI_BRIDGE_COORDINATOR_MUTEX__ = Object.freeze({
-    version: 3,
+    version: 4,
     enqueue: enqueueCoordinatorMutation,
     isSerializedType(type) { return serializedTypes.has(String(type || "")); },
     get active() { return active; }
