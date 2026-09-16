@@ -1,7 +1,7 @@
 (() => {
   "use strict";
 
-  const FLAG = "__AI_BRIDGE_COORDINATOR_MUTEX_PRELUDE_V2__";
+  const FLAG = "__AI_BRIDGE_COORDINATOR_MUTEX_PRELUDE_V3__";
   if (globalThis[FLAG]) return;
   globalThis[FLAG] = true;
 
@@ -13,6 +13,7 @@
     "AI_BRIDGE_RESEND",
     "AI_BRIDGE_FORCE_RELAY",
     "AI_BRIDGE_INTERJECT",
+    "AI_BRIDGE_SET_TEAM_RULES",
     "AI_BRIDGE_HUMAN_REOPEN",
     "AI_BRIDGE_HUMAN_SUPPRESS",
     "AI_BRIDGE_HUMAN_REPLY",
@@ -89,15 +90,14 @@
     });
   };
 
-  // Alarm-driven watchdog recovery and future non-message mutation sources use
-  // this exact queue. Do not create independent locks for coordinator state.
+  // Alarm-, tab-, and future non-message mutation sources use this exact queue.
+  // Do not create independent locks for coordinator state.
   globalThis.enqueueCoordinatorMutation = enqueueCoordinatorMutation;
 
   globalThis.__AI_BRIDGE_COORDINATOR_MUTEX__ = Object.freeze({
-    version: 2,
+    version: 3,
     enqueue: enqueueCoordinatorMutation,
     isSerializedType(type) { return serializedTypes.has(String(type || "")); },
-    enqueue: enqueueCoordinatorMutation,
     get active() { return active; }
   });
 })();
