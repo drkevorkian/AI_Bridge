@@ -1,12 +1,12 @@
 // AI Bridge service-worker bootstrap.
 //
 // Install the mutation-serialization prelude before background.js registers its
-// listeners. This lets the coordinator's existing anonymous message listener
-// and alarm-driven watchdog recovery share one queue without rewriting the
-// large coordinator core.
+// listeners. This lets the coordinator's existing anonymous message listener,
+// tab-close recovery, and alarm-driven watchdog recovery share one queue without
+// rewriting the large coordinator core.
 importScripts("coordinator-mutex-prelude.js");
 if (
-  globalThis.__AI_BRIDGE_COORDINATOR_MUTEX__?.version !== 2 ||
+  globalThis.__AI_BRIDGE_COORDINATOR_MUTEX__?.version !== 4 ||
   typeof globalThis.enqueueCoordinatorMutation !== "function"
 ) {
   throw new Error("AI Bridge coordinator mutex failed to initialize.");
@@ -27,6 +27,13 @@ if (globalThis.__AI_BRIDGE_RESEND_HARDENING_V1__?.stopBeforeReplacement !== true
 importScripts("artifact-fetch-runtime-hardening.js");
 if (globalThis.__AI_BRIDGE_ARTIFACT_FETCH_SECURITY__?.credentials !== "omit") {
   throw new Error("AI Bridge artifact security hardening failed to initialize.");
+}
+
+// Manual relay is recovery-only and may commit a provider response directly.
+// Refuse incomplete/streaming captures before that path can mutate state.
+importScripts("manual-relay-runtime-hardening.js");
+if (globalThis.__AI_BRIDGE_MANUAL_RELAY_HARDENING_V1__?.rejectsStreamingCapture !== true) {
+  throw new Error("AI Bridge manual-relay hardening failed to initialize.");
 }
 
 // Fail closed on response generations after the core functions exist.
