@@ -5,6 +5,10 @@ import { fileURLToPath } from "node:url";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const ignoredDirectories = new Set([".git", "node_modules", ".venv", "venv", "dist", "build"]);
+// Browser integration tests require a real Chromium runtime and are executed by
+// their dedicated CI job. Keep them in syntax coverage, but never auto-run them
+// inside the portable Node regression matrix.
+const integrationTests = new Set(["chromium-mv3-smoke.mjs"]);
 
 function walk(directory) {
   const files = [];
@@ -43,6 +47,7 @@ const regressionTests = allFiles
   .filter(file => path.dirname(file) === path.join(root, "tests"))
   .filter(file => file.endsWith(".mjs"))
   .filter(file => path.basename(file) !== "run-all.mjs")
+  .filter(file => !integrationTests.has(path.basename(file)))
   .sort((a, b) => a.localeCompare(b));
 
 for (const test of regressionTests) {
