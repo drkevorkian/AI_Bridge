@@ -11,11 +11,20 @@ let registered = null;
 let nextTimer = 1;
 const cleared = [];
 const nativeIntervals = [];
+const outbound = [];
 const context = {
   window: null,
   clearInterval(handle) { cleared.push(handle); },
+  Promise,
+  Map,
+  String,
+  Number,
   chrome: {
     runtime: {
+      async sendMessage(message) {
+        outbound.push(message);
+        return { ok: true };
+      },
       onMessage: {
         addListener(listener) { registered = listener; }
       }
@@ -31,6 +40,8 @@ vm.createContext(context);
 vm.runInContext(source, context, { filename: "content-runtime-prelude.js" });
 
 assert.equal(context.__AI_BRIDGE_CONTENT_RUNTIME_PRELUDE__.version, "1.16.4");
+assert.equal(context.__AI_BRIDGE_CONTENT_RUNTIME_PRELUDE__.sendIdempotency, true);
+assert.equal(context.__AI_BRIDGE_CONTENT_RUNTIME_PRELUDE__.promptEchoFilter, true);
 
 context.chrome.runtime.onMessage.addListener((_message, _sender, sendResponse) => {
   sendResponse({ ok: true, ready: true, version: "1.14.0" });
