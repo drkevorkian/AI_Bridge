@@ -7,18 +7,36 @@ import { fileURLToPath } from "node:url";
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const source = fs.readFileSync(path.join(root, "dashboard-release.js"), "utf8");
 
+function extractFunction(src, name) {
+  const start = src.indexOf(`function ${name}(`);
+  assert.ok(start >= 0, `${name} missing`);
+  const sigEnd = src.indexOf(")", start);
+  let depth = 0;
+  let i = src.indexOf("{", sigEnd);
+  for (; i < src.length; i += 1) {
+    if (src[i] === "{") depth += 1;
+    else if (src[i] === "}") {
+      depth -= 1;
+      if (depth === 0) return src.slice(start, i + 1);
+    }
+  }
+  throw new Error(`${name} unclosed`);
+}
+
 assert.doesNotMatch(source, /innerHTML|eval\s*\(|new Function/);
 assert.match(source, /SETUP_NOTICE_POLL_LIMIT_MS = 3000/);
 assert.match(source, /SETUP_NOTICE_POLL_MS = 50/);
+assert.match(source, /LAYOUTS\.add\("focus"\)/);
+assert.match(source, /layoutFocusBtn/);
+assert.match(source, /Focus — clean tabbed workspace/);
+assert.match(source, /legacy Web-client implicit OAuth flow is disabled/i);
+assert.match(source, /Chrome Extension OAuth client declared in manifest\.oauth2/i);
+assert.match(source, /Chrome Sync Push\/Pull works without Google Drive/i);
 
 let now = 10_000;
 const timers = [];
-let linkClick = null;
 let errorRemoved = false;
-
 const elements = {
-  versionBadge: { textContent: "v-old" },
-  installedVersionPill: { textContent: "v-old" },
   googleClientId: { value: "" },
   cloudNotice: {
     textContent: "",
@@ -26,11 +44,6 @@ const elements = {
       remove(name) {
         if (name === "error") errorRemoved = true;
       }
-    }
-  },
-  cloudConnect: {
-    addEventListener(type, fn) {
-      if (type === "click") linkClick = fn;
     }
   }
 };
@@ -42,46 +55,37 @@ class FakeDate extends Date {
 const sandbox = {
   String,
   Date: FakeDate,
+  GENERIC_GOOGLE_SETUP_NOTICE: "Google login is not configured yet.",
+  GOOGLE_SETUP_NOTICE: "Google Drive login is optional. The legacy Web-client implicit OAuth flow is disabled. Packaged builds must use a Chrome Extension OAuth client declared in manifest.oauth2; Chrome Sync Push/Pull works without Google Drive.",
+  SETUP_NOTICE_POLL_MS: 50,
   document: {
     getElementById(id) { return elements[id] || null; }
-  },
-  chrome: {
-    runtime: {
-      getManifest() { return { version: "1.16.3" }; }
-    }
   },
   setTimeout(fn, delay) {
     timers.push({ fn, delay });
     return timers.length;
   }
 };
+vm.createContext(sandbox);
+vm.runInContext(`${extractFunction(source, "refineGoogleSetupNotice")}\nthis.refineGoogleSetupNotice = refineGoogleSetupNotice;`, sandbox);
 
-vm.runInNewContext(source, sandbox);
-assert.equal(elements.versionBadge.textContent, "v1.16.3");
-assert.equal(elements.installedVersionPill.textContent, "v1.16.3");
-assert.equal(typeof linkClick, "function");
-
-// Click starts a bounded poll. The first callback intentionally happens before
-// dashboard.js has received the async setupRequired response.
-linkClick();
-assert.equal(timers.length, 1);
-let timer = timers.shift();
-assert.equal(timer.delay, 0);
-timer.fn();
+// Before the async background result appears, refinement waits with a bounded
+// retry rather than writing stale setup guidance.
+sandbox.refineGoogleSetupNotice(now + 3000);
 assert.equal(elements.cloudNotice.textContent, "");
-assert.equal(timers.length, 1, "helper should retry while the async response is pending");
+assert.equal(timers.length, 1);
 assert.equal(timers[0].delay, 50);
 
-// The background response arrives after that first poll and dashboard.js writes
-// its legacy generic notice. The next bounded poll must refine it.
+// Once dashboard.js reports that Google is unconfigured, the release helper
+// replaces the generic message with the secure packaged-extension guidance.
 elements.cloudNotice.textContent = "Google login is not configured yet.";
 now += 50;
-timer = timers.shift();
+const timer = timers.shift();
 timer.fn();
-assert.match(elements.cloudNotice.textContent, /Google Drive login is optional/);
-assert.match(elements.cloudNotice.textContent, /Web OAuth client/);
-assert.match(elements.cloudNotice.textContent, /Chrome Sync Push\/Pull works without Google Drive/);
+assert.match(elements.cloudNotice.textContent, /implicit OAuth flow is disabled/i);
+assert.match(elements.cloudNotice.textContent, /Chrome Extension OAuth client/i);
+assert.match(elements.cloudNotice.textContent, /Chrome Sync Push\/Pull works without Google Drive/i);
 assert.equal(errorRemoved, true);
-assert.equal(timers.length, 0, "polling must stop immediately once the notice is refined");
+assert.equal(timers.length, 0);
 
-console.log("v1.16.3 dashboard release/setup notice regression ok");
+console.log("v1.17 dashboard release/setup notice regression ok");
