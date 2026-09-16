@@ -21,7 +21,9 @@ assert.ok(size("background.js") > 150000, "background.js appears truncated");
 assert.ok(size("dashboard.js") > 60000, "dashboard.js appears truncated");
 assert.ok(size("content-completion-guard.js") > 8000, "content completion guard appears truncated");
 assert.ok(size("human-input-runtime-hardening.js") > 4000, "human-input hardening appears truncated");
-assert.ok(size("content-runtime-prelude.js") > 1000, "content runtime prelude appears truncated");
+assert.ok(size("content-runtime-prelude.js") > 4000, "content runtime prelude appears truncated");
+assert.ok(size("content-artifact-security-prelude.js") > 1000, "content artifact security prelude appears truncated");
+assert.ok(size("manual-relay-runtime-hardening.js") > 500, "manual relay hardening appears truncated");
 
 const content = read("content.js");
 for (const marker of [
@@ -48,12 +50,22 @@ for (const marker of [
 }
 
 const manifest = JSON.parse(read("manifest.json"));
-assert.equal(manifest.version, "1.16.4", "runtime hardening release must remain versioned as 1.16.4");
+assert.equal(manifest.version, "1.17.0", "debug/security release must be versioned as 1.17.0");
+assert.ok(Number(manifest.minimum_chrome_version) >= 106, "minimum Chrome must cover Promise-based Identity APIs");
+assert.equal(
+  manifest.content_security_policy?.extension_pages,
+  "script-src 'self'; object-src 'none'; base-uri 'none'; frame-ancestors 'none';",
+  "extension pages must retain the explicit fail-closed CSP"
+);
+assert.ok(!manifest.host_permissions.includes("https://x.ai/*"), "x.ai host permission must stay removed");
+assert.ok(!manifest.host_permissions.includes("https://api.x.ai/*"), "api.x.ai host permission must stay removed");
+
 const scripts = manifest.content_scripts?.[0]?.js || [];
 assert.deepEqual(
   scripts,
   [
     "content-runtime-prelude.js",
+    "content-artifact-security-prelude.js",
     "content-completion-guard.js",
     "content-response-delivery-hardening.js",
     "content.js"
@@ -65,13 +77,19 @@ for (const script of scripts) {
 }
 
 const reconnect = read("reconnect-runtime-hardening.js");
-assert.match(reconnect, /EXPECTED_CONTENT_VERSION\s*=\s*"1\.16\.4"/, "reconnect runtime version drifted from manifest");
+assert.match(reconnect, /EXPECTED_CONTENT_VERSION\s*=\s*"1\.17\.0"/, "reconnect runtime version drifted from manifest");
 assert.match(reconnect, /recovery:\s*"clean-reload"/, "reconnect must use a clean isolated-world reload strategy");
 assert.doesNotMatch(reconnect, /chrome\.scripting\.executeScript/, "reconnect must not stack content wrappers through live reinjection");
 
 const prelude = read("content-runtime-prelude.js");
-assert.match(prelude, /RUNTIME_VERSION\s*=\s*"1\.16\.4"/);
+assert.match(prelude, /RUNTIME_VERSION\s*=\s*"1\.17\.0"/);
 assert.match(prelude, /__AI_BRIDGE_MONITOR_TIMER__/);
+assert.match(prelude, /waitForProviderSendAcknowledgement/);
+assert.match(prelude, /providerSendAcknowledgement:\s*true/);
+
+const contentArtifactSecurity = read("content-artifact-security-prelude.js");
+assert.match(contentArtifactSecurity, /defaultCredentials:\s*"omit"/);
+assert.match(contentArtifactSecurity, /current-chatgpt-interpreter-download-only/);
 
 const wrapper = read("background-wrapper.js");
 assert.match(
@@ -81,6 +99,7 @@ assert.match(
 );
 for (const requiredModule of [
   "artifact-fetch-runtime-hardening.js",
+  "manual-relay-runtime-hardening.js",
   "coordinator-generation-hardening.js",
   "human-input-runtime-hardening.js",
   "watchdog-runtime-hardening.js",
