@@ -396,7 +396,13 @@ h2 { margin: 4px 0 0; font-size: 20px; }
 .fresh-chat-row { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-top: 9px; }
 .check-line { display: inline-flex; align-items: center; gap: 7px; margin: 0; color: var(--text-soft); font-size: 11px; cursor: pointer; }
 .check-line input { width: auto; margin: 0; accent-color: var(--a); }
-.agent-actions { display: flex; align-items: center; gap: 6px; }
+.agent-actions { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+.manual-relay-panel { margin-top: 12px; padding-top: 10px; border-top: 1px solid var(--line); }
+.manual-relay-panel .field-help { margin: 0 0 8px; }
+.manual-relay-row { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 10px; }
+.manual-relay-label { font-size: 11px; font-weight: 800; letter-spacing: .04em; text-transform: uppercase; color: var(--muted); }
+.manual-relay-from, .manual-relay-to { display: inline-flex; flex-wrap: wrap; align-items: center; gap: 6px; }
+.manual-relay-row #forceRelayBtn { margin-left: auto; }
 .section-heading, .history-heading { display: flex; justify-content: space-between; gap: 10px; align-items: center; font-size: 12px; font-weight: 800; margin-bottom: 9px; }
 .status-text { white-space: pre-wrap; color: var(--text-soft); background: var(--panel-3); border: 1px solid var(--line); border-radius: 9px; padding: 10px; min-height: 48px; font-size: 12px; line-height: 1.4; }
 .control-grid.four { display: grid; grid-template-columns: repeat(4, 1fr); gap: 7px; margin-top: 9px; }

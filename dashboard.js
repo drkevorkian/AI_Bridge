@@ -1016,7 +1016,14 @@ function updateControls(s) {
     $(`newChat${side}`).disabled = Boolean(s.sessionActive) || !selectedTab(side);
     const batchDone = ["compete", "parallel", "review"].includes(s.workMode) && Array.isArray(s.phaseCompletedSides) && s.phaseCompletedSides.includes(side);
     $(`resend${side}`).disabled = !s.sessionActive || !s.running || s.awaitingHuman || !s.lastSentBySide?.[side] || batchDone;
+    $(`useLast${side}`).disabled = !s.sessionActive || !selectedTab(side);
   }
+  const forceReady = Boolean(s.sessionActive) && SIDES.some(side => selectedTab(side));
+  if ($("forceRelayBtn")) $("forceRelayBtn").disabled = !forceReady;
+  SIDES.forEach(side => {
+    if ($(`forceFrom${side}`)) $(`forceFrom${side}`).disabled = !s.sessionActive;
+    if ($(`forceTo${side}`)) $(`forceTo${side}`).disabled = !s.sessionActive;
+  });
   $("jobHistory").querySelectorAll(".history-use").forEach(button => { button.disabled = Boolean(s.sessionActive); });
   $("commandHistory").querySelectorAll(".history-use").forEach(button => { button.disabled = Boolean(s.sessionActive); });
   $("rulesHistory")?.querySelectorAll(".history-use").forEach(button => { button.disabled = false; });
@@ -1343,6 +1350,65 @@ async function resend(side) {
   }
 }
 for (const side of SIDES) $(`resend${side}`).addEventListener("click", () => resend(side));
+
+function selectedForceSource() {
+  return SIDES.find(side => $(`forceFrom${side}`)?.classList.contains("active")) || "A";
+}
+
+function selectedForceTargets() {
+  return SIDES.filter(side => $(`forceTo${side}`)?.checked);
+}
+
+function setForceSource(side) {
+  const source = SIDES.includes(side) ? side : "A";
+  for (const item of SIDES) {
+    const button = $(`forceFrom${item}`);
+    if (!button) continue;
+    const active = item === source;
+    button.classList.toggle("active", active);
+    button.setAttribute("aria-pressed", active ? "true" : "false");
+  }
+  for (const item of SIDES) {
+    const box = $(`forceTo${item}`);
+    if (box) box.checked = item !== source;
+  }
+}
+
+for (const side of SIDES) {
+  $(`forceFrom${side}`)?.addEventListener("click", () => setForceSource(side));
+  $(`useLast${side}`)?.addEventListener("click", () => {
+    setForceSource(side);
+    $("forceRelayBtn")?.scrollIntoView({ behavior: "smooth", block: "center" });
+  });
+}
+
+$("forceRelayBtn")?.addEventListener("click", async () => {
+  const button = $("forceRelayBtn");
+  const source = selectedForceSource();
+  const targets = selectedForceTargets();
+  if (!targets.length) {
+    $("status").textContent = "Choose at least one destination AI.";
+    return;
+  }
+  button.disabled = true;
+  const old = button.textContent;
+  button.textContent = "Reading…";
+  try {
+    const res = await chrome.runtime.sendMessage({ type: "AI_BRIDGE_FORCE_RELAY", source, targets });
+    if (!res?.ok) throw new Error(res?.error || "Manual relay failed");
+    const sent = (res.targets || []).map(side => `AI ${side}`).join(", ");
+    const failed = Array.isArray(res.failed) && res.failed.length
+      ? ` Failed: ${res.failed.map(item => `AI ${item.side}`).join(", ")}.`
+      : "";
+    const busy = res.generating ? " Source tab still looked busy; captured anyway." : "";
+    $("status").textContent = `Re-read AI ${res.source} and sent to ${sent}.${failed}${busy}`;
+  } catch (err) {
+    $("status").textContent = `Manual relay failed: ${err.message}`;
+  } finally {
+    button.textContent = old;
+    await refreshState();
+  }
+});
 
 $("sendHumanModal").addEventListener("click", async () => {
   const text = $("humanModalResponse").value.trim();
