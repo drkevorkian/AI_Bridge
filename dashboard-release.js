@@ -2,7 +2,7 @@
   "use strict";
 
   const GENERIC_GOOGLE_SETUP_NOTICE = "Google login is not configured yet.";
-  const GOOGLE_SETUP_NOTICE = "Google Drive login is optional. For this unpacked build, create a Google Cloud Web OAuth client using the Extension ID and Authorized redirect URI shown below, paste the client ID, Save, then Link. Chrome Sync Push/Pull works without Google Drive.";
+  const GOOGLE_SETUP_NOTICE = "Google Drive login is optional. The legacy Web-client implicit OAuth flow is disabled. Packaged builds must use a Chrome Extension OAuth client declared in manifest.oauth2; Chrome Sync Push/Pull works without Google Drive.";
   const SETUP_NOTICE_POLL_MS = 50;
   const SETUP_NOTICE_POLL_LIMIT_MS = 3000;
   const FOCUS_TAB_KEY = "aiBridgeFocusTab";
@@ -122,7 +122,7 @@
       button.dataset.focusTab = value;
       button.addEventListener("click", () => setFocusTab(value, { focus: false }));
       button.addEventListener("keydown", event => {
-        if (!['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(event.key)) return;
+        if (!["ArrowLeft", "ArrowRight", "Home", "End"].includes(event.key)) return;
         event.preventDefault();
         const current = tabSpecs.findIndex(([tab]) => tab === document.documentElement.dataset.focusTab);
         let next = current < 0 ? 0 : current;
