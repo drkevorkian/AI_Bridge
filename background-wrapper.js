@@ -15,6 +15,13 @@ if (
 // Keep the existing background.js runtime intact and load established helpers.
 importScripts("background.js", "completion-runtime-hardening.js", "oauth-runtime-hardening.js", "power.js");
 
+// Focus is a third dashboard layout. Extend the existing cloud-settings layout
+// allowlist without weakening the sanitizer that reconstructs synced settings.
+importScripts("focus-runtime-hardening.js");
+if (globalThis.__AI_BRIDGE_FOCUS_RUNTIME_V1__?.cloudLayoutAllowed !== true) {
+  throw new Error("AI Bridge Focus layout hardening failed to initialize.");
+}
+
 // Never submit a replacement prompt while the provider still reports that the
 // previous generation is active. This protects RESEND, recovery, and future
 // send call sites with one fail-closed overlap invariant.
