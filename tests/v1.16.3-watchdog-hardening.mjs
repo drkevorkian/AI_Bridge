@@ -10,11 +10,15 @@ const wrapper = fs.readFileSync(path.join(root, "background-wrapper.js"), "utf8"
 
 assert.match(wrapper, /importScripts\("watchdog-runtime-hardening\.js"\)/);
 assert.match(wrapper, /pendingSendCountsAsModelProgress\s*!==\s*false/);
+assert.doesNotMatch(source, /state\.activeSides\s*=/, "V2 watchdog must not swap configured activeSides");
+assert.match(source, /enqueueCoordinatorMutation/, "V2 watchdog must use the coordinator mutation queue");
 
 const context = vm.createContext({
   globalThis: null,
   Date,
+  Map,
   Set,
+  Promise,
   state: {
     sessionActive: true,
     running: true,
@@ -22,32 +26,51 @@ const context = vm.createContext({
     workMode: "relay",
     currentSide: "B",
     activeSides: ["A", "B", "C"],
-    phasePendingSides: []
+    phasePendingSides: [],
+    generationIdBySide: { A: "ga", B: "gb", C: "gc" },
+    roundStartedAtBySide: { A: 100, B: 100, C: 100 },
+    lastProgressAtBySide: { A: 0, B: 0, C: 0 },
+    stuckTimeoutMinutes: 30,
+    checkpointPending: false
   },
   SIDES: ["A", "B", "C"],
   isBatchWorkMode() { return ["compete", "parallel", "review"].includes(context.state.workMode); },
   async queryGenerationStatus() { return { ok: true, generating: true, pendingSend: true, lastChangeAt: 123 }; },
-  async runWatchdogTick() { return { observedSides: [...context.state.activeSides], status: await context.queryGenerationStatus(context.state.activeSides[0]) }; }
+  enqueueCoordinatorMutation(task) { return Promise.resolve().then(task); },
+  clampStuckTimeoutMinutes() { return 30; },
+  shouldDeclareStuck() { return false; },
+  generationMatches(expected, incoming) { return Boolean(expected && incoming && expected === incoming); },
+  async skipStalledCheckpoint() { return { skipped: true }; },
+  async recoverStuckSide() { return { recovered: true }; },
+  async saveState() {}
 });
 context.globalThis = context;
 vm.runInContext(source, context, { filename: "watchdog-runtime-hardening.js" });
 
+// pendingSend remains diagnostic state but may not masquerade as model progress.
+const pendingStatus = await context.queryGenerationStatus("B");
+assert.equal(pendingStatus.pendingSend, true);
+assert.equal(pendingStatus.generating, false, "pendingSend alone must not count as model-generation progress");
+assert.equal(pendingStatus.sending, true);
+
 let result = await context.runWatchdogTick(500);
-assert.deepEqual([...result.observedSides], ["B"], "sequential watchdog must inspect currentSide only");
-assert.equal(result.status.pendingSend, true);
-assert.equal(result.status.generating, false, "pendingSend alone must not count as model-generation progress");
-assert.equal(result.status.sending, true);
-assert.deepEqual([...context.state.activeSides], ["A", "B", "C"], "configured active team must be restored after watchdog tick");
+assert.deepEqual(result.results.map(item => item.side), ["B"], "sequential watchdog must inspect currentSide only");
+assert.deepEqual([...context.state.activeSides], ["A", "B", "C"], "watchdog must never rewrite configured team membership");
 
 context.state.workMode = "parallel";
 context.state.currentSide = null;
 context.state.phasePendingSides = ["A", "C", "A"];
 result = await context.runWatchdogTick(600);
-assert.deepEqual([...result.observedSides], ["A", "C"], "batch watchdog must inspect pending phase sides only");
+assert.deepEqual(result.results.map(item => item.side), ["A", "C"], "batch watchdog must inspect pending phase sides only");
 assert.deepEqual([...context.state.activeSides], ["A", "B", "C"]);
 
 context.state.awaitingHuman = true;
 result = await context.runWatchdogTick(700);
 assert.equal(result.checked, false, "watchdog must stay idle while human input is pending");
 
-console.log("v1.16.3 watchdog hardening regression checks passed.");
+assert.equal(context.__AI_BRIDGE_WATCHDOG_SECURITY__.version, 2);
+assert.equal(context.__AI_BRIDGE_WATCHDOG_SECURITY__.sharedCoordinatorQueue, true);
+assert.equal(context.__AI_BRIDGE_WATCHDOG_SECURITY__.mutatesActiveSidesForFiltering, false);
+assert.equal(context.__AI_BRIDGE_WATCHDOG_SECURITY__.providerProbeOutsideQueue, true);
+
+console.log("v1.16.4 watchdog hardening regression checks passed.");
