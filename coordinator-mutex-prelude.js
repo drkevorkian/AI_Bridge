@@ -57,8 +57,13 @@
         resolve();
       };
       const wrappedSendResponse = value => {
-        try { sendResponse(value); } finally { release(); }
+        try {
+          sendResponse(value);
+        } finally {
+          release();
+        }
       };
+
       try {
         const listenerResult = listener(message, sender, wrappedSendResponse);
         if (listenerResult !== true) release();
@@ -91,6 +96,7 @@
     version: 2,
     enqueue: enqueueCoordinatorMutation,
     isSerializedType(type) { return serializedTypes.has(String(type || "")); },
+    enqueue: enqueueCoordinatorMutation,
     get active() { return active; }
   });
 })();

@@ -17,6 +17,7 @@ const probeCalls = [];
 const context = vm.createContext({
   globalThis: null,
   Date,
+  Map,
   Set,
   Object,
   Promise,
