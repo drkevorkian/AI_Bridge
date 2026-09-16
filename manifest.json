@@ -31,7 +31,8 @@
     "https://www.googleapis.com/*",
     "https://api.github.com/*",
     "https://raw.githubusercontent.com/*",
-    "https://codeload.github.com/*"
+    "https://codeload.github.com/*",
+    "https://oauth2.googleapis.com/*"
   ],
   "background": {
     "service_worker": "background-wrapper.js"
@@ -64,5 +65,8 @@
   ],
   "icons": {
     "128": "icon128.png"
+  },
+  "content_security_policy": {
+    "extension_pages": "script-src 'self'; object-src 'none'; base-uri 'self'; frame-ancestors 'none'"
   }
 }
