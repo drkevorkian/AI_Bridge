@@ -39,6 +39,8 @@ jobs:
     name: Chromium MV3 integration
     runs-on: ubuntu-latest
     timeout-minutes: 10
+    env:
+      CFT_VERSION: "153.0.8010.36"
     steps:
       - name: Checkout repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -47,12 +49,23 @@ jobs:
         with:
           node-version: "22"
           check-latest: true
-      - name: Verify browser runtime
+      - name: Install pinned Chrome for Testing
+        shell: bash
         run: |
-          google-chrome --version
+          set -euo pipefail
+          CFT_ROOT="$RUNNER_TEMP/chrome-for-testing"
+          mkdir -p "$CFT_ROOT"
+          curl --fail --location --proto '=https' --tlsv1.2 \
+            --output "$CFT_ROOT/chrome-linux64.zip" \
+            "https://storage.googleapis.com/chrome-for-testing-public/${CFT_VERSION}/linux64/chrome-linux64.zip"
+          unzip -q "$CFT_ROOT/chrome-linux64.zip" -d "$CFT_ROOT"
+          chmod +x "$CFT_ROOT/chrome-linux64/chrome"
+          echo "CHROME_BIN=$CFT_ROOT/chrome-linux64/chrome" >> "$GITHUB_ENV"
+      - name: Verify browser runtime
+        shell: bash
+        run: |
+          "$CHROME_BIN" --version
           openssl version
           xvfb-run --help >/dev/null
       - name: Load unpacked MV3 extension and exercise provider messaging
-        env:
-          CHROME_BIN: /usr/bin/google-chrome
         run: xvfb-run -a node tests/chromium-mv3-smoke.mjs
