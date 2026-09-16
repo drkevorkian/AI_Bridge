@@ -51,7 +51,8 @@ jobs:
         run: |
           google-chrome --version
           openssl version
+          xvfb-run --help >/dev/null
       - name: Load unpacked MV3 extension and exercise provider messaging
         env:
           CHROME_BIN: /usr/bin/google-chrome
-        run: node tests/chromium-mv3-smoke.mjs
+        run: xvfb-run -a node tests/chromium-mv3-smoke.mjs
