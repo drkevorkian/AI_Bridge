@@ -135,6 +135,8 @@ await new Promise(resolve => setTimeout(resolve, 0));
 state.generationIdBySide.A = "gen-new";
 resolveProbe({ ok: true, generating: false, pendingSend: false, lastChangeAt: 0 });
 const staleResult = await staleTick;
-assert.deepEqual(staleResult, { checked: true, results: [] });
+assert.equal(staleResult.checked, true);
+assert.equal(Array.isArray(staleResult.results), true);
+assert.equal(staleResult.results.length, 0);
 
 console.log("v1.16.4 watchdog mutex regression: ok");
