@@ -26,8 +26,6 @@
     "https://assets.grokusercontent.com/*",
     "https://*.googleusercontent.com/*",
     "https://*.anthropic.com/*",
-    "https://x.ai/*",
-    "https://api.x.ai/*",
     "https://www.googleapis.com/*",
     "https://api.github.com/*",
     "https://raw.githubusercontent.com/*",

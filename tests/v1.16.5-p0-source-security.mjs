@@ -7,6 +7,9 @@ const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const manifest = JSON.parse(fs.readFileSync(path.join(root, "manifest.json"), "utf8"));
 const bootstrap = fs.readFileSync(path.join(root, "dashboard-bootstrap.js"), "utf8");
 const background = fs.readFileSync(path.join(root, "background.js"), "utf8");
+const content = fs.readFileSync(path.join(root, "content.js"), "utf8");
+const dashboardJs = fs.readFileSync(path.join(root, "dashboard.js"), "utf8");
+const html = fs.readFileSync(path.join(root, "dashboard.html"), "utf8");
 
 assert.equal(Boolean(manifest.content_security_policy?.extension_pages), true);
 assert.match(manifest.content_security_policy.extension_pages, /script-src 'self'/);
@@ -16,7 +19,25 @@ assert.match(manifest.content_security_policy.extension_pages, /frame-ancestors 
 assert.ok(manifest.host_permissions.includes("https://oauth2.googleapis.com/*"));
 assert.equal(manifest.host_permissions.includes("https://*.microsoft.com/*"), false);
 assert.equal(manifest.host_permissions.includes("https://*.x.ai/*"), false);
+assert.equal(manifest.host_permissions.includes("https://x.ai/*"), false);
+assert.equal(manifest.host_permissions.includes("https://api.x.ai/*"), false);
 assert.match(bootstrap, /"focus"/);
 assert.match(background, /ALLOWED_CLOUD_LAYOUTS/);
+assert.match(background, /"focus"/);
+assert.match(background, /response_type: "code"/);
+assert.match(background, /code_challenge_method/);
+assert.match(background, /createOauthCodeVerifier/);
+assert.doesNotMatch(background, /response_type: "token"/);
+assert.match(background, /credentials: "omit"/);
+assert.match(background, /msg\.observed !== true/);
+assert.match(content, /observed: true/);
+assert.match(content, /rankedVisible/);
+assert.match(content, /isAuxiliaryClone/);
+assert.match(dashboardJs, /"focus"/);
+assert.match(dashboardJs, /applyFocusTab/);
+assert.match(html, /id="layoutFocusBtn"/);
+assert.match(html, /id="focusNav"/);
+assert.match(html, /data-focus-tab="transcript"/);
+assert.equal(fs.existsSync(path.join(root, "dashboard-focus.css")), true);
 
-console.log("v1.16.5 P0 source-security (branch-partial) checks passed.");
+console.log("v1.16.5 P0 source-security checks passed.");
