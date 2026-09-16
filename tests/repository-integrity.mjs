@@ -29,6 +29,7 @@ for (const marker of [
   "async function captureArtifacts(node)",
   "AI_BRIDGE_PING",
   "AI_BRIDGE_SEND",
+  "AI_BRIDGE_CAPTURE_LATEST",
   "chrome.runtime.onMessage.addListener"
 ]) {
   assert.ok(content.includes(marker), `content.js missing critical marker: ${marker}`);
@@ -38,6 +39,7 @@ const background = read("background.js");
 for (const marker of [
   "async function ensureTabListener(tabId)",
   "AI_BRIDGE_RESPONSE",
+  "AI_BRIDGE_FORCE_RELAY",
   "responseCommitQueue",
   "requireBoundSessionTab",
   "AI_BRIDGE_FETCH_ARTIFACT"

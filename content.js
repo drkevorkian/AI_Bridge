@@ -682,6 +682,24 @@
     };
   }
 
+  async function captureLatestVisibleReply() {
+    const node = latestResponseNode();
+    const text = latestResponseText(node);
+    if (!text || isResponseStub(text)) {
+      throw new Error("No assistant reply is visible on this page yet.");
+    }
+    const captured = await captureArtifacts(node);
+    return {
+      ok: true,
+      text,
+      artifacts: captured.artifacts,
+      artifactDiagnostics: { candidateCount: captured.candidateCount, errors: captured.errors },
+      completedAt: Number(lastChangeAt) || Date.now(),
+      generationId: currentGenerationId,
+      generating: Boolean(pendingSend || generationAppearsActive(node))
+    };
+  }
+
   chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
     if (msg.type === "AI_BRIDGE_PING") {
       sendResponse({ ok: true, host: location.hostname, ready: true, version: "1.14.0" });
@@ -691,6 +709,13 @@
     if (msg.type === "AI_BRIDGE_GENERATION_STATUS") {
       sendResponse(generationStatus());
       return false;
+    }
+
+    if (msg.type === "AI_BRIDGE_CAPTURE_LATEST") {
+      captureLatestVisibleReply()
+        .then(result => sendResponse(result))
+        .catch(err => sendResponse({ ok: false, error: err.message }));
+      return true;
     }
 
     if (msg.type === "AI_BRIDGE_STOP_GENERATION") {
