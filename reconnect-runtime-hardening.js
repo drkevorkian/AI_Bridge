@@ -7,7 +7,11 @@
 (() => {
   "use strict";
 
+  // Keep the source-era fallback for older harnesses, but production compares
+  // against the installed manifest version so extension version bumps cannot
+  // silently strand otherwise-current provider tabs.
   const EXPECTED_CONTENT_VERSION = "1.17.1";
+  const installedContentVersion = () => String(chrome?.runtime?.getManifest?.().version || EXPECTED_CONTENT_VERSION);
   const PING_ATTEMPTS = 12;
   const PING_DELAY_MS = 250;
   const RELOAD_TIMEOUT_MS = 20000;
@@ -36,6 +40,14 @@
     }
   }
 
+  function pingVersion(pong) {
+    return String(pong?.runtimeVersion || pong?.version || "");
+  }
+
+  function currentPong(pong) {
+    return Boolean(pong?.ok && pingVersion(pong) === installedContentVersion());
+  }
+
   async function waitForReadyTab(tabId) {
     const started = Date.now();
     while (Date.now() - started < RELOAD_TIMEOUT_MS) {
@@ -51,7 +63,7 @@
   async function pingUntilCurrent(tabId) {
     for (let attempt = 0; attempt < PING_ATTEMPTS; attempt += 1) {
       const pong = await ping(tabId);
-      if (pong?.ok && pong.version === EXPECTED_CONTENT_VERSION) return pong;
+      if (currentPong(pong)) return pong;
       if (attempt + 1 < PING_ATTEMPTS) await sleep(PING_DELAY_MS);
     }
     return null;
@@ -64,7 +76,7 @@
     const tabId = Number(rawTabId);
 
     const existingPong = await ping(tabId);
-    if (existingPong?.ok && existingPong.version === EXPECTED_CONTENT_VERSION) {
+    if (currentPong(existingPong)) {
       return existingPong;
     }
 
@@ -115,7 +127,8 @@
   globalThis.ensureTabListener = hardenedEnsureTabListener;
   globalThis.__AI_BRIDGE_RECONNECT_HARDENING__ = Object.freeze({
     version: 3,
-    contentRuntimeVersion: EXPECTED_CONTENT_VERSION,
+    contentRuntimeVersion: installedContentVersion(),
+    contentRuntimeVersionFromManifest: true,
     recovery: "clean-reload"
   });
 })();
