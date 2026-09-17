@@ -2,8 +2,8 @@
   "use strict";
 
   const ALL_SIDES = Object.freeze(["A", "B", "C", "D", "E"]);
-  const POLL_MS = 1500;
-  let timer = null;
+  let observer = null;
+  let refreshScheduled = false;
 
   const byId = id => document.getElementById(id);
 
@@ -70,13 +70,29 @@
     }
   }
 
+  function scheduleRefresh() {
+    if (refreshScheduled) return;
+    refreshScheduled = true;
+    queueMicrotask(() => {
+      refreshScheduled = false;
+      refreshQueueStatus().catch(() => {});
+    });
+  }
+
   function start() {
-    if (timer) return;
-    refreshQueueStatus().catch(() => {});
-    timer = setInterval(() => refreshQueueStatus().catch(() => {}), POLL_MS);
+    // Piggyback on the existing health/adaptive refresh cadence instead of
+    // creating a second timer. refreshHealth() rewrites this recommendation on
+    // every health poll, so one MutationObserver yields one coalesced queue read
+    // per existing dashboard cycle.
+    const cadenceAnchor = byId("adaptiveRecommendation");
+    if (cadenceAnchor && typeof MutationObserver === "function") {
+      observer = new MutationObserver(() => scheduleRefresh());
+      observer.observe(cadenceAnchor, { childList: true, subtree: true, characterData: true });
+    }
+    scheduleRefresh();
     window.addEventListener("pagehide", () => {
-      if (timer) clearInterval(timer);
-      timer = null;
+      observer?.disconnect();
+      observer = null;
     }, { once: true });
   }
 
@@ -84,7 +100,8 @@
     version: 1,
     exposesSensitiveIdentity: false,
     usesAriaLive: true,
-    pollMs: POLL_MS,
+    reusesHealthCadence: true,
+    independentTimer: false,
     refreshQueueStatus
   });
 
