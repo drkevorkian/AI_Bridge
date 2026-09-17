@@ -100,22 +100,27 @@
   }
 
   async function assertProviderPolicy(tabIds) {
-    const families = [];
-    for (const tabId of tabIds) {
+    const assignments = [];
+    for (const [index, tabId] of tabIds.entries()) {
       let tab;
       try {
         tab = await chrome.tabs.get(tabId);
       } catch (_) {
         throw new Error("A selected AI tab is no longer available.");
       }
-      const family = caps.providerFamilyForUrl(tab?.url || "");
-      if (!family) throw new Error("Every agent must be bound to a supported HTTPS AI tab.");
-      families.push(family.id);
+      assignments.push({
+        side: liveSides()[index],
+        tabId,
+        url: tab?.url || ""
+      });
     }
-    if (!caps.duplicateProviderAgentsEnabled && new Set(families).size !== families.length) {
-      throw new Error("Duplicate-provider agents are disabled. Bind each agent to a different AI family, or wait for multi-tab viewpoint mode.");
+    const verdict = caps.evaluateAgentBindings(assignments, {
+      duplicateProviderAgentsEnabled: caps.duplicateProviderAgentsEnabled === true
+    });
+    if (!verdict.ok) {
+      throw new Error(verdict.errors[0]?.message || "Provider binding policy rejected this team.");
     }
-    return families;
+    return assignments.map(row => caps.providerFamilyForUrl(row.url)?.id).filter(Boolean);
   }
 
   emptySideMap = function dynamicEmptySideMap(value) {
