@@ -286,6 +286,42 @@
     return sides;
   }
 
+  function installCloudSettingsAugmenter() {
+    try {
+      if (typeof collectCloudSettings === "function" && !collectCloudSettings.__aiBridgeDynamic) {
+        const baseCollect = collectCloudSettings;
+        const wrappedCollect = function dynamicCollectCloudSettings() {
+          const data = baseCollect();
+          data.agentCount = liveSides().length;
+          for (const side of ALL_SIDES) {
+            const job = byId(`job${side}`);
+            if (job) data[`job${side}`] = String(job.value || "").trim();
+          }
+          return data;
+        };
+        wrappedCollect.__aiBridgeDynamic = true;
+        collectCloudSettings = wrappedCollect;
+      }
+      if (typeof applyCloudSettingsToForm === "function" && !applyCloudSettingsToForm.__aiBridgeDynamic) {
+        const baseApply = applyCloudSettingsToForm;
+        const wrappedApply = function dynamicApplyCloudSettingsToForm(settings) {
+          baseApply(settings);
+          if (!settings || typeof settings !== "object") return;
+          const count = Number(settings.agentCount);
+          if (Number.isInteger(count)) renderRoster(count);
+          for (const side of ALL_SIDES) {
+            const job = byId(`job${side}`);
+            if (job && typeof settings[`job${side}`] === "string") job.value = settings[`job${side}`];
+          }
+        };
+        wrappedApply.__aiBridgeDynamic = true;
+        applyCloudSettingsToForm = wrappedApply;
+      }
+    } catch (error) {
+      console.error("AI Bridge could not extend cloud settings helpers", error);
+    }
+  }
+
   function installSelectedBindingsAugmenter() {
     try {
       if (typeof selectedBindings !== "function" || selectedBindings.__aiBridgeDynamic) return;
@@ -366,6 +402,7 @@
     ensureCountControl();
     ensureCards();
     installSelectedBindingsAugmenter();
+    installCloudSettingsAugmenter();
     installStartGuard();
     const stateResponse = await chrome.runtime.sendMessage({ type: "AI_BRIDGE_GET_STATE", includeSources: false, afterSeq: 0 });
     const bridgeState = stateResponse?.state || null;
