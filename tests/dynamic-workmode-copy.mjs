@@ -34,6 +34,16 @@ assert.match(copy, /help\.textContent\s*=/,
   "work-mode help should render as text only");
 assert.doesNotMatch(copy, /innerHTML|insertAdjacentHTML/,
   "dynamic help must not introduce HTML injection surfaces");
+assert.match(copy, /rewriteLegacyStatusCopy/,
+  "copy adapter should normalize legacy Start/Resume status text");
+assert.match(copy, /Starting \$\{count\}-AI session/,
+  "Start status should report the live roster size");
+assert.match(copy, /all \$\{count\} selected roles/,
+  "Resume guidance should report the live roster size");
+assert.match(copy, /statusObserver\.observe\(status/,
+  "copy adapter should react when legacy handlers update session status");
+assert.match(copy, /dynamicSessionStatusCopy:\s*true/,
+  "diagnostics should expose dynamic Start/Resume status copy");
 assert.match(copy, /__AI_BRIDGE_DYNAMIC_WORKMODE_COPY__/,
   "adapter should expose a diagnostic marker");
 assert.match(copy, /textOnlyRendering:\s*true/,
