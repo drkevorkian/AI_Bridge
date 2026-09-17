@@ -65,9 +65,10 @@
     // by packaged compatibility/read-only adapters that remove fixed-three UI
     // assumptions, add side-specific accessible names, expose live provider-health
     // status to assistive technology, trigger authoritative health re-probes when a
-    // bound browser tab changes, keep work-mode copy aligned to the live A-E roster,
-    // and expose viewpoint activation diagnostics. Routing authority remains in the
-    // centralized background binding evaluator.
+    // bound browser tab changes, keep Start visually gated by fail-closed health,
+    // keep work-mode copy aligned to the live A-E roster, and expose viewpoint
+    // activation diagnostics. Routing authority remains in the centralized
+    // background binding evaluator.
     if (!document.querySelector("script[data-ai-bridge-dynamic-agents]")) {
       const script = document.createElement("script");
       script.src = chrome.runtime.getURL("dashboard-dynamic-agents.js");
@@ -94,6 +95,13 @@
           healthLiveRefresh.async = false;
           healthLiveRefresh.dataset.aiBridgeProviderHealthLiveRefresh = "true";
           document.body.appendChild(healthLiveRefresh);
+        }
+        if (!document.querySelector("script[data-ai-bridge-provider-health-start-gate]")) {
+          const healthStartGate = document.createElement("script");
+          healthStartGate.src = chrome.runtime.getURL("dashboard-provider-health-start-gate.js");
+          healthStartGate.async = false;
+          healthStartGate.dataset.aiBridgeProviderHealthStartGate = "true";
+          document.body.appendChild(healthStartGate);
         }
         if (!document.querySelector("script[data-ai-bridge-dynamic-validation]")) {
           const validation = document.createElement("script");
@@ -122,13 +130,14 @@
   }, { once: true });
 
   window.__AI_BRIDGE_DASHBOARD_BOOTSTRAP__ = Object.freeze({
-    version: 10,
+    version: 11,
     providerScopedTabQuery: true,
     legacyWebOauthDisabled: true,
     dynamicAgentAdapter: true,
     dynamicAccessibilityAdapter: true,
     providerHealthAccessibilityAdapter: true,
     providerHealthLiveRefreshAdapter: true,
+    providerHealthStartGateAdapter: true,
     dynamicTabValidationAdapter: true,
     dynamicWorkModeCopyAdapter: true,
     viewpointActivationAdapter: true,
