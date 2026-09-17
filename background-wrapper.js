@@ -1,5 +1,17 @@
 // AI Bridge service-worker bootstrap.
 //
+// Load the shared logical-agent/provider capability contract before the
+// coordinator. The migration initially keeps the existing A/B/C routing intact,
+// but every later dynamic-agent layer consumes this one audited provider limit.
+importScripts("agent-capabilities.js");
+if (
+  globalThis.__AI_BRIDGE_AGENT_CAPABILITIES__?.version !== 1 ||
+  globalThis.__AI_BRIDGE_AGENT_CAPABILITIES__?.maxUniqueProviderAgents !== 5 ||
+  globalThis.__AI_BRIDGE_AGENT_CAPABILITIES__?.duplicateProviderAgentsEnabled !== false
+) {
+  throw new Error("AI Bridge agent capability contract failed to initialize.");
+}
+
 // Install mutation serialization before background.js registers coordinator
 // listeners. Message-driven control actions, tab-close recovery, and watchdog
 // recovery must all share this one queue.
