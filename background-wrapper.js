@@ -70,6 +70,9 @@ if (
   globalThis.__AI_BRIDGE_VIEWPOINT_RUNTIME_V1__?.failsClosedWithoutDispatchIdentityWhenEnabled !== true ||
   globalThis.__AI_BRIDGE_VIEWPOINT_RUNTIME_V1__?.serializesSameFamilySends !== true ||
   globalThis.__AI_BRIDGE_VIEWPOINT_RUNTIME_V1__?.revalidatesIdentityAtDispatch !== true ||
+  globalThis.__AI_BRIDGE_VIEWPOINT_RUNTIME_V1__?.queueTelemetryReadOnly !== true ||
+  globalThis.__AI_BRIDGE_VIEWPOINT_RUNTIME_V1__?.queueTelemetryEphemeral !== true ||
+  globalThis.__AI_BRIDGE_VIEWPOINT_RUNTIME_V1__?.queueTelemetryContainsSensitiveIdentity !== false ||
   globalThis.__AI_BRIDGE_VIEWPOINT_RUNTIME_V1__?.enablesDuplicateProviders !== true
 ) {
   throw new Error("AI Bridge viewpoint runtime failed to initialize.");
