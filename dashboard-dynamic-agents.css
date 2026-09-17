@@ -50,6 +50,33 @@
   content: "…";
 }
 
+.agent-card-thread-badge {
+  display: inline-flex;
+  align-items: center;
+  min-width: 0;
+  max-width: 18ch;
+  padding: 2px 6px;
+  border: 1px solid currentColor;
+  border-radius: 999px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 11px;
+  font-weight: 700;
+  line-height: 1.2;
+  opacity: 0.72;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.agent-card-thread-badge[hidden] {
+  display: none !important;
+}
+
+.agent-card[aria-invalid="true"] .agent-card-thread-badge,
+.dynamic-health-badge[data-status="DUPLICATE_THREAD"] {
+  opacity: 1;
+}
+
 .team-section[data-agent-count="4"] > .agent-card,
 .team-section[data-agent-count="5"] > .agent-card {
   padding-top: 10px;
@@ -63,7 +90,8 @@
 
 @media (prefers-reduced-motion: reduce) {
   .dynamic-health-badge,
-  .dynamic-health-badge * {
+  .dynamic-health-badge *,
+  .agent-card-thread-badge {
     animation: none !important;
     transition: none !important;
   }
