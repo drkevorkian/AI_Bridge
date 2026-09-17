@@ -52,7 +52,7 @@ assert.match(content, /generationId:\s*currentGenerationId/);
 assert.match(content, /candidateSignature/);
 assert.match(content, /authenticatedLocalArtifactAllowed/);
 assert.match(content, /credentials:\s*authenticatedLocalArtifactAllowed\(url\) \? "include" : "omit"/);
-assert.match(content, /if \(\/\^https:\/i\.test\(url\)\)/);
+assert.ok(content.includes('if (/^https:/i.test(url))'), "worker fallback must be HTTPS-only");
 
 // Focus accessibility -------------------------------------------------------
 assert.match(release, /role", "tabpanel"/);
