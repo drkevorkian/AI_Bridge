@@ -32,6 +32,7 @@
     "AI_BRIDGE_NEW_CHATS",
     "AI_BRIDGE_CLEAR_ARTIFACTS",
     "AI_BRIDGE_CLOUD_PULL",
+    "AI_BRIDGE_GET_STATE",
     "AI_BRIDGE_HUMAN_REOPEN",
     "AI_BRIDGE_HUMAN_SUPPRESS",
     "AI_BRIDGE_HUMAN_REPLY",
@@ -207,6 +208,7 @@
       serializedTypes.has("AI_BRIDGE_NEW_CHATS") &&
       serializedTypes.has("AI_BRIDGE_CLEAR_ARTIFACTS") &&
       serializedTypes.has("AI_BRIDGE_CLOUD_PULL"),
+    serializesClientStateReads: serializedTypes.has("AI_BRIDGE_GET_STATE"),
     get active() { return active; }
   });
 })();
