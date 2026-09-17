@@ -50,6 +50,17 @@
     };
   }
 
+  // Viewpoint mode must never dispatch a prompt that cannot be tied to a
+  // trusted, sanitized provider/thread identity. Keep this dormant while the
+  // feature flag is off so current unique-provider sessions do not gain a new
+  // failure dependency. The future enablement change must pass true here.
+  function requireDispatchIdentity(identity, viewpointEnabled = caps.duplicateProviderAgentsEnabled === true) {
+    if (viewpointEnabled && !identity) {
+      throw new Error("Viewpoint dispatch requires a trusted conversation identity.");
+    }
+    return identity;
+  }
+
   function rememberIdentity(side, identity) {
     const safe = sanitizedIdentity(identity);
     state.viewpointIdentityBySide = {
@@ -107,7 +118,8 @@
       const assignments = await currentAssignments();
       const plan = caps.sameFamilySendPlan(assignments);
       const row = assignments.find(item => item.side === side) || null;
-      const identity = row ? caps.conversationIdentity(row) : await identityForSide(side);
+      const rawIdentity = row ? caps.conversationIdentity(row) : await identityForSide(side);
+      const identity = requireDispatchIdentity(rawIdentity);
       const remembered = rememberIdentity(side, identity);
       const familyId = remembered?.providerFamily || "unknown";
       const queue = plan.queues.find(item => item.familyId === familyId);
@@ -129,11 +141,13 @@
   }
 
   globalThis.viewpointIdentityForSide = identityForSide;
+  globalThis.requireViewpointDispatchIdentity = requireDispatchIdentity;
   globalThis[FLAG] = Object.freeze({
     version: 1,
     stampsTranscript: true,
     stampsBeforeCommitSave: true,
     capturesIdentityBeforeDispatch: true,
+    failsClosedWithoutDispatchIdentityWhenEnabled: true,
     serializesSameFamilySends: true,
     enablesDuplicateProviders: false
   });
