@@ -162,7 +162,7 @@ One agent at a time. The responding agent may choose the next active teammate wi
 
 ## Dashboard
 
-AI Bridge includes Classic, Studio, and Focus workspace layouts. Dynamic A–E cards are shown or hidden according to the selected agent count.
+AI Bridge includes Classic, Studio, and Focus workspace layouts. **Studio is the default for new installs.** Dynamic A–E cards are shown or hidden according to the selected agent count.
 
 Core controls include:
 
@@ -194,7 +194,8 @@ For unpacked builds that use a user-supplied Google Web OAuth client, AI Bridge 
 
 Synced configuration may include:
 
-- theme and dashboard layout;
+- theme;
+- dashboard layout (Studio / Classic);
 - pane width;
 - work strategy;
 - Main AI/start-side preference;
