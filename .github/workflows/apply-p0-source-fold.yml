@@ -25,110 +25,11 @@ jobs:
         uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: "22"
-      - name: Finish self-contained source hardening
+      - name: Finalize background source hardening
         shell: bash
         run: |
           set -euo pipefail
-          python3 <<'PY'
-          from pathlib import Path
-
-          path = Path("background.js")
-          src = path.read_text(encoding="utf-8")
-          original = src
-
-          constants = '''const ARTIFACT_EXACT_HOSTS = new Set([
-            "chatgpt.com",
-            "chat.openai.com",
-            "grok.com",
-            "assets.grok.com",
-            "assets.grokusercontent.com",
-            "claude.ai",
-            "gemini.google.com",
-            "copilot.microsoft.com"
-          ]);
-          const ARTIFACT_HOST_SUFFIXES = Object.freeze([
-            ".oaiusercontent.com",
-            ".googleusercontent.com",
-            ".anthropic.com"
-          ]);
-
-          '''
-
-          marker = "function artifactFetchHostAllowed(rawUrl) {"
-          if "const ARTIFACT_EXACT_HOSTS = new Set([" not in src:
-              if src.count(marker) != 1:
-                  raise SystemExit(f"artifact allowlist insertion anchor count={src.count(marker)}")
-              src = src.replace(marker, constants + marker, 1)
-
-          if "EXACT_HOSTS.has(host)" in src:
-              if src.count("EXACT_HOSTS.has(host)") != 1:
-                  raise SystemExit("unexpected EXACT_HOSTS references")
-              src = src.replace("EXACT_HOSTS.has(host)", "ARTIFACT_EXACT_HOSTS.has(host)", 1)
-          if "HOST_SUFFIXES.some(" in src:
-              if src.count("HOST_SUFFIXES.some(") != 1:
-                  raise SystemExit("unexpected HOST_SUFFIXES references")
-              src = src.replace("HOST_SUFFIXES.some(", "ARTIFACT_HOST_SUFFIXES.some(", 1)
-
-          src = src.replace('    // IMPORTANT: do not use credentials:"include" here. A model-controlled\n', '    // IMPORTANT: never attach ambient browser credentials here. A model-controlled\n', 1)
-
-          # Keep the source handler readable as well as syntactically valid.
-          old_handler = '''    if (msg.type === "AI_BRIDGE_FETCH_ARTIFACT") {
-            requireBoundSessionTab(sender, "Artifact fetch");
-            const requested = String(msg.url || "");
-            if (!/^https:/i.test(requested)) throw new Error("Artifact worker fallback accepts HTTPS URLs only.");
-            if (msg.observed !== true) throw new Error("Artifact worker fallback requires an observed provider-page URL.");
-            if (!artifactFetchHostAllowed(requested)) throw new Error("Artifact URL host is not permitted by AI Bridge.");
-            const artifact = await fetchArtifactInBackground(requested, msg.name, msg.mime);
-            sendResponse({ ok: true, artifact });
-            return;
-          }
-          '''
-          # Normalize only if the previous automated transform flattened indentation.
-          flat_handler = '''    if (msg.type === "AI_BRIDGE_FETCH_ARTIFACT") {
-          requireBoundSessionTab(sender, "Artifact fetch");
-          const requested = String(msg.url || "");
-          if (!/^https:/i.test(requested)) throw new Error("Artifact worker fallback accepts HTTPS URLs only.");
-          if (msg.observed !== true) throw new Error("Artifact worker fallback requires an observed provider-page URL.");
-          if (!artifactFetchHostAllowed(requested)) throw new Error("Artifact URL host is not permitted by AI Bridge.");
-          const artifact = await fetchArtifactInBackground(requested, msg.name, msg.mime);
-          sendResponse({ ok: true, artifact });
-          return;
-        }
-          '''
-          if flat_handler in src:
-              src = src.replace(flat_handler, old_handler, 1)
-
-          required = [
-              'credentials: "omit"',
-              'referrerPolicy: "no-referrer"',
-              'cache: "no-store"',
-              'readResponseBytesBounded',
-              'ARTIFACT_EXACT_HOSTS.has(host)',
-              'ARTIFACT_HOST_SUFFIXES.some(',
-              'const ALLOWED_CLOUD_LAYOUTS = new Set(["studio", "classic", "focus"]);',
-              'msg.observed !== true',
-              'Google Drive Web implicit OAuth is disabled.'
-          ]
-          for needle in required:
-              if needle not in src:
-                  raise SystemExit(f"required source hardening missing: {needle}")
-          forbidden = [
-              'credentials: "include"',
-              'credentials:"include"',
-              'response_type: "token"',
-              'host === "x.ai"',
-              'host.endsWith(".x.ai")',
-              'host.endsWith(".microsoft.com")'
-          ]
-          for needle in forbidden:
-              if needle in src:
-                  raise SystemExit(f"forbidden source primitive remains: {needle}")
-
-          if src == original:
-              print("Source hardening already self-contained; nothing to commit.")
-          else:
-              path.write_text(src, encoding="utf-8")
-          PY
+          python3 .github/scripts/finalize-p0-source.py
           node --check background.js
           git diff --check
           changed="$(git diff --name-only | tr -d '\r')"
