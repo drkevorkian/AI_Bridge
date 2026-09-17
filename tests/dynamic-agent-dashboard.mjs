@@ -27,6 +27,12 @@ assert.match(dynamic, /applyHealth\(adaptive\.health\)/,
   "health rendering must use the exact snapshot returned with the Adaptive Selector recommendation");
 assert.match(dynamic, /atomicHealthRecommendation:\s*true/);
 assert.match(dynamic, /latestRefreshWins:\s*true/);
+assert.match(dynamic, /function getCommittedHealth\(\)\s*\{\s*return lastHealth;\s*\}/s,
+  "cosmetic dashboard adapters must be able to reuse the exact committed health snapshot without another worker request");
+assert.match(dynamic, /committedHealthSnapshot:\s*true/,
+  "dashboard diagnostics must advertise committed health snapshot reuse");
+assert.match(dynamic, /getCommittedHealth\s*\n?\s*\}/,
+  "committed health accessor must be exposed through the immutable dashboard API");
 assert.match(dynamic, /selectedBindings\s*=\s*wrapped/);
 assert.doesNotMatch(dynamic, /chrome\.runtime\.sendMessage\s*=\s*/,
   "dashboard adapter must not monkey-patch Chrome message transport");

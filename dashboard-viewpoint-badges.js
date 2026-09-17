@@ -12,7 +12,6 @@
   if (window[FLAG]) return;
 
   const MAX_THREAD_BADGE_CHARS = 18;
-  let refreshEpoch = 0;
   let observer = null;
   let refreshScheduled = false;
 
@@ -131,19 +130,20 @@
     return rows;
   }
 
-  async function refreshViewpointBadges() {
+  function committedHealth() {
+    const dashboard = window.__AI_BRIDGE_DYNAMIC_DASHBOARD_V1__;
+    if (!dashboard || dashboard.committedHealthSnapshot !== true || typeof dashboard.getCommittedHealth !== "function") {
+      return null;
+    }
+    return dashboard.getCommittedHealth();
+  }
+
+  function refreshViewpointBadges() {
     if (document.hidden) return null;
-    const epoch = ++refreshEpoch;
-    const preferredSide = byId("startSide")?.value || "A";
-    const response = await chrome.runtime.sendMessage({
-      type: "AI_BRIDGE_ADAPTIVE_SELECT",
-      force: false,
-      preferredSide
-    });
-    if (!response?.ok) throw new Error(response?.error || "Viewpoint health unavailable.");
-    if (epoch !== refreshEpoch) return null;
-    applyViewpointBadges(response.health);
-    return response.health;
+    const health = committedHealth();
+    if (!health) return null;
+    applyViewpointBadges(health);
+    return health;
   }
 
   function scheduleRefresh() {
@@ -151,15 +151,15 @@
     refreshScheduled = true;
     queueMicrotask(() => {
       refreshScheduled = false;
-      refreshViewpointBadges().catch(() => {});
+      refreshViewpointBadges();
     });
   }
 
   function start() {
-    // The dynamic dashboard rewrites adaptiveRecommendation after each atomic
-    // health+recommendation refresh. Observe that existing cadence instead of
-    // adding another timer. The follow-up read normally reuses Provider Health's
-    // short state-keyed cache and is cosmetic only; routing never consumes it.
+    // The dynamic dashboard rewrites adaptiveRecommendation only after it has
+    // atomically committed the matching Provider Health snapshot. Observe that
+    // existing cadence and read the exact committed snapshot synchronously from
+    // the dashboard API. No second Adaptive Selector request or probe is needed.
     const cadenceAnchor = byId("adaptiveRecommendation");
     if (cadenceAnchor && typeof MutationObserver === "function") {
       observer = new MutationObserver(() => scheduleRefresh());
@@ -179,6 +179,7 @@
     viewpointIndexFromRosterOrder: true,
     usesTextContentOnly: true,
     cardDescribedBySanitizedViewpoint: true,
+    usesCommittedDashboardHealth: true,
     independentTimer: false,
     applyViewpointBadges,
     refreshViewpointBadges

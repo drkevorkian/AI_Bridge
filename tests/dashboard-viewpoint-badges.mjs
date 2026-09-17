@@ -12,8 +12,14 @@ assert.match(activation, /dashboard-viewpoint-badges\.js/,
   "viewpoint activation must load the sanitized badge adapter");
 assert.match(activation, /sanitizedViewpointBadges:\s*true/,
   "dynamic dashboard diagnostics must advertise sanitized viewpoint badges");
-assert.match(src, /type:\s*"AI_BRIDGE_ADAPTIVE_SELECT"/,
-  "badges must consume the already-redacted adaptive/health endpoint");
+assert.match(src, /usesCommittedDashboardHealth:\s*true/,
+  "badge diagnostics must advertise committed dashboard health reuse");
+assert.match(src, /dashboard\.getCommittedHealth\(\)/,
+  "badges must consume the dynamic dashboard's already-committed health snapshot");
+assert.doesNotMatch(src, /chrome\.runtime\.sendMessage/,
+  "cosmetic viewpoint badges must not issue their own worker request");
+assert.doesNotMatch(src, /AI_BRIDGE_ADAPTIVE_SELECT/,
+  "cosmetic viewpoint badges must not independently query Adaptive Selector");
 assert.match(src, /viewpointIndexFromRosterOrder:\s*true/);
 assert.match(src, /usesRedactedProviderHealth:\s*true/);
 assert.match(src, /exposesSensitiveIdentity:\s*false/);
@@ -54,7 +60,6 @@ function element(initial = {}) {
 
 const elements = new Map([
   ["adaptiveRecommendation", element({ id: "adaptiveRecommendation", hidden: false })],
-  ["startSide", element({ id: "startSide", hidden: false, value: "A" })],
   ["threadBadgeA", element({ id: "threadBadgeA" })],
   ["threadBadgeB", element({ id: "threadBadgeB" })],
   ["threadBadgeC", element({ id: "threadBadgeC" })]
@@ -66,8 +71,12 @@ const cards = new Map([
 ]);
 
 let observed = false;
+let observerCallback = null;
 class FakeMutationObserver {
-  constructor(callback) { this.callback = callback; }
+  constructor(callback) {
+    this.callback = callback;
+    observerCallback = callback;
+  }
   observe(target) {
     assert.equal(target, elements.get("adaptiveRecommendation"));
     observed = true;
@@ -75,7 +84,6 @@ class FakeMutationObserver {
   disconnect() {}
 }
 
-let messageCount = 0;
 let health = {
   version: 1,
   sides: ["A", "B", "C"],
@@ -85,6 +93,7 @@ let health = {
     C: { providerId: "grok", providerName: "Grok", threadPath: "/", status: "READY", ready: true }
   }
 };
+let committedReads = 0;
 
 const context = vm.createContext({
   console,
@@ -101,27 +110,24 @@ const context = vm.createContext({
     hidden: false,
     getElementById(id) { return elements.get(id) || null; },
     querySelector(selector) { return cards.get(selector) || null; }
-  },
-  chrome: {
-    runtime: {
-      async sendMessage(message) {
-        messageCount += 1;
-        assert.equal(message.type, "AI_BRIDGE_ADAPTIVE_SELECT");
-        assert.equal(message.force, false);
-        assert.equal(message.preferredSide, "A");
-        return { ok: true, health, recommendation: { side: "A", reason: "A is READY." } };
-      }
-    }
   }
 });
 context.window = context;
 context.window.addEventListener = () => {};
+context.window.__AI_BRIDGE_DYNAMIC_DASHBOARD_V1__ = Object.freeze({
+  version: 1,
+  committedHealthSnapshot: true,
+  getCommittedHealth() {
+    committedReads += 1;
+    return health;
+  }
+});
 
 vm.runInContext(src, context, { filename: "dashboard-viewpoint-badges.js" });
 await new Promise(resolve => setTimeout(resolve, 0));
 
 assert.equal(observed, true, "badge adapter must reuse the adaptive recommendation mutation cadence");
-assert.equal(messageCount, 1, "startup should perform one cosmetic cached health read");
+assert.equal(committedReads, 1, "startup should read the already-committed dashboard snapshot exactly once");
 
 const a = elements.get("threadBadgeA");
 const b = elements.get("threadBadgeB");
@@ -142,21 +148,17 @@ assert.equal(b.dataset.viewpointCount, "2");
 assert.equal(a.dataset.viewpointOwned, "true");
 assert.equal(b.dataset.viewpointOwned, "true");
 
-// The card retains its stable logical-side name and gains the viewpoint badge as
-// an accessible description. Existing description tokens must be preserved.
 assert.equal(cardA.attributes["aria-labelledby"], "labelTextA");
 assert.equal(cardA.attributes["aria-describedby"], "threadBadgeA");
 assert.equal(cardB.attributes["aria-labelledby"], "labelTextB");
 assert.equal(cardB.attributes["aria-describedby"], "existingB threadBadgeB");
-
-// A provider represented by only one active logical agent is not relabeled as
-// a viewpoint. Its existing thread badge/card description stays untouched.
 assert.equal(c.textContent, "");
 assert.equal(c.hidden, true);
 assert.equal(cardC.attributes["aria-describedby"], undefined);
 
-// If the same-provider grouping later disappears, the adapter must remove only
-// its own accessible description token and clear only badge state it owns.
+// A later atomic dashboard commit changes the authoritative snapshot. Simulate
+// the existing recommendation mutation and verify the badge adapter re-reads the
+// dashboard snapshot without contacting the worker.
 health = {
   version: 1,
   sides: ["A", "B", "C"],
@@ -166,7 +168,9 @@ health = {
     C: { providerId: "grok", providerName: "Grok", threadPath: "/", status: "READY", ready: true }
   }
 };
-context.__AI_BRIDGE_VIEWPOINT_BADGES_V1__.applyViewpointBadges(health);
+observerCallback?.([]);
+await new Promise(resolve => setTimeout(resolve, 0));
+assert.equal(committedReads, 2, "each recommendation mutation should perform one synchronous committed-snapshot read");
 assert.equal(cardA.attributes["aria-describedby"], undefined);
 assert.equal(cardB.attributes["aria-describedby"], "existingB");
 assert.equal(a.hidden, true);
