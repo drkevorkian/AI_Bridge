@@ -110,6 +110,35 @@
     const side = boundSideForSender(sender);
     if (!side) return { ok: false, error: "Artifact fallback sender is not a bound AI tab." };
 
+    const urlText = String(message.url || "");
+    let parsed;
+    try { parsed = new URL(urlText); } catch (_) {
+      return { ok: false, error: "Artifact fallback URL is invalid." };
+    }
+    if (parsed.protocol !== "https:" || parsed.username || parsed.password || (parsed.port && parsed.port !== "443")) {
+      return { ok: false, error: "Artifact fallback requires credential-free standard-port HTTPS." };
+    }
+
+    const signature = String(message.candidateSignature || "");
+    if (!signature || signature.length > 2048 || !signature.startsWith(`${urlText}|`)) {
+      return { ok: false, error: "Artifact fallback candidate signature is missing or malformed." };
+    }
+    if (String(message.name || "").length > 240 || String(message.mime || "").length > 160) {
+      return { ok: false, error: "Artifact fallback metadata exceeds its allowed bounds." };
+    }
+
+    // Slice 65 lets explicit Manual Relay capture refresh provenance on a newly
+    // navigated trusted thread. That path is marked only by the isolated-world
+    // content script during AI_BRIDGE_CAPTURE_LATEST. Do not require the
+    // previously armed automatic generation here; conversation trust is still
+    // enforced later by aiBridgeAuthorizeArtifactRequest().
+    if (message.manualCapture === true) {
+      if (!String(message.pageUrl || "").trim()) {
+        return { ok: false, error: "Manual artifact capture requires current page identity." };
+      }
+      return { ok: true };
+    }
+
     const generationId = String(message.generationId || "");
     const generationMatch = generationId.match(/^([A-Z])-\d{6,}-[a-z0-9_-]{4,80}$/i);
     const generationSide = String(generationMatch?.[1] || "").toUpperCase();
@@ -132,22 +161,6 @@
       return { ok: false, error: "Artifact fallback generation state is unavailable." };
     }
 
-    const urlText = String(message.url || "");
-    let parsed;
-    try { parsed = new URL(urlText); } catch (_) {
-      return { ok: false, error: "Artifact fallback URL is invalid." };
-    }
-    if (parsed.protocol !== "https:" || parsed.username || parsed.password || (parsed.port && parsed.port !== "443")) {
-      return { ok: false, error: "Artifact fallback requires credential-free standard-port HTTPS." };
-    }
-
-    const signature = String(message.candidateSignature || "");
-    if (!signature || signature.length > 2048 || !signature.startsWith(`${urlText}|`)) {
-      return { ok: false, error: "Artifact fallback candidate signature is missing or malformed." };
-    }
-    if (String(message.name || "").length > 240 || String(message.mime || "").length > 160) {
-      return { ok: false, error: "Artifact fallback metadata exceeds its allowed bounds." };
-    }
     return { ok: true };
   }
 
@@ -201,6 +214,7 @@
     artifactProvenanceGate: true,
     artifactProvenanceSupportsDynamicSides: supportedArtifactSides.includes("D") && supportedArtifactSides.includes("E"),
     artifactProvenanceSides: supportedArtifactSides,
+    manualCaptureBypassesArmedGeneration: true,
     serializesTabRemovalLifecycle: Boolean(originalTabRemovedAddListener),
     serializesTabReplacementLifecycle: Boolean(originalTabReplacedAddListener),
     serializesAgentCountMutation: serializedTypes.has("AI_BRIDGE_SET_AGENT_COUNT"),
