@@ -42,7 +42,8 @@ if (
 
 importScripts("coordinator-dynamic-semantics.js");
 if (
-  globalThis.__AI_BRIDGE_DYNAMIC_SEMANTICS_V1__?.version !== 1 ||
+  globalThis.__AI_BRIDGE_DYNAMIC_SEMANTICS_V1__?.version !== 2 ||
+  globalThis.__AI_BRIDGE_DYNAMIC_SEMANTICS_V1__?.liveRosterMeshTargets !== true ||
   globalThis.__AI_BRIDGE_DYNAMIC_SEMANTICS_V1__?.derivedTurnMinimums !== true ||
   globalThis.__AI_BRIDGE_DYNAMIC_SEMANTICS_V1__?.cloudJobsThroughE !== true
 ) {
