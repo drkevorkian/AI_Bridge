@@ -32,6 +32,16 @@ if (globalThis.__AI_BRIDGE_WORKER_FETCH_SECURITY_V1__?.httpCredentials !== "omit
 
 importScripts("background.js");
 
+importScripts("content-runtime-recovery-hardening.js");
+if (
+  globalThis.__AI_BRIDGE_CONTENT_RECOVERY_V1__?.version !== 1 ||
+  globalThis.__AI_BRIDGE_CONTENT_RECOVERY_V1__?.expectedVersionFromManifest !== true ||
+  globalThis.__AI_BRIDGE_CONTENT_RECOVERY_V1__?.injectsFullManifestStack !== true ||
+  globalThis.__AI_BRIDGE_CONTENT_RECOVERY_V1__?.rejectsBareContentRecovery !== true
+) {
+  throw new Error("AI Bridge content runtime recovery hardening failed to initialize.");
+}
+
 importScripts("coordinator-dynamic-agents.js");
 if (
   globalThis.__AI_BRIDGE_DYNAMIC_AGENTS_V1__?.version !== 1 ||
