@@ -7,6 +7,16 @@ import { fileURLToPath } from "node:url";
 const here = path.dirname(fileURLToPath(import.meta.url));
 const root = path.resolve(here, "..");
 const source = fs.readFileSync(path.join(root, "agent-capabilities.js"), "utf8");
+const wrapper = fs.readFileSync(path.join(root, "background-wrapper.js"), "utf8");
+
+assert.ok(
+  wrapper.includes('importScripts("agent-capabilities.js")'),
+  "service worker should load the shared dynamic-agent capability contract"
+);
+assert.ok(
+  wrapper.indexOf('importScripts("agent-capabilities.js")') < wrapper.indexOf('importScripts("background.js")'),
+  "agent capability contract must load before the coordinator core"
+);
 
 const context = vm.createContext({ URL, console });
 context.globalThis = context;
