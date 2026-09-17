@@ -1,11 +1,10 @@
 (() => {
   "use strict";
 
-  // Slice 2 scaffolding on the Slice 1 baseline.
-  // Capture sanitized conversation identity before provider dispatch, stamp it
-  // synchronously into response transcript entries during the normal commit,
-  // and serialize sends when more than one live agent shares a provider family.
-  // duplicateProviderAgentsEnabled stays false.
+  // Same-provider viewpoint runtime. Conversation identity is captured before
+  // provider dispatch, stamped into response transcript entries during the
+  // normal commit, and duplicated provider families share a deterministic send
+  // queue. Viewpoint mode always fails closed without trusted dispatch identity.
   const FLAG = "__AI_BRIDGE_VIEWPOINT_RUNTIME_V1__";
   if (globalThis[FLAG]) return;
 
@@ -13,8 +12,8 @@
   if (!caps || caps.version !== 1 || typeof caps.conversationIdentity !== "function" || typeof caps.sameFamilySendPlan !== "function") {
     throw new Error("Viewpoint runtime requires the conversation-identity contract.");
   }
-  if (caps.duplicateProviderAgentsEnabled === true) {
-    throw new Error("Viewpoint runtime must not boot while duplicate-provider mode is enabled.");
+  if (caps.duplicateProviderAgentsEnabled !== true) {
+    throw new Error("Viewpoint runtime activation requires duplicate-provider mode.");
   }
 
   const familyQueues = new Map();
@@ -50,12 +49,8 @@
     };
   }
 
-  // Viewpoint mode must never dispatch a prompt that cannot be tied to a
-  // trusted, sanitized provider/thread identity. Keep this dormant while the
-  // feature flag is off so current unique-provider sessions do not gain a new
-  // failure dependency. The future enablement change must pass true here.
-  function requireDispatchIdentity(identity, viewpointEnabled = caps.duplicateProviderAgentsEnabled === true) {
-    if (viewpointEnabled && !identity) {
+  function requireDispatchIdentity(identity) {
+    if (!identity) {
       throw new Error("Viewpoint dispatch requires a trusted conversation identity.");
     }
     return identity;
@@ -93,13 +88,12 @@
     const previous = familyQueues.get(key) || Promise.resolve();
     const next = previous.catch(() => undefined).then(work);
     familyQueues.set(key, next);
+    next.finally(() => {
+      if (familyQueues.get(key) === next) familyQueues.delete(key);
+    }).catch(() => {});
     return next;
   }
 
-  // Stamp inside recordTranscript so the base response handler persists the
-  // provenance fields in the same save as the response itself. Never resolve
-  // the current tab URL after completion: navigation after dispatch must not
-  // rewrite which conversation actually received the prompt.
   if (typeof recordTranscript === "function") {
     const baseRecordTranscript = recordTranscript;
     recordTranscript = function viewpointRecordTranscript(type, payload = {}) {
@@ -116,18 +110,21 @@
     const baseSend = sendToSide;
     sendToSide = async function viewpointSendToSide(side, text, options) {
       const assignments = await currentAssignments();
+      const verdict = caps.evaluateAgentBindings(assignments, {
+        duplicateProviderAgentsEnabled: true
+      });
+      if (!verdict.ok) {
+        throw new Error(verdict.errors[0]?.message || "Viewpoint binding policy rejected this send.");
+      }
       const plan = caps.sameFamilySendPlan(assignments);
       const row = assignments.find(item => item.side === side) || null;
       const rawIdentity = row ? caps.conversationIdentity(row) : await identityForSide(side);
       const identity = requireDispatchIdentity(rawIdentity);
       const remembered = rememberIdentity(side, identity);
-      const familyId = remembered?.providerFamily || "unknown";
+      const familyId = remembered.providerFamily;
       const queue = plan.queues.find(item => item.familyId === familyId);
       const run = async () => {
         const result = await baseSend(side, text, options);
-        // Normal recorded sends persist state inside baseSend. Resends use
-        // record:false, so explicitly persist the captured identity after a
-        // successful resend to survive service-worker suspension.
         if (options?.record === false && typeof saveState === "function") {
           await saveState();
         }
@@ -149,6 +146,7 @@
     capturesIdentityBeforeDispatch: true,
     failsClosedWithoutDispatchIdentityWhenEnabled: true,
     serializesSameFamilySends: true,
-    enablesDuplicateProviders: false
+    validatesBindingsBeforeSend: true,
+    enablesDuplicateProviders: true
   });
 })();

@@ -35,8 +35,10 @@ assert.deepEqual(Array.from(caps.providerFamilies, provider => provider.id), [
   "gemini",
   "copilot"
 ]);
-assert.equal(caps.duplicateProviderAgentsEnabled, false);
+assert.equal(caps.duplicateProviderAgentsEnabled, true);
 assert.equal(caps.uniqueTabBindingNeverRelaxed, true);
+assert.equal(caps.distinctThreadRequiredWhenSameFamily, true);
+assert.equal(caps.serializeSameFamilySends, true);
 assert.equal(typeof caps.evaluateAgentBindings, "function");
 
 assert.equal(caps.parseAgentCount(1), 1);
@@ -53,7 +55,7 @@ assert.deepEqual(Array.from(caps.sideIdsForCount(5)), ["A", "B", "C", "D", "E"])
 assert.throws(
   () => caps.sideIdsForCount(6),
   error => error?.name === "RangeError" && /1 to 5/.test(String(error?.message || "")),
-  "sideIdsForCount should reject counts outside the supported provider-family limit"
+  "sideIdsForCount should reject counts outside the supported logical-slot limit"
 );
 
 assert.equal(caps.providerFamilyForUrl("https://chatgpt.com/")?.id, "chatgpt");

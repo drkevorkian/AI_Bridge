@@ -25,9 +25,10 @@ const tabs = new Map([
   [33, { id: 33, url: "https://claude.ai/" }],
   [44, { id: 44, url: "https://gemini.google.com/" }],
   [66, { id: 66, url: "https://chatgpt.com/c/other" }],
-  [77, { id: 77, url: "https://example.com/" }]
+  [77, { id: 77, url: "https://example.com/" }],
+  [88, { id: 88, url: "https://chatgpt.com/c/other?different=query#fragment" }]
 ]);
-const pingable = new Set([11, 22, 33, 44, 66]);
+const pingable = new Set([11, 22, 33, 44, 66, 88]);
 
 function load(state, { senderUrl = "chrome-extension://bridge/dashboard.html" } = {}) {
   const messages = [];
@@ -123,11 +124,22 @@ assert.equal(shared.bySide.A.status, "DUPLICATE_TAB");
 assert.equal(shared.bySide.B.status, "DUPLICATE_TAB");
 assert.equal(shared.bySide.C.status, "READY");
 
+// Production viewpoint mode allows the same provider family when tab and
+// sanitized thread identity are both distinct.
 const dupFamily = load({ agentCount: 3, tabA: 11, tabB: 66, tabC: 22 });
 const dup = await dupFamily.probeActiveAgents({ force: true });
-assert.equal(dup.bySide.A.status, "DUPLICATE_PROVIDER");
-assert.equal(dup.bySide.B.status, "DUPLICATE_PROVIDER");
+assert.equal(dup.bySide.A.status, "READY");
+assert.equal(dup.bySide.B.status, "READY");
 assert.equal(dup.bySide.C.status, "READY");
+
+// Query/hash differences never create a distinct viewpoint for the same thread.
+const dupThread = load({ agentCount: 3, tabA: 66, tabB: 88, tabC: 22 });
+const sameThread = await dupThread.probeActiveAgents({ force: true });
+assert.equal(sameThread.bySide.A.status, "DUPLICATE_THREAD");
+assert.equal(sameThread.bySide.B.status, "DUPLICATE_THREAD");
+assert.equal(sameThread.bySide.C.status, "READY");
+assert.equal(sameThread.bySide.A.threadKey, "https://chatgpt.com/c/other");
+assert.equal(sameThread.bySide.B.threadKey, "https://chatgpt.com/c/other");
 
 const pick = three.recommendStartSide(health, "B");
 assert.equal(pick.side, "B");

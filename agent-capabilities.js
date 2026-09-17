@@ -1,15 +1,9 @@
 // AI Bridge logical-agent capability contract.
 //
-// This file intentionally defines capabilities only. It does not change the
-// coordinator's current A/B/C routing by itself. The dynamic-agent migration
-// can therefore consume one audited source of truth without making a partially
-// migrated dashboard appear to support more agents than the coordinator can
-// actually route.
-//
-// Current policy: one logical agent per supported provider family, so the
-// selectable count is 1..5. A future, separately reviewed multi-tab viewpoint
-// mode may lift that policy by allowing multiple logical agents to use distinct
-// tabs from the same provider. That mode is deliberately NOT enabled here.
+// Logical-agent identity is independent from provider-family identity. Up to
+// five logical slots (A-E) are currently exposed by the UI, and multiple slots
+// may use distinct tabs from the same provider when their sanitized thread
+// identities differ. One logical agent per unique Chrome tab is permanent.
 (() => {
   "use strict";
 
@@ -25,6 +19,7 @@
   const MAX_UNIQUE_PROVIDER_AGENTS = PROVIDER_FAMILIES.length;
   const SIDE_ALPHABET = Object.freeze("ABCDEFGHIJKLMNOPQRSTUVWXYZ".split(""));
   const SUPPORTED_AGENT_SIDES = Object.freeze(SIDE_ALPHABET.slice(0, MAX_UNIQUE_PROVIDER_AGENTS));
+  const DUPLICATE_PROVIDER_AGENTS_ENABLED = true;
 
   function parseAgentCount(raw) {
     if (raw === null || raw === undefined || raw === "") return null;
@@ -65,10 +60,8 @@
     return Boolean(providerFamilyForUrl(rawUrl));
   }
 
-  // Stable conversation identity for one bound tab.
-  // Query/hash are dropped so tokens and ephemeral UI state never become IDs.
-  // Two tabs of the same provider are independent viewpoints only when their
-  // path-level thread keys differ.
+  // Stable conversation identity for one bound tab. Query/hash are dropped so
+  // tokens and ephemeral page state never participate in logical identity.
   function conversationIdentity(assignment) {
     const side = String(assignment?.side || "").toUpperCase();
     const tabId = Number(assignment?.tabId);
@@ -92,8 +85,8 @@
     });
   }
 
-  // Future same-provider sends must be serialized per family even though each
-  // agent already owns a private tab. Shared cookies/quotas are the risk.
+  // Same-family tabs are serialized as a provider-family queue. Each logical
+  // agent still owns a distinct tab/content-script instance.
   function sameFamilySendPlan(assignments) {
     const identities = (Array.isArray(assignments) ? assignments : [])
       .map(conversationIdentity)
@@ -120,10 +113,10 @@
     });
   }
 
-  // Binding security evaluator.
-  // unique tab IDs are a hard invariant. Same-provider / multi-tab viewpoint
-  // mode may later allow two logical agents to share a provider *family*
-  // only when they own different browser tabs. That mode is off by default.
+  // Central binding security evaluator. Unique tab IDs are never relaxed.
+  // When same-provider viewpoints are enabled, provider-family duplication is
+  // allowed only across distinct tabs and distinct sanitized conversation
+  // threads.
   function evaluateAgentBindings(assignments, options = {}) {
     const rows = Array.isArray(assignments) ? assignments : [];
     const allowDuplicateFamilies = options.duplicateProviderAgentsEnabled === true;
@@ -221,6 +214,6 @@
     uniqueTabBindingNeverRelaxed: true,
     distinctThreadRequiredWhenSameFamily: true,
     serializeSameFamilySends: true,
-    duplicateProviderAgentsEnabled: false
+    duplicateProviderAgentsEnabled: DUPLICATE_PROVIDER_AGENTS_ENABLED
   });
 })();

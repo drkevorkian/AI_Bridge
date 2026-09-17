@@ -16,12 +16,13 @@ assert.ok(wrapper.indexOf('importScripts("background.js")') < wrapper.indexOf('i
 assert.ok(wrapper.indexOf('importScripts("coordinator-dynamic-agents.js")') < wrapper.indexOf('importScripts("artifact-fetch-runtime-hardening.js")'));
 
 const tabs = new Map([
-  [11, { id: 11, url: "https://chatgpt.com/" }],
+  [11, { id: 11, url: "https://chatgpt.com/c/one" }],
   [22, { id: 22, url: "https://grok.com/" }],
   [33, { id: 33, url: "https://claude.ai/" }],
   [44, { id: 44, url: "https://gemini.google.com/" }],
   [55, { id: 55, url: "https://copilot.microsoft.com/" }],
-  [66, { id: 66, url: "https://chatgpt.com/c/other" }]
+  [66, { id: 66, url: "https://chatgpt.com/c/other" }],
+  [77, { id: 77, url: "https://chatgpt.com/c/one?tracking=drop#frag" }]
 ]);
 
 function same(actual, expected) {
@@ -97,9 +98,15 @@ await assert.rejects(
   () => migrated.bindTabsFromMessage({ tabA: 11, tabB: 11, tabC: 33, tabD: 44, tabE: 55 }),
   /different browser tab/
 );
+
+// Same provider, different tab, different sanitized thread is now valid.
+await migrated.bindTabsFromMessage({ tabA: 11, tabB: 22, tabC: 33, tabD: 44, tabE: 66 });
+assert.equal(migrated.state.tabE, 66);
+
+// Query/hash differences cannot turn the same conversation into two viewpoints.
 await assert.rejects(
-  () => migrated.bindTabsFromMessage({ tabA: 11, tabB: 22, tabC: 33, tabD: 44, tabE: 66 }),
-  /Duplicate-provider/
+  () => migrated.bindTabsFromMessage({ tabA: 11, tabB: 22, tabC: 33, tabD: 44, tabE: 77 }),
+  /distinct conversation threads|share chatgpt::https:\/\/chatgpt\.com\/c\/one/i
 );
 
 const shrinking = loadOverlay({ agentCount: 5, currentSide: "E", startSide: "E", mainSide: "E" });
@@ -135,5 +142,5 @@ assert.equal(legacy.state.tabD, null);
 assert.equal(legacy.nextSide("D"), "A");
 
 assert.equal(migrated.__AI_BRIDGE_DYNAMIC_AGENTS_V1__.uniqueTabBinding, true);
-assert.equal(migrated.__AI_BRIDGE_DYNAMIC_AGENTS_V1__.duplicateProviderAgentsEnabled, false);
+assert.equal(migrated.__AI_BRIDGE_DYNAMIC_AGENTS_V1__.duplicateProviderAgentsEnabled, true);
 console.log("dynamic-agent-coordinator: ok");
