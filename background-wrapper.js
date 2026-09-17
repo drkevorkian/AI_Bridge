@@ -157,8 +157,12 @@ if (
 
 importScripts("coordinator-generation-hardening.js");
 if (
-  globalThis.__AI_BRIDGE_GENERATION_SECURITY__?.version !== 3 ||
+  globalThis.__AI_BRIDGE_GENERATION_SECURITY__?.version !== 4 ||
   globalThis.__AI_BRIDGE_GENERATION_SECURITY__?.failClosedWhenUnarmed !== true ||
+  globalThis.__AI_BRIDGE_GENERATION_SECURITY__?.durablyArmsGenerationBeforeProviderSend !== true ||
+  globalThis.__AI_BRIDGE_GENERATION_SECURITY__?.providerSendBoundaryGuarded !== true ||
+  globalThis.__AI_BRIDGE_GENERATION_SECURITY__?.rechecksArmedGenerationAfterPersistence !== true ||
+  globalThis.__AI_BRIDGE_GENERATION_SECURITY__?.durablyClearsFailedDispatchGeneration !== true ||
   globalThis.__AI_BRIDGE_GENERATION_SECURITY__?.rechecksGenerationAtSerializedCommit !== true ||
   globalThis.__AI_BRIDGE_GENERATION_SECURITY__?.consumesAcceptedGenerationBeforeCommit !== true ||
   globalThis.__AI_BRIDGE_GENERATION_SECURITY__?.durablyPersistsConsumedGenerationBeforeCommit !== true ||
