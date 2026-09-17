@@ -32,6 +32,18 @@ assert.match(dynamic, /resend\$\{side\}/);
 assert.match(dynamic, /useLast\$\{side\}/);
 assert.match(dynamic, /timerTotal\$\{side\}/);
 assert.match(dynamic, /timerCurrent\$\{side\}/);
+
+// Slice 27 deliberately returns side:null when no provider is READY. The
+// dashboard must preserve that fail-closed result instead of visually
+// manufacturing AI A through a truthy fallback.
+assert.match(dynamic, /function formatAdaptiveRecommendation\(adaptive\)/);
+assert.match(dynamic, /Adaptive start: No READY target/);
+assert.match(dynamic, /typeof side !== "string" \|\| !ALL_SIDES\.includes\(side\)/);
+assert.doesNotMatch(dynamic, /adaptive\.recommendation\?\.side\s*\|\|\s*"A"/,
+  "null Adaptive Selector recommendations must never be rendered as AI A");
+assert.match(dynamic, /recommendation\.textContent = formatAdaptiveRecommendation\(adaptive\)/,
+  "dashboard recommendation rendering must go through the null-safe formatter");
+
 assert.match(css, /data-status="READY"/);
 assert.match(css, /prefers-reduced-motion/);
 assert.match(css, /text-overflow:\s*ellipsis/,

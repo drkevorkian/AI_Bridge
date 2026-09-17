@@ -432,6 +432,15 @@
     }
   }
 
+  function formatAdaptiveRecommendation(adaptive) {
+    const reason = String(adaptive?.recommendation?.reason || "No recommendation.");
+    const side = adaptive?.recommendation?.side;
+    if (typeof side !== "string" || !ALL_SIDES.includes(side)) {
+      return `Adaptive start: No READY target — ${reason}`;
+    }
+    return `Adaptive start: AI ${side} — ${reason}`;
+  }
+
   async function refreshHealth(force = false) {
     const response = await chrome.runtime.sendMessage({ type: "AI_BRIDGE_PROVIDER_HEALTH", force });
     if (!response?.ok) throw new Error(response?.error || "Provider health check failed.");
@@ -443,7 +452,7 @@
     });
     const recommendation = byId("adaptiveRecommendation");
     if (recommendation && adaptive?.ok) {
-      recommendation.textContent = `Adaptive start: AI ${adaptive.recommendation?.side || "A"} — ${adaptive.recommendation?.reason || "No recommendation."}`;
+      recommendation.textContent = formatAdaptiveRecommendation(adaptive);
     }
     return response.health;
   }
