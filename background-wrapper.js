@@ -40,6 +40,17 @@ if (
   throw new Error("AI Bridge dynamic-agent coordinator failed to initialize.");
 }
 
+importScripts("dynamic-state-restart-hardening.js");
+if (
+  globalThis.__AI_BRIDGE_DYNAMIC_RESTART_HYDRATION_V1__?.version !== 1 ||
+  globalThis.__AI_BRIDGE_DYNAMIC_RESTART_HYDRATION_V1__?.restoresPersistedMainSide !== true ||
+  globalThis.__AI_BRIDGE_DYNAMIC_RESTART_HYDRATION_V1__?.restoresPersistedPhaseLists !== true ||
+  globalThis.__AI_BRIDGE_DYNAMIC_RESTART_HYDRATION_V1__?.restoresPersistedCycleParticipants !== true ||
+  globalThis.__AI_BRIDGE_DYNAMIC_RESTART_HYDRATION_V1__?.restoresServiceWorkerQueue !== false
+) {
+  throw new Error("AI Bridge dynamic restart hydration failed to initialize.");
+}
+
 importScripts("coordinator-dynamic-semantics.js");
 if (
   globalThis.__AI_BRIDGE_DYNAMIC_SEMANTICS_V1__?.version !== 2 ||
