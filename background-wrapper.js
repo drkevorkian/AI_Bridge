@@ -72,6 +72,7 @@ if (
   globalThis.__AI_BRIDGE_VIEWPOINT_RUNTIME_V1__?.revalidatesIdentityAtDispatch !== true ||
   globalThis.__AI_BRIDGE_VIEWPOINT_RUNTIME_V1__?.cancelsQueuedOnTabClose !== true ||
   globalThis.__AI_BRIDGE_VIEWPOINT_RUNTIME_V1__?.restoresQueuedSendsAfterWorkerRestart !== false ||
+  globalThis.__AI_BRIDGE_VIEWPOINT_RUNTIME_V1__?.clearsTransientIdentityOnDispatchFailure !== true ||
   globalThis.__AI_BRIDGE_VIEWPOINT_RUNTIME_V1__?.queueTelemetryReadOnly !== true ||
   globalThis.__AI_BRIDGE_VIEWPOINT_RUNTIME_V1__?.queueTelemetryEphemeral !== true ||
   globalThis.__AI_BRIDGE_VIEWPOINT_RUNTIME_V1__?.queueTelemetryContainsSensitiveIdentity !== false ||
