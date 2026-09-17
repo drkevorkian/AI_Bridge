@@ -25,27 +25,189 @@ jobs:
         uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: "22"
-      - name: Apply only the reviewed background.js patch
+      - name: Apply reviewed source transforms
         shell: bash
         run: |
           set -euo pipefail
-          if ! grep -q 'credentials: "include"' background.js && ! grep -q 'response_type: "token"' background.js; then
-            echo "Source fold is already present; nothing to do."
-            exit 0
-          fi
-          git apply --check --include=background.js patches/p0-background-source-fold.diff
-          git apply --include=background.js patches/p0-background-source-fold.diff
+          python3 <<'PY'
+          from pathlib import Path
+
+          path = Path("background.js")
+          src = path.read_text(encoding="utf-8")
+
+          def replace_once(old: str, new: str, label: str):
+              global src
+              count = src.count(old)
+              if count != 1:
+                  raise SystemExit(f"{label}: expected exactly one match, found {count}")
+              src = src.replace(old, new, 1)
+
+          def replace_region(start: str, end: str, replacement: str, label: str):
+              global src
+              if src.count(start) != 1 or src.count(end) < 1:
+                  raise SystemExit(f"{label}: source anchors are not unique/present")
+              a = src.index(start)
+              b = src.index(end, a)
+              src = src[:a] + replacement.rstrip() + "\n\n" + src[b:]
+
+          replace_once(
+              'function sanitizeArtifactName(raw, fallback = "artifact.bin") {\n  const value = String(raw || fallback).replace(/[\\\\/\\0]/g, "_").trim();\n  return (value || fallback).slice(0, 240);\n}',
+              '''function sanitizeArtifactName(raw, fallback = "artifact.bin") {
+            const value = String(raw || fallback)
+              .replace(/[\\/\0]/g, "_")
+              .replace(/^[A-Za-z]:/, "_")
+              .replace(/[:*?"<>|\u0001-\u001f]/g, "_")
+              .trim();
+            return (value || fallback).slice(0, 240);
+          }''',
+              "artifact filename sanitizer"
+          )
+
+          replace_region(
+              'function artifactFetchHostAllowed(rawUrl) {',
+              'function artifactSummary(record) {',
+              '''function artifactFetchHostAllowed(rawUrl) {
+            try {
+              const url = new URL(String(rawUrl || ""));
+              if (url.protocol !== "https:") return false;
+              if (url.username || url.password) return false;
+              if (url.port && url.port !== "443") return false;
+              const host = url.hostname.toLowerCase();
+              if (!host || host.includes("..")) return false;
+              const exact = new Set([
+                "chatgpt.com",
+                "chat.openai.com",
+                "grok.com",
+                "assets.grok.com",
+                "assets.grokusercontent.com",
+                "claude.ai",
+                "gemini.google.com",
+                "copilot.microsoft.com"
+              ]);
+              if (exact.has(host)) return true;
+              return [".oaiusercontent.com", ".googleusercontent.com", ".anthropic.com"]
+                .some(suffix => host.length > suffix.length && host.endsWith(suffix));
+            } catch (_) {
+              return false;
+            }
+          }
+
+          async function readResponseBytesBounded(response, maxBytes = MAX_ARTIFACT_FILE_BYTES) {
+            const body = response?.body;
+            if (!body?.getReader) {
+              const bytes = new Uint8Array(await response.arrayBuffer());
+              if (!bytes.length || bytes.byteLength > maxBytes) throw new Error("Artifact is empty or too large.");
+              return bytes;
+            }
+            const reader = body.getReader();
+            const chunks = [];
+            let total = 0;
+            try {
+              while (true) {
+                const { value, done } = await reader.read();
+                if (done) break;
+                const chunk = value instanceof Uint8Array ? value : new Uint8Array(value || 0);
+                total += chunk.byteLength;
+                if (total > maxBytes) {
+                  try { await reader.cancel("Artifact exceeds relay limit"); } catch (_) {}
+                  throw new Error("Artifact exceeds the per-file relay limit.");
+                }
+                if (chunk.byteLength) chunks.push(chunk);
+              }
+            } finally {
+              try { reader.releaseLock(); } catch (_) {}
+            }
+            if (!total) throw new Error("Artifact is empty.");
+            const output = new Uint8Array(total);
+            let offset = 0;
+            for (const chunk of chunks) {
+              output.set(chunk, offset);
+              offset += chunk.byteLength;
+            }
+            return output;
+          }
+
+          async function fetchArtifactInBackground(rawUrl, name = "artifact.bin", mime = "") {
+            const requestedUrl = String(rawUrl || "");
+            if (!/^https:/i.test(requestedUrl)) throw new Error("Artifact URL must be HTTPS.");
+            if (!artifactFetchHostAllowed(requestedUrl)) throw new Error("Artifact URL host is not permitted by AI Bridge.");
+            const controller = new AbortController();
+            const timer = setTimeout(() => controller.abort(), 20000);
+            try {
+              const response = await fetch(requestedUrl, {
+                credentials: "omit",
+                redirect: "follow",
+                referrerPolicy: "no-referrer",
+                cache: "no-store",
+                signal: controller.signal
+              });
+              if (!artifactFetchHostAllowed(response.url)) throw new Error("Artifact fetch redirected off the HTTPS allowlist.");
+              if (!response.ok) throw new Error(`Artifact fetch failed with HTTP ${response.status}.`);
+              const declared = Number(response.headers.get("content-length") || 0);
+              if (Number.isFinite(declared) && declared > MAX_ARTIFACT_FILE_BYTES) {
+                throw new Error("Artifact exceeds the per-file relay limit.");
+              }
+              const bytes = await readResponseBytesBounded(response, MAX_ARTIFACT_FILE_BYTES);
+              return {
+                name: sanitizeArtifactName(name, "artifact.bin"),
+                mime: String(mime || response.headers.get("content-type") || "application/octet-stream")
+                  .replace(/[\r\n]/g, "")
+                  .slice(0, 160),
+                size: bytes.byteLength,
+                dataBase64: bytesToBase64(bytes)
+              };
+            } finally {
+              clearTimeout(timer);
+            }
+          }''',
+              "artifact worker implementation"
+          )
+
+          replace_once(
+              'const ALLOWED_CLOUD_LAYOUTS = new Set(["studio", "classic"]);',
+              'const ALLOWED_CLOUD_LAYOUTS = new Set(["studio", "classic", "focus"]);',
+              "Focus cloud layout allowlist"
+          )
+
+          replace_region(
+              'async function launchGoogleWebAuth({ clientId, interactive }) {',
+              'function driveUrlAllowed(rawUrl) {',
+              '''async function launchGoogleWebAuth({ clientId, interactive }) {
+            await clearPendingOauthState();
+            throw new Error("Google Drive Web implicit OAuth is disabled. Configure a Chrome Extension OAuth client in manifest.oauth2, or use Chrome Sync.");
+          }''',
+              "legacy implicit Google OAuth"
+          )
+
+          replace_region(
+              '    if (msg.type === "AI_BRIDGE_FETCH_ARTIFACT") {',
+              '    if (msg.type === "AI_BRIDGE_DOWNLOAD_ARTIFACT") {',
+              '''    if (msg.type === "AI_BRIDGE_FETCH_ARTIFACT") {
+              requireBoundSessionTab(sender, "Artifact fetch");
+              const requested = String(msg.url || "");
+              if (!/^https:/i.test(requested)) throw new Error("Artifact worker fallback accepts HTTPS URLs only.");
+              if (msg.observed !== true) throw new Error("Artifact worker fallback requires an observed provider-page URL.");
+              if (!artifactFetchHostAllowed(requested)) throw new Error("Artifact URL host is not permitted by AI Bridge.");
+              const artifact = await fetchArtifactInBackground(requested, msg.name, msg.mime);
+              sendResponse({ ok: true, artifact });
+              return;
+            }''',
+              "artifact message handler"
+          )
+
+          if 'credentials: "include"' in src:
+              raise SystemExit('credentials:"include" remains in background.js')
+          if 'response_type: "token"' in src:
+              raise SystemExit('response_type:"token" remains in background.js')
+          if 'host === "x.ai"' in src or 'endsWith(".x.ai")' in src or 'endsWith(".microsoft.com")' in src:
+              raise SystemExit('broad artifact host allowlist remains in background.js')
+          if 'const ALLOWED_CLOUD_LAYOUTS = new Set(["studio", "classic", "focus"]);' not in src:
+              raise SystemExit('Focus is missing from source cloud layout allowlist')
+
+          path.write_text(src, encoding="utf-8")
+          PY
           node --check background.js
-          if grep -q 'credentials: "include"' background.js; then
-            echo "Refusing commit: credentials include remains in background.js" >&2
-            exit 1
-          fi
-          if grep -q 'response_type: "token"' background.js; then
-            echo "Refusing commit: implicit OAuth token response remains in background.js" >&2
-            exit 1
-          fi
           git diff --check
-          git status --short
           test "$(git diff --name-only | tr -d '\r')" = "background.js"
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
