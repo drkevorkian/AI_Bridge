@@ -12,15 +12,18 @@ const runtimeSrc = fs.readFileSync(path.join(root, "viewpoint-runtime.js"), "utf
 assert.ok(wrapper.includes('importScripts("viewpoint-runtime.js")'));
 assert.match(runtimeSrc, /enablesDuplicateProviders:\s*true/);
 assert.match(runtimeSrc, /validatesBindingsBeforeSend:\s*true/);
+assert.match(runtimeSrc, /revalidatesIdentityAtDispatch:\s*true/);
 assert.match(runtimeSrc, /stampsBeforeCommitSave:\s*true/);
 assert.match(runtimeSrc, /capturesIdentityBeforeDispatch:\s*true/);
 assert.match(runtimeSrc, /failsClosedWithoutDispatchIdentityWhenEnabled:\s*true/);
+assert.match(wrapper, /revalidatesIdentityAtDispatch\s*!==\s*true/);
 
 function load(tabs) {
   const order = [];
   const savedSnapshots = [];
   const context = vm.createContext({
     URL, console, Object, Array, Number, String, Boolean, Set, Map, Promise, Error,
+    setTimeout,
     SIDES: Object.keys(tabs),
     state: { transcript: [], nextSeq: 1 },
     tabForSide(side) {
@@ -83,6 +86,7 @@ const ctx = load({
 assert.equal(ctx.__AI_BRIDGE_VIEWPOINT_RUNTIME_V1__.enablesDuplicateProviders, true);
 assert.equal(ctx.__AI_BRIDGE_VIEWPOINT_RUNTIME_V1__.failsClosedWithoutDispatchIdentityWhenEnabled, true);
 assert.equal(ctx.__AI_BRIDGE_VIEWPOINT_RUNTIME_V1__.validatesBindingsBeforeSend, true);
+assert.equal(ctx.__AI_BRIDGE_VIEWPOINT_RUNTIME_V1__.revalidatesIdentityAtDispatch, true);
 assert.equal(ctx.__AI_BRIDGE_AGENT_CAPABILITIES__.duplicateProviderAgentsEnabled, true);
 assert.throws(() => ctx.requireViewpointDispatchIdentity(null), /trusted conversation identity/i);
 
@@ -116,6 +120,23 @@ const first = sameFamily.sendToSide("A", "one");
 const second = sameFamily.sendToSide("D", "two");
 await Promise.all([first, second]);
 assert.deepEqual(sameFamily.__order, ["A", "done:A", "D", "done:D"], "same-family sends must not overlap");
+
+const navigatedWhileQueued = load({
+  A: { id: 11, url: "https://chatgpt.com/c/one" },
+  D: { id: 44, url: "https://chatgpt.com/c/two" },
+  B: { id: 22, url: "https://grok.com/" }
+});
+const blockingSend = navigatedWhileQueued.sendToSide("A", "hold queue");
+const queuedSend = navigatedWhileQueued.sendToSide("D", "must not cross threads");
+// Allow both wrappers to snapshot their intended identities and enqueue D behind A.
+await new Promise(resolve => setTimeout(resolve, 1));
+navigatedWhileQueued.__tabs.D.url = "https://chatgpt.com/c/changed-while-queued";
+await blockingSend;
+await assert.rejects(() => queuedSend, /binding changed while queued|preserve conversation provenance/i);
+assert.deepEqual(navigatedWhileQueued.__order, ["A", "done:A"],
+  "a queued send must not reach the provider after its tab/thread identity changes");
+assert.equal(navigatedWhileQueued.state.viewpointIdentityBySide?.D, undefined,
+  "rejected queued sends must not publish stale provenance into coordinator state");
 
 const duplicateThread = load({
   A: { id: 11, url: "https://chatgpt.com/c/shared?x=1" },
