@@ -10,7 +10,10 @@ const overlaySrc = fs.readFileSync(path.join(root, "coordinator-dynamic-agents.j
 const wrapper = fs.readFileSync(path.join(root, "background-wrapper.js"), "utf8");
 const background = fs.readFileSync(path.join(root, "background.js"), "utf8");
 
-assert.match(background, /SIDES = \["A", "B", "C"\]/);
+assert.match(background, /var SIDES = \["A", "B", "C"\]/);
+assert.match(background, /agentCount: 3/);
+assert.match(background, /tabD: null/);
+assert.match(background, /tabE: null/);
 assert.ok(wrapper.includes('importScripts("coordinator-dynamic-agents.js")'));
 assert.ok(wrapper.indexOf('importScripts("background.js")') < wrapper.indexOf('importScripts("coordinator-dynamic-agents.js")'));
 assert.ok(wrapper.indexOf('importScripts("coordinator-dynamic-agents.js")') < wrapper.indexOf('importScripts("artifact-fetch-runtime-hardening.js")'));
@@ -99,6 +102,27 @@ await shrinking.applyAgentCount(2, { persist: false });
 same(Array.from(shrinking.SIDES), ["A", "B"]);
 assert.equal(shrinking.state.startSide, "A");
 same(shrinking.sanitizeForceRelaySides(["A", "C", "E", "A"]), ["A"]);
+
+const legacy = loadOverlay({
+  stateVersion: 3,
+  tabA: 11,
+  tabB: 22,
+  tabC: 33,
+  startSide: "B",
+  currentSide: "C"
+});
+assert.equal(legacy.state.agentCount, 3, "v1.17.1 snapshots without agentCount stay at 3");
+assert.equal(legacy.state.labelD, "AI D");
+assert.equal(legacy.state.jobE, "");
+assert.equal(legacy.state.startSide, "B");
+same(Array.from(legacy.SIDES), ["A", "B", "C"]);
+
+legacy.SIDES = ["should-be-overwritten"];
+await legacy.applyAgentCount(4, { persist: true });
+same(Array.from(legacy.SIDES), ["A", "B", "C", "D"]);
+assert.equal(legacy.saved, true);
+assert.equal(legacy.state.tabD, null);
+assert.equal(legacy.nextSide("D"), "A");
 
 assert.equal(migrated.__AI_BRIDGE_DYNAMIC_AGENTS_V1__.uniqueTabBinding, true);
 assert.equal(migrated.__AI_BRIDGE_DYNAMIC_AGENTS_V1__.duplicateProviderAgentsEnabled, false);

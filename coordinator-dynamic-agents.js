@@ -41,8 +41,7 @@
     try {
       SIDES = next;
     } catch (_) {
-      // background.js still has `const SIDES`. Replaced helpers use liveSides();
-      // A must change that binding to var before count>3 is fully routed.
+      // Fail closed if background.js is still a const binding. Helpers use liveSides().
     }
     return next;
   }
