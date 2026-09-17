@@ -31,13 +31,46 @@ const sandbox = {
   String,
   Boolean,
   Number,
+  URL,
   Object,
   Promise,
   Error,
   state: {
+    tabA: 101,
     generationIdBySide: { A: "generation-1" },
+    viewpointIdentityBySide: {
+      A: {
+        provenanceId: "chatgpt:tab:101:https://chatgpt.com/c/a",
+        threadKey: "https://chatgpt.com/c/a",
+        providerFamily: "chatgpt",
+        boundTabId: 101
+      }
+    },
     checkpointPending: false,
     checkpointRequestId: null
+  },
+  __AI_BRIDGE_AGENT_CAPABILITIES__: {
+    version: 1,
+    conversationIdentity({ side, tabId, url }) {
+      try {
+        const parsed = new URL(String(url || ""));
+        if (parsed.protocol !== "https:" || parsed.hostname !== "chatgpt.com") return null;
+        const pathName = parsed.pathname.replace(/\/+$/, "") || "/";
+        const threadKey = `${parsed.protocol}//${parsed.hostname}${pathName}`;
+        return {
+          side,
+          tabId,
+          familyId: "chatgpt",
+          threadKey,
+          provenanceId: `chatgpt:tab:${tabId}:${threadKey}`
+        };
+      } catch (_) {
+        return null;
+      }
+    }
+  },
+  tabForSide(side) {
+    return sandbox.state[`tab${side}`];
   },
   appendLog() {},
   sideForTab(tabId) {
@@ -92,7 +125,7 @@ vm.createContext(sandbox);
 vm.runInContext(hardening, sandbox, { filename: "coordinator-generation-hardening.js" });
 
 const contract = sandbox.__AI_BRIDGE_GENERATION_SECURITY__;
-assert.equal(contract.version, 4);
+assert.equal(contract.version, 5);
 assert.equal(contract.failClosedWhenUnarmed, true);
 assert.equal(contract.durablyArmsGenerationBeforeProviderSend, true);
 assert.equal(contract.providerSendBoundaryGuarded, true);
@@ -104,6 +137,8 @@ assert.equal(contract.durablyPersistsConsumedGenerationBeforeCommit, true);
 assert.equal(contract.preservesNewerGenerationArmedByCommit, true);
 assert.equal(contract.preventsSequentialReplayWindow, true);
 assert.equal(contract.preventsRestartGenerationResurrection, true);
+assert.equal(contract.requiresAutomaticResponsePageIdentity, true);
+assert.equal(contract.rejectsCrossThreadSpaResponseBeforeConsumption, true);
 
 // A coordinator-owned provider prompt cannot cross chrome.tabs.sendMessage until
 // its currently armed generation is durable. The base sendMessage stub observes
@@ -166,7 +201,7 @@ assert.equal(persisted.length, persistedBeforeFailure + 1);
 assert.equal(persisted.at(-1).generationIdBySide.A, null);
 
 sandbox.state.generationIdBySide.A = "generation-1";
-const first = await sandbox.handleCompletedResponse("A", "first response", { generationId: "generation-1" });
+const first = await sandbox.handleCompletedResponse("A", "first response", { generationId: "generation-1", pageUrl: "https://chatgpt.com/c/a" });
 assert.equal(first.ok, true);
 assert.equal(calls.length, 1);
 assert.equal(calls[0].armedDuringCommit, null, "accepted generation must be consumed before base commit logic runs");
@@ -175,7 +210,7 @@ assert.equal(persisted.at(-1).generationIdBySide.A, null);
 assert.equal(sandbox.state.generationIdBySide.A, "generation-2", "a newer generation armed during commit must survive");
 
 const writesAfterFirstCommit = persisted.length;
-const replay = await sandbox.handleCompletedResponse("A", "late mutation", { generationId: "generation-1" });
+const replay = await sandbox.handleCompletedResponse("A", "late mutation", { generationId: "generation-1", pageUrl: "https://chatgpt.com/c/a" });
 assert.equal(replay.ok, false);
 assert.equal(replay.ignored, true);
 assert.equal(replay.staleGeneration, true);
@@ -185,13 +220,13 @@ assert.equal(sandbox.state.generationIdBySide.A, "generation-2");
 
 behavior = "no-rearm";
 sandbox.state.generationIdBySide.A = "generation-3";
-const second = await sandbox.handleCompletedResponse("A", "second response", { generationId: "generation-3" });
+const second = await sandbox.handleCompletedResponse("A", "second response", { generationId: "generation-3", pageUrl: "https://chatgpt.com/c/a" });
 assert.equal(second.ok, true);
 assert.equal(calls.at(-1).armedDuringCommit, null);
 assert.equal(calls.at(-1).persistedBeforeCommit, null);
 assert.equal(persisted.at(-1).generationIdBySide.A, null);
 assert.equal(sandbox.state.generationIdBySide.A, null);
-const secondReplay = await sandbox.handleCompletedResponse("A", "second response changed", { generationId: "generation-3" });
+const secondReplay = await sandbox.handleCompletedResponse("A", "second response changed", { generationId: "generation-3", pageUrl: "https://chatgpt.com/c/a" });
 assert.equal(secondReplay.staleGeneration, true);
 assert.equal(calls.length, 2);
 
@@ -199,7 +234,7 @@ behavior = "checkpoint";
 sandbox.state.generationIdBySide.A = "checkpoint-generation";
 sandbox.state.checkpointPending = true;
 sandbox.state.checkpointRequestId = "checkpoint-generation";
-const checkpoint = await sandbox.handleCompletedResponse("A", "checkpoint", { generationId: "checkpoint-generation" });
+const checkpoint = await sandbox.handleCompletedResponse("A", "checkpoint", { generationId: "checkpoint-generation", pageUrl: "https://chatgpt.com/c/a" });
 assert.equal(checkpoint.ok, true);
 assert.equal(calls.at(-1).armedDuringCommit, null);
 assert.equal(calls.at(-1).persistedBeforeCommit, null);
