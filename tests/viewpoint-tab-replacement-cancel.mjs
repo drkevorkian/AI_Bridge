@@ -7,6 +7,7 @@ import { fileURLToPath } from "node:url";
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const capsSrc = fs.readFileSync(path.join(root, "agent-capabilities.js"), "utf8");
 const runtimeSrc = fs.readFileSync(path.join(root, "viewpoint-runtime.js"), "utf8");
+const wrapperSrc = fs.readFileSync(path.join(root, "background-wrapper.js"), "utf8");
 
 assert.match(runtimeSrc, /cancelsQueuedOnTabReplace:\s*true/,
   "viewpoint runtime must advertise immediate cancellation when Chrome replaces a queued target tab");
@@ -14,6 +15,8 @@ assert.match(runtimeSrc, /chrome\?\.tabs\?\.onReplaced\?\.addListener/,
   "viewpoint runtime must subscribe to tabs.onReplaced");
 assert.match(runtimeSrc, /cancelQueuedForTab\(removedTabId,\s*"replaced"\)/,
   "replacement cancellation must use the retired tab id, never the replacement id");
+assert.match(wrapperSrc, /__AI_BRIDGE_VIEWPOINT_RUNTIME_V1__\?\.cancelsQueuedOnTabReplace\s*!==\s*true/,
+  "service-worker bootstrap must fail closed if tab-replacement queue cancellation is missing");
 
 function delay(ms) {
   return new Promise(resolve => setTimeout(resolve, ms));
