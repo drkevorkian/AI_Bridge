@@ -11,6 +11,11 @@ const wrapper = fs.readFileSync(path.join(root, "background-wrapper.js"), "utf8"
 
 assert.match(background, /const task = \(\) => handleCompletedResponse\(side, text,/);
 assert.match(background, /responseCommitQueue = responseCommitQueue\.catch\(\(\) => \{\}\)\.then\(task\)/);
+assert.match(background, /state\.generationIdBySide\[side\] = generationId;[\s\S]*chrome\.tabs\.sendMessage\(Number\(tabId\), \{ type: "AI_BRIDGE_SEND", text, artifacts, generationId \}\)/);
+assert.match(wrapper, /durablyArmsGenerationBeforeProviderSend !== true/);
+assert.match(wrapper, /providerSendBoundaryGuarded !== true/);
+assert.match(wrapper, /rechecksArmedGenerationAfterPersistence !== true/);
+assert.match(wrapper, /durablyClearsFailedDispatchGeneration !== true/);
 assert.match(wrapper, /rechecksGenerationAtSerializedCommit !== true/);
 assert.match(wrapper, /consumesAcceptedGenerationBeforeCommit/);
 assert.match(wrapper, /durablyPersistsConsumedGenerationBeforeCommit/);
@@ -18,19 +23,38 @@ assert.match(wrapper, /preventsRestartGenerationResurrection/);
 
 const calls = [];
 const persisted = [];
+const providerCalls = [];
 let behavior = "rearm";
 const sandbox = {
   console,
   Date,
   String,
   Boolean,
+  Number,
   Object,
+  Promise,
+  Error,
   state: {
     generationIdBySide: { A: "generation-1" },
     checkpointPending: false,
     checkpointRequestId: null
   },
   appendLog() {},
+  sideForTab(tabId) {
+    return Number(tabId) === 101 ? "A" : null;
+  },
+  chrome: {
+    tabs: {
+      async sendMessage(tabId, message) {
+        providerCalls.push({
+          tabId,
+          message: { ...message },
+          persistedGeneration: persisted.at(-1)?.generationIdBySide?.A
+        });
+        return { ok: true };
+      }
+    }
+  },
   generationMatches(expectedId, incomingId) {
     const expected = String(expectedId || "");
     if (!expected) return true;
@@ -38,6 +62,15 @@ const sandbox = {
   },
   async saveState() {
     persisted.push(JSON.parse(JSON.stringify(sandbox.state)));
+  },
+  async sendToSide(side, text) {
+    if (text === "fail") {
+      // Model the viewpoint/runtime failure cleanup that occurs before the final
+      // send error propagates into generation hardening.
+      sandbox.state.generationIdBySide[side] = null;
+      throw new Error("provider send failed");
+    }
+    return { ok: true };
   },
   async handleCompletedResponse(side, text, options) {
     calls.push({
@@ -59,8 +92,12 @@ vm.createContext(sandbox);
 vm.runInContext(hardening, sandbox, { filename: "coordinator-generation-hardening.js" });
 
 const contract = sandbox.__AI_BRIDGE_GENERATION_SECURITY__;
-assert.equal(contract.version, 3);
+assert.equal(contract.version, 4);
 assert.equal(contract.failClosedWhenUnarmed, true);
+assert.equal(contract.durablyArmsGenerationBeforeProviderSend, true);
+assert.equal(contract.providerSendBoundaryGuarded, true);
+assert.equal(contract.rechecksArmedGenerationAfterPersistence, true);
+assert.equal(contract.durablyClearsFailedDispatchGeneration, true);
 assert.equal(contract.rechecksGenerationAtSerializedCommit, true);
 assert.equal(contract.consumesAcceptedGenerationBeforeCommit, true);
 assert.equal(contract.durablyPersistsConsumedGenerationBeforeCommit, true);
@@ -68,21 +105,82 @@ assert.equal(contract.preservesNewerGenerationArmedByCommit, true);
 assert.equal(contract.preventsSequentialReplayWindow, true);
 assert.equal(contract.preventsRestartGenerationResurrection, true);
 
+// A coordinator-owned provider prompt cannot cross chrome.tabs.sendMessage until
+// its currently armed generation is durable. The base sendMessage stub observes
+// storage only after the guard completes.
+sandbox.state.generationIdBySide.A = "generation-arm";
+const persistedBeforeArm = persisted.length;
+await sandbox.chrome.tabs.sendMessage(101, {
+  type: "AI_BRIDGE_SEND",
+  text: "prompt",
+  artifacts: [],
+  generationId: "generation-arm"
+});
+assert.equal(persisted.length, persistedBeforeArm + 1);
+assert.equal(providerCalls.at(-1).persistedGeneration, "generation-arm");
+assert.equal(persisted.at(-1).generationIdBySide.A, "generation-arm");
+
+// Transport-only smoke traffic may exercise AI_BRIDGE_SEND without participating
+// in coordinator routing. An unarmed synthetic generation is not a coordinator
+// capability and therefore passes through without a storage mutation.
+sandbox.state.generationIdBySide.A = null;
+const persistedBeforeSynthetic = persisted.length;
+const callsBeforeSynthetic = providerCalls.length;
+await sandbox.chrome.tabs.sendMessage(999, {
+  type: "AI_BRIDGE_SEND",
+  text: "transport smoke",
+  artifacts: [],
+  generationId: "synthetic-unarmed-generation"
+});
+assert.equal(persisted.length, persistedBeforeSynthetic);
+assert.equal(providerCalls.length, callsBeforeSynthetic + 1);
+
+// If a generation is coordinator-armed, its provider message must target that
+// side's current bound tab. A cross-side/mismatched tab fails before provider IO.
+sandbox.state.generationIdBySide = { A: null, B: "generation-b" };
+const callsBeforeMismatch = providerCalls.length;
+await assert.rejects(
+  () => sandbox.chrome.tabs.sendMessage(101, {
+    type: "AI_BRIDGE_SEND",
+    text: "wrong binding",
+    artifacts: [],
+    generationId: "generation-b"
+  }),
+  /does not target its current bound tab/
+);
+assert.equal(providerCalls.length, callsBeforeMismatch);
+
+// Unrelated provider traffic is not intercepted by the generation persistence
+// boundary and therefore causes no storage write.
+sandbox.state.generationIdBySide = { A: null, B: null };
+const persistedBeforePing = persisted.length;
+await sandbox.chrome.tabs.sendMessage(101, { type: "AI_BRIDGE_PING" });
+assert.equal(persisted.length, persistedBeforePing);
+
+// A final send failure is already cleared in memory by viewpoint hardening; the
+// outer generation wrapper must make that rollback durable before rethrowing.
+sandbox.state.generationIdBySide.A = "failed-generation";
+const persistedBeforeFailure = persisted.length;
+await assert.rejects(() => sandbox.sendToSide("A", "fail"), /provider send failed/);
+assert.equal(persisted.length, persistedBeforeFailure + 1);
+assert.equal(persisted.at(-1).generationIdBySide.A, null);
+
+sandbox.state.generationIdBySide.A = "generation-1";
 const first = await sandbox.handleCompletedResponse("A", "first response", { generationId: "generation-1" });
 assert.equal(first.ok, true);
 assert.equal(calls.length, 1);
 assert.equal(calls[0].armedDuringCommit, null, "accepted generation must be consumed before base commit logic runs");
 assert.equal(calls[0].persistedBeforeCommit, null, "consumed generation must be durable before base commit logic runs");
-assert.equal(persisted.length, 1);
-assert.equal(persisted[0].generationIdBySide.A, null);
+assert.equal(persisted.at(-1).generationIdBySide.A, null);
 assert.equal(sandbox.state.generationIdBySide.A, "generation-2", "a newer generation armed during commit must survive");
 
+const writesAfterFirstCommit = persisted.length;
 const replay = await sandbox.handleCompletedResponse("A", "late mutation", { generationId: "generation-1" });
 assert.equal(replay.ok, false);
 assert.equal(replay.ignored, true);
 assert.equal(replay.staleGeneration, true);
 assert.equal(calls.length, 1);
-assert.equal(persisted.length, 1, "stale replay must not write storage");
+assert.equal(persisted.length, writesAfterFirstCommit, "stale replay must not write storage");
 assert.equal(sandbox.state.generationIdBySide.A, "generation-2");
 
 behavior = "no-rearm";
@@ -120,7 +218,9 @@ const matcherOnly = {
   globalThis: null,
   String,
   Boolean,
-  Object
+  Object,
+  Promise,
+  Error
 };
 matcherOnly.globalThis = matcherOnly;
 vm.createContext(matcherOnly);
@@ -128,7 +228,8 @@ vm.runInContext('function generationMatches(expectedId, incomingId) { const expe
 vm.runInContext(hardening, matcherOnly, { filename: "coordinator-generation-hardening.js" });
 assert.equal(matcherOnly.generationMatches("", "old"), false);
 assert.equal(matcherOnly.generationMatches("x", "x"), true);
+assert.equal(matcherOnly.__AI_BRIDGE_GENERATION_SECURITY__.durablyArmsGenerationBeforeProviderSend, false);
 assert.equal(matcherOnly.__AI_BRIDGE_GENERATION_SECURITY__.rechecksGenerationAtSerializedCommit, false);
 assert.equal(matcherOnly.__AI_BRIDGE_GENERATION_SECURITY__.durablyPersistsConsumedGenerationBeforeCommit, false);
 
-console.log("response-generation-consumption: durable restart-safe ok");
+console.log("response-generation-consumption: durable arm/consume restart-safe ok");
