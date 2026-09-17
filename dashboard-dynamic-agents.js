@@ -467,6 +467,10 @@
     return adaptive.health;
   }
 
+  function getCommittedHealth() {
+    return lastHealth;
+  }
+
   function installStartGuard() {
     const start = byId("start");
     if (!start || start.dataset.dynamicGuardBound) return;
@@ -524,8 +528,10 @@
       duplicateThreadStartBlock: true,
       atomicHealthRecommendation: true,
       latestRefreshWins: true,
+      committedHealthSnapshot: true,
       renderRoster,
-      refreshHealth
+      refreshHealth,
+      getCommittedHealth
     });
   }
 
