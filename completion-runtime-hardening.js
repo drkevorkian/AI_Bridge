@@ -48,9 +48,17 @@
     }
   }
 
+  function liveSidesForCompletionHolds() {
+    const roster = typeof SIDES === "undefined" ? null : SIDES;
+    if (Array.isArray(roster) && roster.length) return [...roster];
+    const dynamic = globalThis.__AI_BRIDGE_DYNAMIC_AGENTS_V1__;
+    if (typeof dynamic?.liveSides === "function") return [...dynamic.liveSides()];
+    return ["A", "B", "C"];
+  }
+
   async function cancelProviderCompletionHolds(reason = "bridge-paused-or-stopped") {
     baselineByGeneration.clear();
-    const tasks = ["A", "B", "C"].map(async side => {
+    const tasks = liveSidesForCompletionHolds().map(async side => {
       const tabId = Number(state?.[`tab${side}`]);
       if (!Number.isInteger(tabId) || tabId <= 0) return;
       try {

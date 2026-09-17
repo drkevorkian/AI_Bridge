@@ -31,7 +31,10 @@ function formatDurationMs(ms) {
 function liveRoundLine(s) {
   const started = s?.roundStartedAtBySide || {};
   const parts = [];
-  for (const side of ["A", "B", "C"]) {
+  const sides = Array.isArray(s?.activeSides) && s.activeSides.length
+    ? s.activeSides.filter(side => /^[A-E]$/.test(String(side)))
+    : ["A", "B", "C"];
+  for (const side of sides) {
     const startedAt = Number(started[side]);
     if (Number.isFinite(startedAt) && startedAt > 0) {
       const round = Math.max(1, Number(s?.roundNumberBySide?.[side]) || 1);
