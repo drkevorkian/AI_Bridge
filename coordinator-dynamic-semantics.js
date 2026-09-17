@@ -1,8 +1,8 @@
 (() => {
   "use strict";
 
-  // Replace leftover 3-agent wording and budgets with live-roster semantics.
-  // Does not change routing. Existing A/B/C behavior is the default roster.
+  // Replace leftover 3-agent wording, budgets, and explicit Mesh side targets
+  // with live-roster semantics while preserving the legacy A/B/C defaults.
   const FLAG = "__AI_BRIDGE_DYNAMIC_SEMANTICS_V1__";
   if (globalThis[FLAG]) return;
 
@@ -99,6 +99,36 @@
     };
   }
 
+  // The legacy Direct Mesh parser explicitly matches only [A-C] even though its
+  // label-based path already consults the live SIDES array. Intercept only the
+  // explicit side token so AI D/E work without replacing custom-label routing.
+  if (typeof resolveCommandTarget === "function") {
+    const baseResolveCommandTarget = resolveCommandTarget;
+    resolveCommandTarget = function dynamicResolveCommandTarget(raw, fromSide = null) {
+      const token = typeof normalizeTargetToken === "function"
+        ? normalizeTargetToken(raw)
+        : String(raw || "").trim().toLowerCase();
+      const match = token.match(/(?:^|\b)ai\s*[-:]?\s*([a-e])(?:\b|$)/i) || token.match(/^([a-e])$/i);
+      if (match) {
+        const side = String(match[1]).toUpperCase();
+        const sides = liveSides();
+        if (!sides.includes(side) || side === fromSide) return null;
+        return side;
+      }
+      return baseResolveCommandTarget(raw, fromSide);
+    };
+  }
+
+  if (typeof bridgeCommandProtocolText === "function") {
+    const baseBridgeCommandProtocolText = bridgeCommandProtocolText;
+    bridgeCommandProtocolText = function dynamicBridgeCommandProtocolText() {
+      const text = String(baseBridgeCommandProtocolText() || "");
+      if (!text) return text;
+      const targets = liveSides().map(side => `SEND TO: AI ${side}`).join("\n");
+      return text.replace(/SEND TO: AI A\nSEND TO: AI B\nSEND TO: AI C/g, targets);
+    };
+  }
+
   if (typeof requireBoundSessionTab === "function") {
     const baseRequire = requireBoundSessionTab;
     requireBoundSessionTab = function dynamicRequireBoundSessionTab(sender, action) {
@@ -170,8 +200,9 @@
   }
 
   globalThis[FLAG] = Object.freeze({
-    version: 1,
+    version: 2,
     liveRosterPrompts: true,
+    liveRosterMeshTargets: true,
     derivedTurnMinimums: true,
     cloudJobsThroughE: true
   });
