@@ -68,6 +68,12 @@ assert.match(css, /white-space:\s*nowrap/,
   "health labels should remain a single compact status line");
 assert.match(css, /overflow-wrap:\s*anywhere/,
   "adaptive recommendation text should remain contained on narrow layouts");
+assert.match(css, /grid-template-columns:\s*max-content\s+minmax\(72px,\s*120px\)\s+minmax\(0,\s*1fr\)/,
+  "the agent-count recommendation column must be allowed to shrink with the resizable control pane");
+assert.doesNotMatch(css, /grid-template-columns:\s*max-content\s+minmax\(72px,\s*120px\)\s+minmax\(220px,\s*1fr\)/,
+  "the agent-count row must not force a 220px recommendation minimum that overflows the supported 24% pane width");
+assert.match(dashboard, /const MIN_PANE_PCT = 24/,
+  "layout regression assumes the supported control pane can be resized down to 24 percent");
 assert.match(css, /--agent-d-accent:\s*color-mix/,
   "AI D should derive a theme-aware accent from the existing palette");
 assert.match(css, /--agent-e-accent:\s*color-mix/,
