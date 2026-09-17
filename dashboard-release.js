@@ -102,7 +102,11 @@
 
       for (const [group, panels] of focusPanels) {
         const active = group === tab;
+        const labelButton = focusButtons.get(group);
         for (const panel of panels) {
+          panel.setAttribute("role", "tabpanel");
+          if (labelButton?.id) panel.setAttribute("aria-labelledby", labelButton.id);
+          panel.tabIndex = 0;
           panel.setAttribute("aria-hidden", active ? "false" : "true");
           if ("inert" in panel) panel.inert = !active;
         }
@@ -193,7 +197,10 @@
         } else {
           for (const panels of focusPanels.values()) {
             for (const panel of panels) {
+              panel.removeAttribute("role");
+              panel.removeAttribute("aria-labelledby");
               panel.removeAttribute("aria-hidden");
+              panel.removeAttribute("tabindex");
               if ("inert" in panel) panel.inert = false;
             }
           }
@@ -212,10 +219,11 @@
     }).catch(() => {});
 
     window.__AI_BRIDGE_FOCUS_LAYOUT__ = Object.freeze({
-      version: 2,
+      version: 3,
       tabs: Object.freeze([...FOCUS_TABS]),
       preservesExistingControlIds: true,
       ariaControls: true,
+      tabpanelBinding: true,
       hiddenPanelsInert: true
     });
   } catch (error) {
