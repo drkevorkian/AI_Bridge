@@ -240,6 +240,83 @@
     };
   }
 
+  // Browser tab replacement is distinct from a normal close in Chrome's Tabs
+  // lifecycle. Capture the owning logical side synchronously at event time so a
+  // concurrent/base listener cannot erase the old binding before authority is
+  // revoked. The replacement tab is never implicitly trusted or auto-bound.
+  async function retireBoundTab(side, retiredTabId, cause = "closed") {
+    const current = liveState();
+    if (!current?.sessionActive || !ALL_SIDES.includes(side)) return false;
+
+    const retiredId = Number(retiredTabId);
+    const boundId = Number(current[`tab${side}`]);
+    if (Number.isInteger(retiredId) && retiredId > 0 && boundId === retiredId) {
+      current[`tab${side}`] = null;
+    }
+
+    current.generationIdBySide = expandMap(current.generationIdBySide, null);
+    current.generationIdBySide[side] = null;
+
+    if (current.viewpointIdentityBySide && typeof current.viewpointIdentityBySide === "object") {
+      const nextIdentity = { ...current.viewpointIdentityBySide };
+      delete nextIdentity[side];
+      current.viewpointIdentityBySide = nextIdentity;
+    }
+
+    if (typeof isBatchWorkMode === "function" && isBatchWorkMode() && Array.isArray(current.phasePendingSides) && current.phasePendingSides.includes(side)) {
+      current.phaseSentSides = Array.isArray(current.phaseSentSides)
+        ? current.phaseSentSides.filter(item => item !== side)
+        : [];
+      if (current.lastResponseBySide && typeof current.lastResponseBySide === "object") {
+        delete current.lastResponseBySide[side];
+      }
+    }
+
+    current.running = false;
+    current.paused = true;
+    current.pauseReason = cause === "replaced"
+      ? `AI ${side} tab was replaced by Chrome. Reselect the intended provider tab and press Resume.`
+      : `AI ${side} tab was closed. Open/reselect it and press Resume.`;
+    try {
+      if (typeof appendLog === "function") {
+        appendLog({ time: Date.now(), type: "system", text: current.pauseReason });
+      }
+    } catch (_) {}
+    if (typeof clearWatchdogAlarm === "function") await clearWatchdogAlarm();
+    if (typeof saveState === "function") await saveState();
+    return true;
+  }
+
+  function capturedSideForRetiredTab(tabId) {
+    const id = Number(tabId);
+    if (!Number.isInteger(id) || id <= 0) return null;
+    const current = liveState();
+    for (const side of liveSides(current?.agentCount)) {
+      if (Number(current?.[`tab${side}`]) === id) return side;
+    }
+    return null;
+  }
+
+  if (chrome?.tabs?.onRemoved?.addListener) {
+    chrome.tabs.onRemoved.addListener(tabId => {
+      const side = capturedSideForRetiredTab(tabId);
+      if (!side) return;
+      Promise.resolve(typeof stateReady !== "undefined" ? stateReady : undefined)
+        .then(() => retireBoundTab(side, tabId, "closed"))
+        .catch(error => console.warn("AI Bridge bound-tab close retirement failed", error));
+    });
+  }
+
+  if (chrome?.tabs?.onReplaced?.addListener) {
+    chrome.tabs.onReplaced.addListener((_addedTabId, removedTabId) => {
+      const side = capturedSideForRetiredTab(removedTabId);
+      if (!side) return;
+      Promise.resolve(typeof stateReady !== "undefined" ? stateReady : undefined)
+        .then(() => retireBoundTab(side, removedTabId, "replaced"))
+        .catch(error => console.warn("AI Bridge bound-tab replacement retirement failed", error));
+    });
+  }
+
   if (chrome?.runtime?.onMessage?.addListener) {
     chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
       if (!msg || msg.type !== "AI_BRIDGE_SET_AGENT_COUNT") return;
@@ -270,6 +347,9 @@
     migrateDynamicAgentState,
     applyAgentCount,
     uniqueTabBinding: true,
-    duplicateProviderAgentsEnabled: caps.duplicateProviderAgentsEnabled === true
+    duplicateProviderAgentsEnabled: caps.duplicateProviderAgentsEnabled === true,
+    revokesRetiredTabAuthority: true,
+    pausesOnBoundTabReplacement: true,
+    neverAutoTrustsReplacementTab: true
   });
 })();
