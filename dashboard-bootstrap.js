@@ -61,32 +61,41 @@
     }
 
     // Load dynamic roster wiring only after dashboard.js and dashboard-release.js
-    // have registered their legacy A/B/C handlers. Once the adapter reports its
-    // thread-conflict safeguards, expose the active viewpoint policy through a
-    // second packaged script. This keeps activation diagnostics truthful without
-    // making the dashboard marker authoritative for routing.
+    // have registered their legacy A/B/C handlers. The roster adapter is followed
+    // by two read-only dashboard adapters: one keeps work-mode help aligned to the
+    // live A-E roster, and one exposes viewpoint activation diagnostics. Routing
+    // authority remains in the centralized background binding evaluator.
     if (!document.querySelector("script[data-ai-bridge-dynamic-agents]")) {
       const script = document.createElement("script");
       script.src = chrome.runtime.getURL("dashboard-dynamic-agents.js");
       script.async = false;
       script.dataset.aiBridgeDynamicAgents = "true";
       script.addEventListener("load", () => {
-        if (document.querySelector("script[data-ai-bridge-viewpoint-activation]")) return;
-        const activation = document.createElement("script");
-        activation.src = chrome.runtime.getURL("dashboard-viewpoint-activation.js");
-        activation.async = false;
-        activation.dataset.aiBridgeViewpointActivation = "true";
-        document.body.appendChild(activation);
+        if (!document.querySelector("script[data-ai-bridge-dynamic-workmode-copy]")) {
+          const copy = document.createElement("script");
+          copy.src = chrome.runtime.getURL("dashboard-dynamic-workmode-copy.js");
+          copy.async = false;
+          copy.dataset.aiBridgeDynamicWorkmodeCopy = "true";
+          document.body.appendChild(copy);
+        }
+        if (!document.querySelector("script[data-ai-bridge-viewpoint-activation]")) {
+          const activation = document.createElement("script");
+          activation.src = chrome.runtime.getURL("dashboard-viewpoint-activation.js");
+          activation.async = false;
+          activation.dataset.aiBridgeViewpointActivation = "true";
+          document.body.appendChild(activation);
+        }
       }, { once: true });
       document.body.appendChild(script);
     }
   }, { once: true });
 
   window.__AI_BRIDGE_DASHBOARD_BOOTSTRAP__ = Object.freeze({
-    version: 5,
+    version: 6,
     providerScopedTabQuery: true,
     legacyWebOauthDisabled: true,
     dynamicAgentAdapter: true,
+    dynamicWorkModeCopyAdapter: true,
     viewpointActivationAdapter: true,
     layouts: Object.freeze(["studio", "classic", "focus"])
   });
