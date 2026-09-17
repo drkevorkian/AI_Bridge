@@ -165,7 +165,7 @@ if (
 
 importScripts("coordinator-generation-hardening.js");
 if (
-  globalThis.__AI_BRIDGE_GENERATION_SECURITY__?.version !== 4 ||
+  globalThis.__AI_BRIDGE_GENERATION_SECURITY__?.version !== 5 ||
   globalThis.__AI_BRIDGE_GENERATION_SECURITY__?.failClosedWhenUnarmed !== true ||
   globalThis.__AI_BRIDGE_GENERATION_SECURITY__?.durablyArmsGenerationBeforeProviderSend !== true ||
   globalThis.__AI_BRIDGE_GENERATION_SECURITY__?.providerSendBoundaryGuarded !== true ||
@@ -176,7 +176,9 @@ if (
   globalThis.__AI_BRIDGE_GENERATION_SECURITY__?.durablyPersistsConsumedGenerationBeforeCommit !== true ||
   globalThis.__AI_BRIDGE_GENERATION_SECURITY__?.preservesNewerGenerationArmedByCommit !== true ||
   globalThis.__AI_BRIDGE_GENERATION_SECURITY__?.preventsSequentialReplayWindow !== true ||
-  globalThis.__AI_BRIDGE_GENERATION_SECURITY__?.preventsRestartGenerationResurrection !== true
+  globalThis.__AI_BRIDGE_GENERATION_SECURITY__?.preventsRestartGenerationResurrection !== true ||
+  globalThis.__AI_BRIDGE_GENERATION_SECURITY__?.requiresAutomaticResponsePageIdentity !== true ||
+  globalThis.__AI_BRIDGE_GENERATION_SECURITY__?.rejectsCrossThreadSpaResponseBeforeConsumption !== true
 ) {
   throw new Error("AI Bridge generation hardening failed to initialize.");
 }
