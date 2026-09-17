@@ -14,7 +14,7 @@ const wrapper = fs.readFileSync(path.join(root, "background-wrapper.js"), "utf8"
 // after final prompt-dispatch failure. Completion safety depends on this state
 // becoming unarmed before any delayed provider response can arrive.
 assert.match(viewpointRuntime, /clearsTransientIdentityOnDispatchFailure:\s*true/);
-assert.match(wrapper, /clearsTransientIdentityOnDispatchFailure\?\.*/s);
+assert.match(wrapper, /__AI_BRIDGE_VIEWPOINT_RUNTIME_V1__\?\.clearsTransientIdentityOnDispatchFailure\s*!==\s*true/);
 
 // The generation hardening layer must reject both an empty expected generation
 // and a mismatched generation. The legacy core matcher used to accept any
