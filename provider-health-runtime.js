@@ -31,9 +31,11 @@
   ]);
 
   const MIN_PROBE_INTERVAL_MS = 750;
+  const MAX_STABILITY_RETRIES = 2;
   let lastProbeAt = 0;
   let lastSnapshot = null;
   let lastStateKey = "";
+  let probeInvalidationEpoch = 0;
 
   function liveState() {
     try {
@@ -74,6 +76,7 @@
     lastProbeAt = 0;
     lastSnapshot = null;
     lastStateKey = "";
+    probeInvalidationEpoch += 1;
   }
 
   function boundTabIds() {
@@ -283,38 +286,62 @@
   }
 
   async function probeActiveAgents({ force = false } = {}) {
-    const now = Date.now();
-    const current = liveState();
-    const sides = liveSides();
-    const stateKey = healthStateKey(current, sides);
+    const cacheNow = Date.now();
+    const cacheCurrent = liveState();
+    const cacheSides = liveSides();
+    const cacheStateKey = healthStateKey(cacheCurrent, cacheSides);
     if (
       !force &&
       lastSnapshot &&
-      stateKey === lastStateKey &&
-      now - lastProbeAt < MIN_PROBE_INTERVAL_MS
+      cacheStateKey === lastStateKey &&
+      cacheNow - lastProbeAt < MIN_PROBE_INTERVAL_MS
     ) {
       return lastSnapshot;
     }
 
-    const raw = [];
-    for (const side of sides) {
-      raw.push(await probeSide(side, current));
+    for (let attempt = 0; attempt <= MAX_STABILITY_RETRIES; attempt += 1) {
+      const startedAt = Date.now();
+      const startedEpoch = probeInvalidationEpoch;
+      const current = liveState();
+      const sides = liveSides();
+      const stateKey = healthStateKey(current, sides);
+      const raw = [];
+      for (const side of sides) {
+        raw.push(await probeSide(side, current));
+      }
+      const rows = markGenerating(applyDuplicatePolicy(raw), current);
+
+      // A health snapshot is useful only if it describes one coherent world.
+      // Browser lifecycle events and coordinator mutations may happen while the
+      // sequential probe is awaiting tab reads/pings. Never publish a result
+      // gathered across two different states; retry from scratch instead.
+      const endCurrent = liveState();
+      const endSides = liveSides();
+      const endStateKey = healthStateKey(endCurrent, endSides);
+      const stable = startedEpoch === probeInvalidationEpoch && stateKey === endStateKey;
+      if (!stable) {
+        clearProbeCache();
+        if (attempt < MAX_STABILITY_RETRIES) continue;
+        throw new Error("Provider health changed repeatedly during probe; retry when tab and routing state are stable.");
+      }
+
+      const snapshot = Object.freeze({
+        version: 1,
+        checkedAt: startedAt,
+        agentCount: sides.length,
+        sides: Object.freeze(sides.slice()),
+        bySide: Object.freeze(Object.fromEntries(rows.map(row => [row.side, Object.freeze(row)]))),
+        readySides: Object.freeze(rows.filter(row => row.ready).map(row => row.side)),
+        blockedSides: Object.freeze(rows.filter(row => !row.ready).map(row => row.side)),
+        duplicateProviderAgentsEnabled: caps.duplicateProviderAgentsEnabled === true
+      });
+      lastProbeAt = startedAt;
+      lastSnapshot = snapshot;
+      lastStateKey = stateKey;
+      return snapshot;
     }
-    const rows = markGenerating(applyDuplicatePolicy(raw), current);
-    const snapshot = Object.freeze({
-      version: 1,
-      checkedAt: now,
-      agentCount: sides.length,
-      sides: Object.freeze(sides.slice()),
-      bySide: Object.freeze(Object.fromEntries(rows.map(row => [row.side, Object.freeze(row)]))),
-      readySides: Object.freeze(rows.filter(row => row.ready).map(row => row.side)),
-      blockedSides: Object.freeze(rows.filter(row => !row.ready).map(row => row.side)),
-      duplicateProviderAgentsEnabled: caps.duplicateProviderAgentsEnabled === true
-    });
-    lastProbeAt = now;
-    lastSnapshot = snapshot;
-    lastStateKey = stateKey;
-    return snapshot;
+
+    throw new Error("Provider health probe could not reach a stable state.");
   }
 
   function recommendStartSide(snapshot, preferred) {
@@ -391,6 +418,7 @@
     detectsDuplicateThreads: true,
     stateKeyedProbeCache: true,
     tabLifecycleInvalidatesProbeCache: true,
+    rejectsUnstableInflightProbes: true,
     mutatesRouting: false,
     sendsProviderPrompts: false,
     probeActiveAgents,
