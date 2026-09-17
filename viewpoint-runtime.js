@@ -171,13 +171,38 @@
     };
   }
 
-  function enqueueFamily(familyId, side, work) {
+  function cancelQueuedForTab(tabId) {
+    const closedTabId = Number(tabId);
+    if (!Number.isInteger(closedTabId) || closedTabId <= 0) return 0;
+    let cancelled = 0;
+    for (const metric of queueMetrics.values()) {
+      for (const entry of [...metric.pending]) {
+        if (entry.boundTabId !== closedTabId || entry.cancelled) continue;
+        entry.cancelled = true;
+        const pendingIndex = metric.pending.findIndex(item => item.id === entry.id);
+        if (pendingIndex >= 0) metric.pending.splice(pendingIndex, 1);
+        metric.totalRejected += 1;
+        cancelled += 1;
+        entry.rejectCancellation?.(new Error("Viewpoint target tab closed while queued; refusing dispatch."));
+      }
+    }
+    return cancelled;
+  }
+
+  function enqueueFamily(familyId, side, boundTabId, work) {
     const key = familyId || "unknown";
     const metric = metricForFamily(key);
+    let rejectCancellation = null;
+    const cancellation = new Promise((_, reject) => {
+      rejectCancellation = reject;
+    });
     const entry = {
       id: queueSequence++,
       side,
-      enqueuedAt: Date.now()
+      boundTabId: Number(boundTabId) || null,
+      enqueuedAt: Date.now(),
+      cancelled: false,
+      rejectCancellation
     };
     metric.pending.push(entry);
     metric.totalEnqueued += 1;
@@ -187,6 +212,8 @@
     const next = previous.catch(() => undefined).then(async () => {
       const pendingIndex = metric.pending.findIndex(item => item.id === entry.id);
       if (pendingIndex >= 0) metric.pending.splice(pendingIndex, 1);
+      if (entry.cancelled) return undefined;
+
       const startedAt = Date.now();
       const waitMs = Math.max(0, startedAt - entry.enqueuedAt);
       metric.activeSide = side;
@@ -209,7 +236,12 @@
     next.finally(() => {
       if (familyQueues.get(key) === next) familyQueues.delete(key);
     }).catch(() => {});
-    return next;
+
+    // The serialized internal chain must remain intact even when a tab closes,
+    // but callers should learn about a cancelled queued send immediately. The
+    // race rejects at tab-removal time while `next` later skips the cancelled
+    // entry without calling the provider or double-counting the rejection.
+    return Promise.race([next, cancellation]);
   }
 
   function requireQueueStatusCaller(sender) {
@@ -273,10 +305,16 @@
       };
 
       if (caps.serializeSameFamilySends === true && queue?.serialize) {
-        return enqueueFamily(familyId, side, run);
+        return enqueueFamily(familyId, side, intendedIdentity.boundTabId, run);
       }
       return run();
     };
+  }
+
+  if (chrome?.tabs?.onRemoved?.addListener) {
+    chrome.tabs.onRemoved.addListener(tabId => {
+      cancelQueuedForTab(tabId);
+    });
   }
 
   if (chrome?.runtime?.onMessage?.addListener) {
@@ -295,6 +333,7 @@
   globalThis.viewpointIdentityForSide = identityForSide;
   globalThis.requireViewpointDispatchIdentity = requireDispatchIdentity;
   globalThis.getViewpointQueueSnapshot = queueSnapshot;
+  globalThis.cancelQueuedViewpointForTab = cancelQueuedForTab;
   globalThis[FLAG] = Object.freeze({
     version: 1,
     stampsTranscript: true,
@@ -304,6 +343,8 @@
     serializesSameFamilySends: true,
     validatesBindingsBeforeSend: true,
     revalidatesIdentityAtDispatch: true,
+    cancelsQueuedOnTabClose: true,
+    restoresQueuedSendsAfterWorkerRestart: false,
     queueTelemetryReadOnly: true,
     queueTelemetryEphemeral: true,
     queueTelemetryContainsSensitiveIdentity: false,
