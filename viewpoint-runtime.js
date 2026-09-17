@@ -182,19 +182,20 @@
     };
   }
 
-  function cancelQueuedForTab(tabId) {
-    const closedTabId = Number(tabId);
-    if (!Number.isInteger(closedTabId) || closedTabId <= 0) return 0;
+  function cancelQueuedForTab(tabId, reason = "closed") {
+    const staleTabId = Number(tabId);
+    if (!Number.isInteger(staleTabId) || staleTabId <= 0) return 0;
+    const cause = reason === "replaced" ? "replaced" : "closed";
     let cancelled = 0;
     for (const metric of queueMetrics.values()) {
       for (const entry of [...metric.pending]) {
-        if (entry.boundTabId !== closedTabId || entry.cancelled) continue;
+        if (entry.boundTabId !== staleTabId || entry.cancelled) continue;
         entry.cancelled = true;
         const pendingIndex = metric.pending.findIndex(item => item.id === entry.id);
         if (pendingIndex >= 0) metric.pending.splice(pendingIndex, 1);
         metric.totalRejected += 1;
         cancelled += 1;
-        entry.rejectCancellation?.(new Error("Viewpoint target tab closed while queued; refusing dispatch."));
+        entry.rejectCancellation?.(new Error(`Viewpoint target tab ${cause} while queued; refusing dispatch.`));
       }
     }
     return cancelled;
@@ -248,10 +249,10 @@
       if (familyQueues.get(key) === next) familyQueues.delete(key);
     }).catch(() => {});
 
-    // The serialized internal chain must remain intact even when a tab closes,
-    // but callers should learn about a cancelled queued send immediately. The
-    // race rejects at tab-removal time while `next` later skips the cancelled
-    // entry without calling the provider or double-counting the rejection.
+    // The serialized internal chain must remain intact when a queued tab closes
+    // or Chrome replaces its tab ID, but callers should learn about that stale
+    // target immediately. The race rejects at the lifecycle event while `next`
+    // later skips the cancelled entry without provider dispatch or double-counting.
     return Promise.race([next, cancellation]);
   }
 
@@ -333,7 +334,16 @@
 
   if (chrome?.tabs?.onRemoved?.addListener) {
     chrome.tabs.onRemoved.addListener(tabId => {
-      cancelQueuedForTab(tabId);
+      cancelQueuedForTab(tabId, "closed");
+    });
+  }
+
+  if (chrome?.tabs?.onReplaced?.addListener) {
+    chrome.tabs.onReplaced.addListener((_addedTabId, removedTabId) => {
+      // The replacement tab is not implicitly trusted as the same logical agent.
+      // Keep explicit binding authority with coordinator state and cancel only
+      // work that targeted the browser-owned ID Chrome retired.
+      cancelQueuedForTab(removedTabId, "replaced");
     });
   }
 
@@ -364,6 +374,7 @@
     validatesBindingsBeforeSend: true,
     revalidatesIdentityAtDispatch: true,
     cancelsQueuedOnTabClose: true,
+    cancelsQueuedOnTabReplace: true,
     restoresQueuedSendsAfterWorkerRestart: false,
     clearsTransientIdentityOnDispatchFailure: true,
     queueTelemetryReadOnly: true,
