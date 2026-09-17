@@ -1,9 +1,8 @@
 // AI Bridge service-worker bootstrap.
 //
-// Install the mutation-serialization prelude before background.js registers its
-// listeners. This lets the coordinator's existing anonymous message listener,
-// tab-close recovery, and alarm-driven watchdog recovery share one queue without
-// rewriting the large coordinator core.
+// Install mutation serialization before background.js registers coordinator
+// listeners. Message-driven control actions, tab-close recovery, and watchdog
+// recovery must all share this one queue.
 importScripts("coordinator-mutex-prelude.js");
 if (
   globalThis.__AI_BRIDGE_COORDINATOR_MUTEX__?.version !== 4 ||
@@ -12,8 +11,24 @@ if (
   throw new Error("AI Bridge coordinator mutex failed to initialize.");
 }
 
-// Keep the existing background.js runtime intact and load established helpers.
-importScripts("background.js", "completion-runtime-hardening.js", "oauth-runtime-hardening.js", "power.js");
+// Load the coordinator core by itself. background.js still contains legacy
+// artifact helper declarations for source compatibility; replace those globals
+// immediately, in the same synchronous service-worker bootstrap turn, before
+// any other helper module loads and before Chrome can dispatch an extension
+// event to the registered listeners.
+importScripts("background.js");
+importScripts("artifact-fetch-runtime-hardening.js");
+if (
+  globalThis.__AI_BRIDGE_ARTIFACT_FETCH_SECURITY__?.credentials !== "omit" ||
+  globalThis.__AI_BRIDGE_ARTIFACT_FETCH_SECURITY__?.finalUrlRevalidation !== true ||
+  globalThis.__AI_BRIDGE_ARTIFACT_FETCH_SECURITY__?.streamedSizeLimit !== true
+) {
+  throw new Error("AI Bridge artifact security hardening failed to initialize.");
+}
+
+// Established helpers load only after the privileged artifact primitive is
+// credentialless and byte-bounded.
+importScripts("completion-runtime-hardening.js", "oauth-runtime-hardening.js", "power.js");
 
 // Focus is a third dashboard layout. Extend the existing cloud-settings layout
 // allowlist without weakening the sanitizer that reconstructs synced settings.
@@ -28,12 +43,6 @@ if (globalThis.__AI_BRIDGE_FOCUS_RUNTIME_V1__?.cloudLayoutAllowed !== true) {
 importScripts("resend-runtime-hardening.js");
 if (globalThis.__AI_BRIDGE_RESEND_HARDENING_V1__?.stopBeforeReplacement !== true) {
   throw new Error("AI Bridge resend hardening failed to initialize.");
-}
-
-// Artifact relay URLs come from provider DOM and are therefore untrusted.
-importScripts("artifact-fetch-runtime-hardening.js");
-if (globalThis.__AI_BRIDGE_ARTIFACT_FETCH_SECURITY__?.credentials !== "omit") {
-  throw new Error("AI Bridge artifact security hardening failed to initialize.");
 }
 
 // Manual relay is recovery-only and may commit a provider response directly.
