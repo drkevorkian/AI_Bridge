@@ -23,7 +23,13 @@
 
 .dynamic-agent-count {
   display: grid;
-  grid-template-columns: max-content minmax(72px, 120px) minmax(220px, 1fr);
+  /*
+   * The control pane can be resized down to 24% of the dashboard width. Do not
+   * impose a fixed minimum on the recommendation column: its text already wraps
+   * safely, so allowing this track to shrink prevents horizontal overflow while
+   * preserving the compact three-column layout whenever room is available.
+   */
+  grid-template-columns: max-content minmax(72px, 120px) minmax(0, 1fr);
   align-items: center;
   gap: 8px 10px;
   margin: 8px 0 12px;
