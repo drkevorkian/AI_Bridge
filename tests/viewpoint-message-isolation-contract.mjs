@@ -6,6 +6,7 @@ import { fileURLToPath } from "node:url";
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const background = fs.readFileSync(path.join(root, "background.js"), "utf8");
 const content = fs.readFileSync(path.join(root, "content.js"), "utf8");
+const manifest = JSON.parse(fs.readFileSync(path.join(root, "manifest.json"), "utf8"));
 
 // Provider pages are deliberately limited to two worker endpoints. Ordinary
 // extension-control messages must remain extension-page-only.
@@ -14,6 +15,17 @@ assert.match(
   /CONTENT_SCRIPT_MESSAGE_TYPES\s*=\s*new Set\(\["AI_BRIDGE_FETCH_ARTIFACT",\s*"AI_BRIDGE_RESPONSE"\]\)/,
   "content scripts must remain restricted to response and artifact-fallback endpoints"
 );
+
+// Sender-tab authority is safe because the provider content script is installed
+// only in the top frame. If subframe injection is ever enabled, the response and
+// artifact boundaries must be re-audited to include sender.frameId before that
+// manifest change can ship.
+assert.ok(Array.isArray(manifest.content_scripts) && manifest.content_scripts.length > 0,
+  "manifest must define provider content scripts");
+for (const registration of manifest.content_scripts) {
+  assert.notEqual(registration?.all_frames, true,
+    "provider content scripts must remain top-frame-only unless sender.frameId is added to the authority contract");
+}
 
 // Response authority comes from Chrome's authenticated sender tab. Never trust
 // a caller-supplied logical side from provider-page JavaScript.
