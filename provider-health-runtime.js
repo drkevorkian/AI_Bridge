@@ -70,6 +70,33 @@
     ]);
   }
 
+  function clearProbeCache() {
+    lastProbeAt = 0;
+    lastSnapshot = null;
+    lastStateKey = "";
+  }
+
+  function boundTabIds() {
+    const current = liveState();
+    const ids = new Set();
+    for (const side of liveSides()) {
+      const tabId = tabIdFor(side, current);
+      if (tabId) ids.add(tabId);
+    }
+    return ids;
+  }
+
+  // Coordinator state does not change when the browser independently navigates,
+  // reloads, removes, or replaces a bound tab. Invalidate the short health cache
+  // on those lifecycle transitions so a previously READY tab cannot remain READY
+  // after it has left a trusted provider or disappeared from Chrome.
+  function invalidateForBoundTab(tabId) {
+    const id = Number(tabId);
+    if (!Number.isInteger(id) || id <= 0 || !boundTabIds().has(id)) return false;
+    clearProbeCache();
+    return true;
+  }
+
   function threadPathForIdentity(identity) {
     const key = String(identity?.threadKey || "");
     if (!key) return null;
@@ -317,6 +344,25 @@
     }
   }
 
+  if (chrome?.tabs?.onUpdated?.addListener) {
+    chrome.tabs.onUpdated.addListener((tabId, changeInfo) => {
+      const navigated = Boolean(changeInfo && (Object.prototype.hasOwnProperty.call(changeInfo, "url") || changeInfo.status === "loading"));
+      if (navigated) invalidateForBoundTab(tabId);
+    });
+  }
+
+  if (chrome?.tabs?.onRemoved?.addListener) {
+    chrome.tabs.onRemoved.addListener(tabId => {
+      invalidateForBoundTab(tabId);
+    });
+  }
+
+  if (chrome?.tabs?.onReplaced?.addListener) {
+    chrome.tabs.onReplaced.addListener((_addedTabId, removedTabId) => {
+      invalidateForBoundTab(removedTabId);
+    });
+  }
+
   if (chrome?.runtime?.onMessage?.addListener) {
     chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
       if (!msg || (msg.type !== "AI_BRIDGE_PROVIDER_HEALTH" && msg.type !== "AI_BRIDGE_ADAPTIVE_SELECT")) return;
@@ -344,6 +390,7 @@
     includesSanitizedThreadIdentity: true,
     detectsDuplicateThreads: true,
     stateKeyedProbeCache: true,
+    tabLifecycleInvalidatesProbeCache: true,
     mutatesRouting: false,
     sendsProviderPrompts: false,
     probeActiveAgents,
