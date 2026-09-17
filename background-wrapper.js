@@ -36,6 +36,16 @@ if (
   throw new Error("AI Bridge dynamic-agent coordinator failed to initialize.");
 }
 
+importScripts("provider-health-runtime.js");
+if (
+  globalThis.__AI_BRIDGE_PROVIDER_HEALTH_V1__?.version !== 1 ||
+  globalThis.__AI_BRIDGE_PROVIDER_HEALTH_V1__?.uniqueTabBinding !== true ||
+  globalThis.__AI_BRIDGE_PROVIDER_HEALTH_V1__?.mutatesRouting !== false ||
+  globalThis.__AI_BRIDGE_PROVIDER_HEALTH_V1__?.sendsProviderPrompts !== false
+) {
+  throw new Error("AI Bridge provider health monitor failed to initialize.");
+}
+
 importScripts("artifact-fetch-runtime-hardening.js");
 if (
   globalThis.__AI_BRIDGE_ARTIFACT_FETCH_SECURITY__?.credentials !== "omit" ||
@@ -53,7 +63,7 @@ if (globalThis.__AI_BRIDGE_UPDATE_HARDENING_V1__?.immutableCommitPin !== true) {
 importScripts("completion-runtime-hardening.js", "oauth-runtime-hardening.js", "power.js");
 
 importScripts("focus-runtime-hardening.js");
-if (globalThis.__AI_BRIDGE_FOCUS_RUNTIME_V1__?.cloudLayoutAllowed !== true) {
+if (globalThis.__AI_BRIDGE_FOCUS_LAYOUT_V1__?.cloudLayoutAllowed !== true) {
   throw new Error("AI Bridge Focus layout hardening failed to initialize.");
 }
 
