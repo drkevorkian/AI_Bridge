@@ -52,10 +52,25 @@ importScripts("provider-health-runtime.js");
 if (
   globalThis.__AI_BRIDGE_PROVIDER_HEALTH_V1__?.version !== 1 ||
   globalThis.__AI_BRIDGE_PROVIDER_HEALTH_V1__?.uniqueTabBinding !== true ||
+  globalThis.__AI_BRIDGE_PROVIDER_HEALTH_V1__?.includesSanitizedThreadIdentity !== true ||
+  globalThis.__AI_BRIDGE_PROVIDER_HEALTH_V1__?.detectsDuplicateThreads !== true ||
   globalThis.__AI_BRIDGE_PROVIDER_HEALTH_V1__?.mutatesRouting !== false ||
   globalThis.__AI_BRIDGE_PROVIDER_HEALTH_V1__?.sendsProviderPrompts !== false
 ) {
   throw new Error("AI Bridge provider health monitor failed to initialize.");
+}
+
+importScripts("viewpoint-runtime.js");
+if (
+  globalThis.__AI_BRIDGE_VIEWPOINT_RUNTIME_V1__?.version !== 1 ||
+  globalThis.__AI_BRIDGE_VIEWPOINT_RUNTIME_V1__?.stampsTranscript !== true ||
+  globalThis.__AI_BRIDGE_VIEWPOINT_RUNTIME_V1__?.stampsBeforeCommitSave !== true ||
+  globalThis.__AI_BRIDGE_VIEWPOINT_RUNTIME_V1__?.capturesIdentityBeforeDispatch !== true ||
+  globalThis.__AI_BRIDGE_VIEWPOINT_RUNTIME_V1__?.failsClosedWithoutDispatchIdentityWhenEnabled !== true ||
+  globalThis.__AI_BRIDGE_VIEWPOINT_RUNTIME_V1__?.serializesSameFamilySends !== true ||
+  globalThis.__AI_BRIDGE_VIEWPOINT_RUNTIME_V1__?.enablesDuplicateProviders !== false
+) {
+  throw new Error("AI Bridge viewpoint runtime failed to initialize.");
 }
 
 importScripts("artifact-fetch-runtime-hardening.js");

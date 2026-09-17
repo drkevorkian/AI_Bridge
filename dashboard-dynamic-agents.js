@@ -24,6 +24,12 @@
     return next;
   }
 
+  function formatThreadBadgeText(rawPath) {
+    const value = String(rawPath || "").split("?")[0].split("#")[0];
+    if (!value.startsWith("/")) return "";
+    return value.length > 18 ? `${value.slice(0, 17)}…` : value;
+  }
+
   function createStatusBadge(side) {
     const badge = document.createElement("div");
     badge.id = `health${side}`;
@@ -37,12 +43,32 @@
     return badge;
   }
 
+  function createThreadBadge(side) {
+    const badge = document.createElement("span");
+    badge.id = `threadBadge${side}`;
+    badge.className = "agent-card-thread-badge";
+    badge.hidden = true;
+    badge.setAttribute("aria-label", `AI ${side} conversation thread`);
+    return badge;
+  }
+
   function ensureHealthBadge(card, side) {
     let badge = byId(`health${side}`);
     if (badge) return badge;
     badge = createStatusBadge(side);
     const identity = card.querySelector(".agent-identity") || card.querySelector(".agent-topline") || card;
     identity.appendChild(badge);
+    return badge;
+  }
+
+  function ensureThreadBadge(card, side) {
+    let badge = byId(`threadBadge${side}`);
+    if (badge) return badge;
+    badge = createThreadBadge(side);
+    const identity = card.querySelector(".agent-identity") || card.querySelector(".agent-topline") || card;
+    const title = byId(`labelText${side}`);
+    if (title?.parentElement === identity) title.insertAdjacentElement("afterend", badge);
+    else identity.appendChild(badge);
     return badge;
   }
 
@@ -178,6 +204,7 @@
       if (!card) continue;
       card.dataset.side = side;
       cardCache.set(side, card);
+      ensureThreadBadge(card, side);
       ensureHealthBadge(card, side);
     }
     for (const side of ["D", "E"]) {
@@ -185,6 +212,7 @@
       if (!card) card = createExtendedCard(side);
       cardCache.set(side, card);
       if (!card.isConnected) team.insertBefore(card, relayPanel);
+      ensureThreadBadge(card, side);
       ensureManualRelayControls(side);
       attachExtendedListeners(side);
     }
@@ -345,15 +373,62 @@
   function applyHealth(health) {
     lastHealth = health || null;
     const sides = liveSides();
+    const familyCounts = new Map();
+    for (const side of sides) {
+      const providerId = String(health?.bySide?.[side]?.providerId || "");
+      if (providerId) familyCounts.set(providerId, (familyCounts.get(providerId) || 0) + 1);
+    }
+
+    let hasDuplicateThread = false;
     for (const side of sides) {
       const row = health?.bySide?.[side];
       const status = String(row?.status || "CHECKING");
       const badge = byId(`health${side}`);
-      if (!badge) continue;
-      badge.dataset.status = status;
-      badge.title = String(row?.reason || status);
-      const label = badge.querySelector(".status-label");
-      if (label) label.textContent = status.replaceAll("_", " ");
+      if (badge) {
+        badge.dataset.status = status;
+        badge.title = String(row?.reason || status);
+        const label = badge.querySelector(".status-label");
+        if (label) label.textContent = status.replaceAll("_", " ");
+      }
+
+      const threadBadge = byId(`threadBadge${side}`);
+      if (threadBadge) {
+        const text = formatThreadBadgeText(row?.threadPath);
+        const duplicatedFamily = row?.providerId && (familyCounts.get(String(row.providerId)) || 0) > 1;
+        const show = Boolean(text && (duplicatedFamily || status === "DUPLICATE_THREAD"));
+        threadBadge.textContent = show ? text : "";
+        threadBadge.title = show ? `Conversation thread ${text}` : "";
+        threadBadge.hidden = !show;
+      }
+
+      const card = cardCache.get(side);
+      if (status === "DUPLICATE_THREAD") {
+        hasDuplicateThread = true;
+        card?.setAttribute("aria-invalid", "true");
+      } else {
+        card?.removeAttribute("aria-invalid");
+      }
+    }
+
+    const start = byId("start");
+    if (start) {
+      if (hasDuplicateThread) {
+        if (!start.dataset.viewpointBlocked) start.dataset.viewpointPreviousDisabled = start.disabled ? "true" : "false";
+        start.dataset.viewpointBlocked = "true";
+        start.disabled = true;
+        start.setAttribute("aria-disabled", "true");
+        start.title = "Cannot start relay: multiple agents are bound to the same conversation thread.";
+      } else if (start.dataset.viewpointBlocked === "true") {
+        const previousDisabled = start.dataset.viewpointPreviousDisabled === "true";
+        delete start.dataset.viewpointBlocked;
+        delete start.dataset.viewpointPreviousDisabled;
+        start.disabled = previousDisabled;
+        start.removeAttribute("aria-disabled");
+        start.removeAttribute("title");
+        try {
+          if (typeof updateControls === "function" && typeof latestState !== "undefined" && latestState) updateControls(latestState);
+        } catch (_) {}
+      }
     }
   }
 
@@ -382,8 +457,13 @@
       if (!blocked.length) return;
       event.preventDefault();
       event.stopImmediatePropagation();
+      const duplicateThreads = blocked.filter(side => lastHealth?.bySide?.[side]?.status === "DUPLICATE_THREAD");
       const status = byId("status");
-      if (status) status.textContent = `Cannot start: resolve provider health for AI ${blocked.join(", AI ")}.`;
+      if (status) {
+        status.textContent = duplicateThreads.length
+          ? `Cannot start: AI ${duplicateThreads.join(", AI ")} share a conversation thread. Bind each agent to a distinct thread.`
+          : `Cannot start: resolve provider health for AI ${blocked.join(", AI ")}.`;
+      }
       refreshHealth(true).catch(() => {});
     }, true);
   }
@@ -421,6 +501,8 @@
       version: 1,
       maxAgents: ALL_SIDES.length,
       duplicateProviderAgentsEnabled: false,
+      threadBadges: true,
+      duplicateThreadStartBlock: true,
       renderRoster,
       refreshHealth
     });
