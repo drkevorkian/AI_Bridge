@@ -62,15 +62,23 @@
 
     // Load dynamic roster wiring only after dashboard.js and dashboard-release.js
     // have registered their legacy A/B/C handlers. The roster adapter is followed
-    // by two read-only dashboard adapters: one keeps work-mode help aligned to the
-    // live A-E roster, and one exposes viewpoint activation diagnostics. Routing
-    // authority remains in the centralized background binding evaluator.
+    // by packaged compatibility/read-only adapters that remove fixed-three UI
+    // assumptions, keep work-mode copy aligned to the live A-E roster, and expose
+    // viewpoint activation diagnostics. Routing authority remains in the
+    // centralized background binding evaluator.
     if (!document.querySelector("script[data-ai-bridge-dynamic-agents]")) {
       const script = document.createElement("script");
       script.src = chrome.runtime.getURL("dashboard-dynamic-agents.js");
       script.async = false;
       script.dataset.aiBridgeDynamicAgents = "true";
       script.addEventListener("load", () => {
+        if (!document.querySelector("script[data-ai-bridge-dynamic-validation]")) {
+          const validation = document.createElement("script");
+          validation.src = chrome.runtime.getURL("dashboard-dynamic-validation.js");
+          validation.async = false;
+          validation.dataset.aiBridgeDynamicValidation = "true";
+          document.body.appendChild(validation);
+        }
         if (!document.querySelector("script[data-ai-bridge-dynamic-workmode-copy]")) {
           const copy = document.createElement("script");
           copy.src = chrome.runtime.getURL("dashboard-dynamic-workmode-copy.js");
@@ -91,10 +99,11 @@
   }, { once: true });
 
   window.__AI_BRIDGE_DASHBOARD_BOOTSTRAP__ = Object.freeze({
-    version: 6,
+    version: 7,
     providerScopedTabQuery: true,
     legacyWebOauthDisabled: true,
     dynamicAgentAdapter: true,
+    dynamicTabValidationAdapter: true,
     dynamicWorkModeCopyAdapter: true,
     viewpointActivationAdapter: true,
     layouts: Object.freeze(["studio", "classic", "focus"])
