@@ -68,6 +68,9 @@ if (
   globalThis.__AI_BRIDGE_PROVIDER_HEALTH_V1__?.uniqueTabBinding !== true ||
   globalThis.__AI_BRIDGE_PROVIDER_HEALTH_V1__?.includesSanitizedThreadIdentity !== true ||
   globalThis.__AI_BRIDGE_PROVIDER_HEALTH_V1__?.detectsDuplicateThreads !== true ||
+  globalThis.__AI_BRIDGE_PROVIDER_HEALTH_V1__?.stateKeyedProbeCache !== true ||
+  globalThis.__AI_BRIDGE_PROVIDER_HEALTH_V1__?.tabLifecycleInvalidatesProbeCache !== true ||
+  globalThis.__AI_BRIDGE_PROVIDER_HEALTH_V1__?.rejectsUnstableInflightProbes !== true ||
   globalThis.__AI_BRIDGE_PROVIDER_HEALTH_V1__?.mutatesRouting !== false ||
   globalThis.__AI_BRIDGE_PROVIDER_HEALTH_V1__?.sendsProviderPrompts !== false
 ) {
