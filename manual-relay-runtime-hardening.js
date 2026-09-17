@@ -8,6 +8,11 @@
     throw new Error("AI Bridge manual-relay hardening loaded before coordinator capture support.");
   }
 
+  const caps = globalThis.__AI_BRIDGE_AGENT_CAPABILITIES__;
+  if (!caps || caps.version !== 1 || typeof caps.conversationIdentity !== "function") {
+    throw new Error("AI Bridge manual-relay hardening requires the conversation-identity contract.");
+  }
+
   const baseForceRelayCapturedResponse = forceRelayCapturedResponse;
   const manualIdentityBySide = new Map();
 
@@ -41,17 +46,58 @@
     }
 
     const generationId = String(result.generationId || "");
+    const pageUrl = String(result.pageUrl || "");
     return {
       text,
       artifacts: Array.isArray(result.artifacts) ? result.artifacts : [],
       artifactDiagnostics: result.artifactDiagnostics || null,
       completedAt: Number(result.completedAt) || Date.now(),
       generationId,
+      pageUrl,
       generating: false
     };
   }
 
   captureLatestFromSide = hardenedCaptureLatestFromSide;
+
+  function refreshManualRelayViewpointIdentity(side, pageUrl) {
+    const normalized = String(side || "").toUpperCase();
+    const tabId = Number(tabForSide(normalized));
+    if (!Number.isInteger(tabId) || tabId <= 0) {
+      throw new Error(`Bind a tab for AI ${normalized} first.`);
+    }
+    const observedUrl = String(pageUrl || "");
+    if (!observedUrl) {
+      throw new Error(`AI ${normalized} capture did not include page identity. Refresh that AI tab once before using Manual Relay.`);
+    }
+
+    // The URL is added inside the extension's isolated content-script world to
+    // the exact AI_BRIDGE_CAPTURE_LATEST reply. Derive provenance from that
+    // captured page rather than a stale prior dispatch or a later tab lookup.
+    const identity = caps.conversationIdentity({ side: normalized, tabId, url: observedUrl });
+    if (!identity) {
+      throw new Error(`AI ${normalized} capture did not come from a trusted provider conversation.`);
+    }
+    if (Number(identity.tabId) !== tabId) {
+      throw new Error(`AI ${normalized} capture no longer matches its bound browser tab.`);
+    }
+
+    const safe = {
+      provenanceId: String(identity.provenanceId || ""),
+      threadKey: String(identity.threadKey || ""),
+      providerFamily: String(identity.familyId || ""),
+      boundTabId: tabId
+    };
+    if (!safe.provenanceId || !safe.threadKey || !safe.providerFamily) {
+      throw new Error(`AI ${normalized} capture did not produce complete conversation provenance.`);
+    }
+
+    state.viewpointIdentityBySide = {
+      ...(state.viewpointIdentityBySide && typeof state.viewpointIdentityBySide === "object" ? state.viewpointIdentityBySide : {}),
+      [normalized]: safe
+    };
+    return safe;
+  }
 
   function validateManualTargets(fromSide, targets) {
     const dest = sanitizeForceRelaySides(targets);
@@ -89,6 +135,13 @@
     const dest = validateManualTargets(fromSide, targets);
     const captured = await hardenedCaptureLatestFromSide(fromSide);
 
+    // Manual Relay is allowed to capture a reply that was not dispatched by the
+    // coordinator. Refresh the side's viewpoint identity from the exact page URL
+    // returned with this capture before the legacy helper records the transcript.
+    // Otherwise a tab navigated from /c/old to /c/new would stamp /c/new output
+    // with the previous dispatch's /c/old provenance.
+    const refreshedViewpoint = refreshManualRelayViewpointIdentity(fromSide, captured.pageUrl);
+
     // The legacy implementation calls captureLatestFromSide internally. Reuse
     // this exact snapshot so DOM changes between two reads cannot make the
     // transcript entry differ from what is actually relayed.
@@ -116,7 +169,9 @@
         ...result,
         responseIdentity: identity,
         sameTextNewGeneration: sameTextNewIdentity,
-        safeFanout: true
+        safeFanout: true,
+        refreshedViewpointProvenance: true,
+        viewpointProviderFamily: refreshedViewpoint.providerFamily
       };
     } finally {
       captureLatestFromSide = liveCapture;
@@ -134,6 +189,8 @@
     generationAwareIdentity: true,
     sequentialFanoutSafe: true,
     sequentialCursorGate: true,
-    batchPendingTargetGate: true
+    batchPendingTargetGate: true,
+    refreshesViewpointProvenanceFromCapturedUrl: true,
+    requiresCapturePageUrl: true
   });
 })();

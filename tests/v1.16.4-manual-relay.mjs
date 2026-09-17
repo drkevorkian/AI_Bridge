@@ -43,6 +43,8 @@ assert.match(hardening, /generationAwareIdentity:\s*true/);
 assert.match(hardening, /sequentialFanoutSafe:\s*true/);
 assert.match(hardening, /sequentialCursorGate:\s*true/);
 assert.match(hardening, /batchPendingTargetGate:\s*true/);
+assert.match(hardening, /refreshesViewpointProvenanceFromCapturedUrl:\s*true/);
+assert.match(hardening, /requiresCapturePageUrl:\s*true/);
 assert.match(hardening, /one coordinator cursor/i);
 assert.match(hardening, /abandon the coordinator cursor/i);
 assert.match(hardening, /result\.generationId/);
@@ -83,13 +85,30 @@ assert.equal(JSON.stringify(sandbox.sanitizeForceRelaySides(["A", "B", "C"])), J
     String,
     Number,
     Array,
+    URL,
     SIDES: ["A", "B", "C"],
     MAX_FORCE_RELAY_CHARS: 200000,
     state: {
       workMode: "relay",
       currentSide: "B",
       lastResponseBySide: {},
-      phasePendingSides: []
+      phasePendingSides: [],
+      viewpointIdentityBySide: {}
+    },
+    __AI_BRIDGE_AGENT_CAPABILITIES__: {
+      version: 1,
+      conversationIdentity({ side, tabId, url }) {
+        const parsed = new URL(String(url || ""));
+        if (parsed.protocol !== "https:" || parsed.hostname !== "chatgpt.com") return null;
+        const threadKey = `${parsed.origin}${parsed.pathname}`;
+        return {
+          side,
+          tabId: Number(tabId),
+          familyId: "chatgpt",
+          threadKey,
+          provenanceId: `chatgpt:${side}:${Number(tabId)}:${threadKey}`
+        };
+      }
     },
     sanitizeForceRelaySides: sandbox.sanitizeForceRelaySides,
     isSequentialWorkMode: mode => mode === "relay",
@@ -104,7 +123,8 @@ assert.equal(JSON.stringify(sandbox.sanitizeForceRelaySides(["A", "B", "C"])), J
           artifacts: [],
           generationId: "generation-1",
           generating: false,
-          completedAt: 1
+          completedAt: 1,
+          pageUrl: "https://chatgpt.com/c/manual-relay-test"
         })
       }
     },
@@ -127,10 +147,12 @@ assert.equal(JSON.stringify(sandbox.sanitizeForceRelaySides(["A", "B", "C"])), J
   const staleToCurrent = await relaySandbox.forceRelayCapturedResponse("A", ["B"]);
   assert.equal(staleToCurrent.ok, true);
   assert.deepEqual(deliveries.at(-1), { source: "A", targets: ["B"] });
+  assert.equal(relaySandbox.state.viewpointIdentityBySide.A.threadKey, "https://chatgpt.com/c/manual-relay-test");
 
   const currentToNext = await relaySandbox.forceRelayCapturedResponse("B", ["C"]);
   assert.equal(currentToNext.ok, true);
   assert.deepEqual(deliveries.at(-1), { source: "B", targets: ["C"] });
+  assert.equal(relaySandbox.state.viewpointIdentityBySide.B.threadKey, "https://chatgpt.com/c/manual-relay-test");
 }
 
 console.log("v1.17 manual relay safety regression passed.");

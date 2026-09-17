@@ -147,7 +147,11 @@ if (globalThis.__AI_BRIDGE_RESEND_HARDENING_V1__?.stopBeforeReplacement !== true
 }
 
 importScripts("manual-relay-runtime-hardening.js");
-if (globalThis.__AI_BRIDGE_MANUAL_RELAY_HARDENING_V1__?.rejectsStreamingCapture !== true) {
+if (
+  globalThis.__AI_BRIDGE_MANUAL_RELAY_HARDENING_V1__?.rejectsStreamingCapture !== true ||
+  globalThis.__AI_BRIDGE_MANUAL_RELAY_HARDENING_V1__?.refreshesViewpointProvenanceFromCapturedUrl !== true ||
+  globalThis.__AI_BRIDGE_MANUAL_RELAY_HARDENING_V1__?.requiresCapturePageUrl !== true
+) {
   throw new Error("AI Bridge manual-relay hardening failed to initialize.");
 }
 

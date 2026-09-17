@@ -210,7 +210,9 @@
   // content.js historically replies with its source-era version string. Rewrite
   // only AI_BRIDGE_PING responses so the service worker can verify the actual
   // injected runtime stack rather than one legacy file's internal label. The
-  // same wrapper also makes AI_BRIDGE_SEND idempotent per generation id.
+  // same wrapper also makes AI_BRIDGE_SEND idempotent per generation id. Manual
+  // capture replies are stamped with this isolated world's exact page URL so the
+  // worker can refresh viewpoint provenance from the page that was actually read.
   const nativeAddListener = chrome.runtime.onMessage.addListener.bind(chrome.runtime.onMessage);
   chrome.runtime.onMessage.addListener = function versionedAddListener(listener) {
     if (typeof listener !== "function") return nativeAddListener(listener);
@@ -224,6 +226,17 @@
           }
         };
         return listener(message, sender, versionedResponse);
+      }
+
+      if (message?.type === "AI_BRIDGE_CAPTURE_LATEST") {
+        const capturedResponse = value => {
+          if (value && typeof value === "object") {
+            sendResponse({ ...value, pageUrl: location.href });
+          } else {
+            sendResponse(value);
+          }
+        };
+        return listener(message, sender, capturedResponse);
       }
 
       if (message?.type === "AI_BRIDGE_SEND") {
@@ -265,6 +278,7 @@
     monitorTimerOwned: true,
     sendIdempotency: true,
     promptEchoFilter: true,
-    providerSendAcknowledgement: true
+    providerSendAcknowledgement: true,
+    manualCaptureIncludesPageUrl: true
   });
 })();
