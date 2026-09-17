@@ -98,7 +98,7 @@ for (const requiredModule of [
   "coordinator-mutex-prelude.js", "worker-fetch-security-prelude.js", "artifact-fetch-runtime-hardening.js",
   "update-runtime-hardening.js", "manual-relay-runtime-hardening.js", "coordinator-generation-hardening.js",
   "human-input-runtime-hardening.js", "watchdog-runtime-hardening.js", "reconnect-runtime-hardening.js",
-  "agent-capabilities.js", "coordinator-dynamic-agents.js", "coordinator-dynamic-semantics.js", "provider-health-runtime.js"
+  "agent-capabilities.js", "coordinator-dynamic-agents.js", "coordinator-dynamic-semantics.js", "provider-health-runtime.js", "viewpoint-runtime.js"
 ]) assert.ok(wrapper.includes(`importScripts("${requiredModule}")`), `service worker is not loading ${requiredModule}`);
 
 const mutexIndex = wrapper.indexOf('importScripts("coordinator-mutex-prelude.js")');

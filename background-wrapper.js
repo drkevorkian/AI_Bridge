@@ -58,6 +58,16 @@ if (
   throw new Error("AI Bridge provider health monitor failed to initialize.");
 }
 
+importScripts("viewpoint-runtime.js");
+if (
+  globalThis.__AI_BRIDGE_VIEWPOINT_RUNTIME_V1__?.version !== 1 ||
+  globalThis.__AI_BRIDGE_VIEWPOINT_RUNTIME_V1__?.stampsTranscript !== true ||
+  globalThis.__AI_BRIDGE_VIEWPOINT_RUNTIME_V1__?.serializesSameFamilySends !== true ||
+  globalThis.__AI_BRIDGE_VIEWPOINT_RUNTIME_V1__?.enablesDuplicateProviders !== false
+) {
+  throw new Error("AI Bridge viewpoint runtime failed to initialize.");
+}
+
 importScripts("artifact-fetch-runtime-hardening.js");
 if (
   globalThis.__AI_BRIDGE_ARTIFACT_FETCH_SECURITY__?.credentials !== "omit" ||
