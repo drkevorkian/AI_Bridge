@@ -1,0 +1,63 @@
+.dynamic-agent-count {
+  display: grid;
+  grid-template-columns: max-content minmax(72px, 120px) minmax(220px, 1fr);
+  align-items: center;
+  gap: 8px 10px;
+  margin: 8px 0 12px;
+}
+
+.dynamic-agent-count > label {
+  font-weight: 700;
+}
+
+.dynamic-agent-recommendation {
+  margin: 0;
+}
+
+.dynamic-health-badge {
+  display: inline-flex;
+  align-items: center;
+  width: fit-content;
+  min-height: 24px;
+  padding: 2px 8px;
+  border: 1px solid currentColor;
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 800;
+  letter-spacing: 0.03em;
+  line-height: 1.2;
+  opacity: 0.88;
+}
+
+.dynamic-health-badge[data-status="READY"] {
+  opacity: 1;
+}
+
+.dynamic-health-badge[data-status="GENERATING"] .status-label::after {
+  content: "…";
+}
+
+.team-section[data-agent-count="4"] > .agent-card,
+.team-section[data-agent-count="5"] > .agent-card {
+  padding-top: 10px;
+  padding-bottom: 10px;
+}
+
+.team-section[data-agent-count="4"] .agent-card textarea,
+.team-section[data-agent-count="5"] .agent-card textarea {
+  min-height: 56px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .dynamic-health-badge,
+  .dynamic-health-badge * {
+    animation: none !important;
+    transition: none !important;
+  }
+}
+
+@media (max-width: 720px) {
+  .dynamic-agent-count {
+    grid-template-columns: 1fr;
+  }
+}
