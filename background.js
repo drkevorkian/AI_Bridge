@@ -3908,7 +3908,17 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
     }
 
     if (msg.type === "AI_BRIDGE_FETCH_ARTIFACT") {
-    requireBoundSessionTab(sender, "Artifact fetch");
+    const artifactSide = requireBoundSessionTab(sender, "Artifact fetch");
+    const artifactTabId = Number(sender?.tab?.id);
+    if (typeof globalThis.aiBridgeAuthorizeArtifactRequest !== "function") {
+      throw new Error("Artifact request authority guard is unavailable.");
+    }
+    globalThis.aiBridgeAuthorizeArtifactRequest({
+      bridgeState: state,
+      side: artifactSide,
+      tabId: artifactTabId,
+      message: msg
+    });
     const requested = String(msg.url || "");
     if (!/^https:/i.test(requested)) throw new Error("Artifact worker fallback accepts HTTPS URLs only.");
     if (msg.observed !== true) throw new Error("Artifact worker fallback requires an observed provider-page URL.");
