@@ -14,9 +14,51 @@
     return Boolean(expected && incoming && incoming === expected);
   };
 
+  const persistenceAvailable = typeof saveState === "function";
+  let generationPersistenceQueue = Promise.resolve();
+
+  // Generation authorization changes cross the MV3 persistence boundary in both
+  // directions: a token must be durable before its prompt reaches a provider,
+  // and a consumed/failed token must be durably cleared before execution moves
+  // on. Serialize these security-critical writes so concurrent batch sends cannot
+  // reorder generation snapshots relative to one another.
+  async function persistGenerationState() {
+    if (!persistenceAvailable) {
+      throw new Error("Generation persistence is unavailable.");
+    }
+    const task = async () => saveState();
+    const next = generationPersistenceQueue.catch(() => undefined).then(task);
+    generationPersistenceQueue = next;
+    return next;
+  }
+
+  let armingAttached = false;
+  if (persistenceAvailable) {
+    globalThis.persistArmedGenerationBeforeProviderSend = async function persistArmedGenerationBeforeProviderSend(side, generationId) {
+      const normalizedSide = String(side || "").toUpperCase();
+      const incomingGenerationId = String(generationId || "");
+      const expectedGenerationId = String(state?.generationIdBySide?.[normalizedSide] || "");
+      if (!generationMatches(expectedGenerationId, incomingGenerationId)) {
+        throw new Error(`AI ${normalizedSide || "?"} generation changed before provider dispatch.`);
+      }
+
+      await persistGenerationState();
+
+      // Re-check after the async storage boundary. If some lifecycle action
+      // deliberately disarmed/replaced this side while persistence was pending,
+      // never send a prompt carrying the superseded capability.
+      const currentGenerationId = String(state?.generationIdBySide?.[normalizedSide] || "");
+      if (!generationMatches(currentGenerationId, incomingGenerationId)) {
+        throw new Error(`AI ${normalizedSide || "?"} generation changed while arming provider dispatch.`);
+      }
+      return true;
+    };
+    armingAttached = true;
+  }
+
   let consumptionAttached = false;
 
-  if (typeof handleCompletedResponse === "function" && typeof saveState === "function") {
+  if (typeof handleCompletedResponse === "function" && persistenceAvailable) {
     const baseHandleCompletedResponse = handleCompletedResponse;
 
     // The background listener performs an early generation check before placing
@@ -56,19 +98,40 @@
       // return, or a later handler error cannot resurrect the consumed token from
       // chrome.storage.local on restart. This intentionally favors fail-closed
       // authorization over replaying an incompletely committed provider reply.
-      await saveState();
+      await persistGenerationState();
 
       return baseHandleCompletedResponse(side, text, options);
     };
     consumptionAttached = true;
   }
 
+  let failedDispatchRollbackAttached = false;
+  if (typeof sendToSide === "function" && persistenceAvailable) {
+    const baseSendToSide = sendToSide;
+    sendToSide = async function generationHardenedSendToSide(...args) {
+      try {
+        return await baseSendToSide(...args);
+      } catch (error) {
+        // Viewpoint/runtime dispatch wrappers clear transient identity and the
+        // armed generation before propagating a final send failure. Persist the
+        // resulting state immediately so a restart cannot restore a token for a
+        // prompt that the provider never accepted.
+        await persistGenerationState();
+        throw error;
+      }
+    };
+    failedDispatchRollbackAttached = true;
+  }
+
   // Unit tests may intentionally load only the matcher. Production bootstrap
-  // requires every response-consumption capability below, so a missing
-  // coordinator/persistence hook still fails closed in the real service worker.
+  // requires every response/dispatch capability below, so a missing coordinator
+  // or persistence hook still fails closed in the real service worker.
   globalThis.__AI_BRIDGE_GENERATION_SECURITY__ = Object.freeze({
-    version: 3,
+    version: 4,
     failClosedWhenUnarmed: true,
+    durablyArmsGenerationBeforeProviderSend: armingAttached,
+    rechecksArmedGenerationAfterPersistence: armingAttached,
+    durablyClearsFailedDispatchGeneration: failedDispatchRollbackAttached,
     rechecksGenerationAtSerializedCommit: consumptionAttached,
     consumesAcceptedGenerationBeforeCommit: consumptionAttached,
     durablyPersistsConsumedGenerationBeforeCommit: consumptionAttached,
