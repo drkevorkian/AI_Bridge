@@ -33,6 +33,12 @@ assert.match(dynamic, /timerTotal\$\{side\}/);
 assert.match(dynamic, /timerCurrent\$\{side\}/);
 assert.match(css, /data-status="READY"/);
 assert.match(css, /prefers-reduced-motion/);
+assert.match(css, /text-overflow:\s*ellipsis/,
+  "long health labels should not stretch or break agent cards");
+assert.match(css, /white-space:\s*nowrap/,
+  "health labels should remain a single compact status line");
+assert.match(css, /overflow-wrap:\s*anywhere/,
+  "adaptive recommendation text should remain contained on narrow layouts");
 
 // The legacy dashboard still defines the original A/B/C array; the adapter
 // intentionally expands that mutable array after the page has initialized.
