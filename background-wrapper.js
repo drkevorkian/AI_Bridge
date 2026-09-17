@@ -24,6 +24,7 @@ if (
   globalThis.__AI_BRIDGE_COORDINATOR_MUTEX__?.serializesTabReplacementLifecycle !== true ||
   globalThis.__AI_BRIDGE_COORDINATOR_MUTEX__?.serializesAgentCountMutation !== true ||
   globalThis.__AI_BRIDGE_COORDINATOR_MUTEX__?.serializesIdleStateMutations !== true ||
+  globalThis.__AI_BRIDGE_COORDINATOR_MUTEX__?.serializesClientStateReads !== true ||
   typeof globalThis.enqueueCoordinatorMutation !== "function"
 ) {
   throw new Error("AI Bridge coordinator mutex failed to initialize.");
