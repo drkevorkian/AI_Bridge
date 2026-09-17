@@ -63,7 +63,7 @@ if (globalThis.__AI_BRIDGE_UPDATE_HARDENING_V1__?.immutableCommitPin !== true) {
 importScripts("completion-runtime-hardening.js", "oauth-runtime-hardening.js", "power.js");
 
 importScripts("focus-runtime-hardening.js");
-if (globalThis.__AI_BRIDGE_FOCUS_LAYOUT_V1__?.cloudLayoutAllowed !== true) {
+if (globalThis.__AI_BRIDGE_FOCUS_RUNTIME_V1__?.cloudLayoutAllowed !== true) {
   throw new Error("AI Bridge Focus layout hardening failed to initialize.");
 }
 
