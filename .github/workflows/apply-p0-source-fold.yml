@@ -25,102 +25,119 @@ jobs:
         uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: "22"
-      - name: Fold reviewed hardening into background source
+      - name: Finish self-contained source hardening
         shell: bash
         run: |
           set -euo pipefail
           python3 <<'PY'
           from pathlib import Path
 
-          source_path = Path("background.js")
-          runtime_path = Path("artifact-fetch-runtime-hardening.js")
-          src = source_path.read_text(encoding="utf-8")
-          runtime = runtime_path.read_text(encoding="utf-8")
+          path = Path("background.js")
+          src = path.read_text(encoding="utf-8")
+          original = src
 
-          def region(text: str, start: str, end: str) -> str:
-              if text.count(start) != 1:
-                  raise SystemExit(f"expected one start anchor {start!r}, found {text.count(start)}")
-              a = text.index(start)
-              b = text.index(end, a)
-              return text[a:b].rstrip()
+          constants = '''const ARTIFACT_EXACT_HOSTS = new Set([
+            "chatgpt.com",
+            "chat.openai.com",
+            "grok.com",
+            "assets.grok.com",
+            "assets.grokusercontent.com",
+            "claude.ai",
+            "gemini.google.com",
+            "copilot.microsoft.com"
+          ]);
+          const ARTIFACT_HOST_SUFFIXES = Object.freeze([
+            ".oaiusercontent.com",
+            ".googleusercontent.com",
+            ".anthropic.com"
+          ]);
 
-          def replace_region(start: str, end: str, replacement: str, label: str):
-              global src
-              if src.count(start) != 1:
-                  raise SystemExit(f"{label}: expected one start anchor, found {src.count(start)}")
-              a = src.index(start)
-              b = src.index(end, a)
-              src = src[:a] + replacement.rstrip() + "\n\n" + src[b:]
+          '''
 
-          # Reuse the already-loaded and reviewed runtime implementation so source
-          # and defense-in-depth overlay cannot silently drift apart.
-          sanitize = region(runtime, "  function sanitizeName(", "  function encodeBase64(")
-          sanitize = sanitize.replace("  function sanitizeName(", "function sanitizeArtifactName(", 1)
-          sanitize = "\n".join(line[2:] if line.startswith("  ") else line for line in sanitize.splitlines())
+          marker = "function artifactFetchHostAllowed(rawUrl) {"
+          if "const ARTIFACT_EXACT_HOSTS = new Set([" not in src:
+              if src.count(marker) != 1:
+                  raise SystemExit(f"artifact allowlist insertion anchor count={src.count(marker)}")
+              src = src.replace(marker, constants + marker, 1)
 
-          host = region(runtime, "  function hardenedArtifactFetchHostAllowed(", "  function sanitizeName(")
-          host = host.replace("hardenedArtifactFetchHostAllowed", "artifactFetchHostAllowed")
-          host = "\n".join(line[2:] if line.startswith("  ") else line for line in host.splitlines())
+          if "EXACT_HOSTS.has(host)" in src:
+              if src.count("EXACT_HOSTS.has(host)") != 1:
+                  raise SystemExit("unexpected EXACT_HOSTS references")
+              src = src.replace("EXACT_HOSTS.has(host)", "ARTIFACT_EXACT_HOSTS.has(host)", 1)
+          if "HOST_SUFFIXES.some(" in src:
+              if src.count("HOST_SUFFIXES.some(") != 1:
+                  raise SystemExit("unexpected HOST_SUFFIXES references")
+              src = src.replace("HOST_SUFFIXES.some(", "ARTIFACT_HOST_SUFFIXES.some(", 1)
 
-          bounded = region(runtime, "  async function readResponseBytesBounded(", "  async function hardenedFetchArtifactInBackground(")
-          bounded = bounded.replace("MAX_FILE_BYTES", "MAX_ARTIFACT_FILE_BYTES")
-          bounded = "\n".join(line[2:] if line.startswith("  ") else line for line in bounded.splitlines())
+          src = src.replace('    // IMPORTANT: do not use credentials:"include" here. A model-controlled\n', '    // IMPORTANT: never attach ambient browser credentials here. A model-controlled\n', 1)
 
-          fetcher = region(runtime, "  async function hardenedFetchArtifactInBackground(", "  // background.js is a classic service-worker script")
-          fetcher = fetcher.replace("hardenedFetchArtifactInBackground", "fetchArtifactInBackground")
-          fetcher = fetcher.replace("hardenedArtifactFetchHostAllowed", "artifactFetchHostAllowed")
-          fetcher = fetcher.replace("sanitizeName", "sanitizeArtifactName")
-          fetcher = fetcher.replace("encodeBase64", "bytesToBase64")
-          fetcher = fetcher.replace("MAX_FILE_BYTES", "MAX_ARTIFACT_FILE_BYTES")
-          fetcher = fetcher.replace("FETCH_TIMEOUT_MS", "20000")
-          fetcher = "\n".join(line[2:] if line.startswith("  ") else line for line in fetcher.splitlines())
+          # Keep the source handler readable as well as syntactically valid.
+          old_handler = '''    if (msg.type === "AI_BRIDGE_FETCH_ARTIFACT") {
+            requireBoundSessionTab(sender, "Artifact fetch");
+            const requested = String(msg.url || "");
+            if (!/^https:/i.test(requested)) throw new Error("Artifact worker fallback accepts HTTPS URLs only.");
+            if (msg.observed !== true) throw new Error("Artifact worker fallback requires an observed provider-page URL.");
+            if (!artifactFetchHostAllowed(requested)) throw new Error("Artifact URL host is not permitted by AI Bridge.");
+            const artifact = await fetchArtifactInBackground(requested, msg.name, msg.mime);
+            sendResponse({ ok: true, artifact });
+            return;
+          }
+          '''
+          # Normalize only if the previous automated transform flattened indentation.
+          flat_handler = '''    if (msg.type === "AI_BRIDGE_FETCH_ARTIFACT") {
+          requireBoundSessionTab(sender, "Artifact fetch");
+          const requested = String(msg.url || "");
+          if (!/^https:/i.test(requested)) throw new Error("Artifact worker fallback accepts HTTPS URLs only.");
+          if (msg.observed !== true) throw new Error("Artifact worker fallback requires an observed provider-page URL.");
+          if (!artifactFetchHostAllowed(requested)) throw new Error("Artifact URL host is not permitted by AI Bridge.");
+          const artifact = await fetchArtifactInBackground(requested, msg.name, msg.mime);
+          sendResponse({ ok: true, artifact });
+          return;
+        }
+          '''
+          if flat_handler in src:
+              src = src.replace(flat_handler, old_handler, 1)
 
-          replace_region("function sanitizeArtifactName(", "function estimateBase64Bytes(", sanitize, "artifact filename sanitizer")
-          replace_region("function artifactFetchHostAllowed(", "function artifactSummary(record) {", host + "\n\n" + bounded + "\n\n" + fetcher, "artifact fetch implementation")
+          required = [
+              'credentials: "omit"',
+              'referrerPolicy: "no-referrer"',
+              'cache: "no-store"',
+              'readResponseBytesBounded',
+              'ARTIFACT_EXACT_HOSTS.has(host)',
+              'ARTIFACT_HOST_SUFFIXES.some(',
+              'const ALLOWED_CLOUD_LAYOUTS = new Set(["studio", "classic", "focus"]);',
+              'msg.observed !== true',
+              'Google Drive Web implicit OAuth is disabled.'
+          ]
+          for needle in required:
+              if needle not in src:
+                  raise SystemExit(f"required source hardening missing: {needle}")
+          forbidden = [
+              'credentials: "include"',
+              'credentials:"include"',
+              'response_type: "token"',
+              'host === "x.ai"',
+              'host.endsWith(".x.ai")',
+              'host.endsWith(".microsoft.com")'
+          ]
+          for needle in forbidden:
+              if needle in src:
+                  raise SystemExit(f"forbidden source primitive remains: {needle}")
 
-          old_layout = 'const ALLOWED_CLOUD_LAYOUTS = new Set(["studio", "classic"]);'
-          new_layout = 'const ALLOWED_CLOUD_LAYOUTS = new Set(["studio", "classic", "focus"]);'
-          if src.count(old_layout) != 1:
-              raise SystemExit(f"Focus layout allowlist: expected one legacy line, found {src.count(old_layout)}")
-          src = src.replace(old_layout, new_layout, 1)
-
-          oauth_replacement = '''async function launchGoogleWebAuth({ clientId, interactive }) {
-            await clearPendingOauthState();
-            throw new Error("Google Drive Web implicit OAuth is disabled. Configure a Chrome Extension OAuth client in manifest.oauth2, or use Chrome Sync.");
-          }'''
-          replace_region("async function launchGoogleWebAuth({ clientId, interactive }) {", "function driveUrlAllowed(rawUrl) {", oauth_replacement, "legacy implicit Google OAuth")
-
-          artifact_handler = '''    if (msg.type === "AI_BRIDGE_FETCH_ARTIFACT") {
-              requireBoundSessionTab(sender, "Artifact fetch");
-              const requested = String(msg.url || "");
-              if (!/^https:/i.test(requested)) throw new Error("Artifact worker fallback accepts HTTPS URLs only.");
-              if (msg.observed !== true) throw new Error("Artifact worker fallback requires an observed provider-page URL.");
-              if (!artifactFetchHostAllowed(requested)) throw new Error("Artifact URL host is not permitted by AI Bridge.");
-              const artifact = await fetchArtifactInBackground(requested, msg.name, msg.mime);
-              sendResponse({ ok: true, artifact });
-              return;
-            }'''
-          replace_region('    if (msg.type === "AI_BRIDGE_FETCH_ARTIFACT") {', '    if (msg.type === "AI_BRIDGE_DOWNLOAD_ARTIFACT") {', artifact_handler, "artifact message handler")
-
-          if 'credentials: "include"' in src:
-              raise SystemExit('credentials:"include" remains in background.js')
-          if 'response_type: "token"' in src:
-              raise SystemExit('response_type:"token" remains in background.js')
-          if 'host === "x.ai"' in src or 'host.endsWith(".x.ai")' in src or 'host.endsWith(".microsoft.com")' in src:
-              raise SystemExit('broad artifact host allowlist remains in background.js')
-          if new_layout not in src:
-              raise SystemExit('Focus is missing from source cloud layout allowlist')
-          for required in ('credentials: "omit"', 'referrerPolicy: "no-referrer"', 'cache: "no-store"', 'readResponseBytesBounded', 'msg.observed !== true'):
-              if required not in src:
-                  raise SystemExit(f"required source hardening missing: {required}")
-
-          source_path.write_text(src, encoding="utf-8")
+          if src == original:
+              print("Source hardening already self-contained; nothing to commit.")
+          else:
+              path.write_text(src, encoding="utf-8")
           PY
           node --check background.js
           git diff --check
-          test "$(git diff --name-only | tr -d '\r')" = "background.js"
+          changed="$(git diff --name-only | tr -d '\r')"
+          if [ -z "$changed" ]; then
+            exit 0
+          fi
+          test "$changed" = "background.js"
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add background.js
-          git commit -m "security: fold P0 hardening into background source"
+          git commit -m "security: make source artifact allowlist self-contained"
           git push origin HEAD:ai-b/v1.17.1-source-fold
