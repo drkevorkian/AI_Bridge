@@ -22,10 +22,7 @@
   }
 
   // dashboard.js historically called chrome.tabs.query({}) and filtered the
-  // result afterwards. That grants the dashboard process visibility into every
-  // open tab's URL/title even though it only needs supported AI tabs. Restrict
-  // the empty dashboard query before dashboard.js executes. Non-empty queries
-  // remain untouched so feature-specific lookups keep their intended scope.
+  // result afterwards. Restrict that empty query to the supported provider URLs.
   try {
     const nativeTabsQuery = chrome.tabs.query.bind(chrome.tabs);
     chrome.tabs.query = function hardenedDashboardTabsQuery(queryInfo = {}) {
@@ -39,10 +36,7 @@
     console.error("AI Bridge could not install dashboard tab-query hardening", error);
   }
 
-  // v1.17 disables the old user-pasted Web OAuth implicit flow. Keep the legacy
-  // controls visible for migration context, but make them non-actionable and
-  // explain the supported path: manifest.oauth2 + Chrome Extension OAuth client
-  // (or Chrome Sync when Drive integration is not configured).
+  // v1.17 disables the old user-pasted Web OAuth implicit flow.
   window.addEventListener("DOMContentLoaded", () => {
     const input = document.getElementById("googleClientId");
     const save = document.getElementById("saveGoogleClientId");
@@ -67,23 +61,33 @@
     }
 
     // Load dynamic roster wiring only after dashboard.js and dashboard-release.js
-    // have registered their legacy A/B/C handlers. The adapter expands the live
-    // SIDES array, creates D/E controls, and attaches only the missing listeners.
-    // Keeping this as a packaged extension script preserves the MV3 CSP boundary.
+    // have registered their legacy A/B/C handlers. Once the adapter reports its
+    // thread-conflict safeguards, expose the active viewpoint policy through a
+    // second packaged script. This keeps activation diagnostics truthful without
+    // making the dashboard marker authoritative for routing.
     if (!document.querySelector("script[data-ai-bridge-dynamic-agents]")) {
       const script = document.createElement("script");
       script.src = chrome.runtime.getURL("dashboard-dynamic-agents.js");
       script.async = false;
       script.dataset.aiBridgeDynamicAgents = "true";
+      script.addEventListener("load", () => {
+        if (document.querySelector("script[data-ai-bridge-viewpoint-activation]")) return;
+        const activation = document.createElement("script");
+        activation.src = chrome.runtime.getURL("dashboard-viewpoint-activation.js");
+        activation.async = false;
+        activation.dataset.aiBridgeViewpointActivation = "true";
+        document.body.appendChild(activation);
+      }, { once: true });
       document.body.appendChild(script);
     }
   }, { once: true });
 
   window.__AI_BRIDGE_DASHBOARD_BOOTSTRAP__ = Object.freeze({
-    version: 4,
+    version: 5,
     providerScopedTabQuery: true,
     legacyWebOauthDisabled: true,
     dynamicAgentAdapter: true,
+    viewpointActivationAdapter: true,
     layouts: Object.freeze(["studio", "classic", "focus"])
   });
 })();
