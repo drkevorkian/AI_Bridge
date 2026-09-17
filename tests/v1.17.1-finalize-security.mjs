@@ -50,10 +50,12 @@ assert.match(background, /ALLOWED_CLOUD_LAYOUTS = new Set\(\["studio", "classic"
 assert.doesNotMatch(background, /response_type:\s*"token"/);
 assert.match(background, /msg\.observed !== true/);
 
-assert.match(mutex, /version:\s*5/);
+assert.match(mutex, /version:\s*6/);
 assert.match(mutex, /artifactProvenanceGate:\s*true/);
+assert.match(mutex, /artifactProvenanceSupportsDynamicSides:/);
 assert.match(mutex, /message\.observed !== true/);
 assert.match(mutex, /generationIdBySide/);
+assert.match(mutex, /generationSide !== side/);
 assert.match(mutex, /candidateSignature/);
 assert.match(mutex, /parsed\.protocol !== "https:"/);
 assert.match(content, /observed:\s*true/);

@@ -17,8 +17,9 @@ if (
 
 importScripts("coordinator-mutex-prelude.js");
 if (
-  globalThis.__AI_BRIDGE_COORDINATOR_MUTEX__?.version !== 5 ||
+  globalThis.__AI_BRIDGE_COORDINATOR_MUTEX__?.version !== 6 ||
   globalThis.__AI_BRIDGE_COORDINATOR_MUTEX__?.artifactProvenanceGate !== true ||
+  globalThis.__AI_BRIDGE_COORDINATOR_MUTEX__?.artifactProvenanceSupportsDynamicSides !== true ||
   typeof globalThis.enqueueCoordinatorMutation !== "function"
 ) {
   throw new Error("AI Bridge coordinator mutex failed to initialize.");

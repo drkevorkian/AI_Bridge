@@ -98,7 +98,7 @@ context.globalThis = context;
 
 vm.runInContext(mutexSource, context, { filename: "coordinator-mutex-prelude.js" });
 assert.equal(typeof context.enqueueCoordinatorMutation, "function");
-assert.equal(context.__AI_BRIDGE_COORDINATOR_MUTEX__.version, 5);
+assert.equal(context.__AI_BRIDGE_COORDINATOR_MUTEX__.version, 6);
 assert.equal(context.__AI_BRIDGE_COORDINATOR_MUTEX__.artifactProvenanceGate, true);
 
 chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {

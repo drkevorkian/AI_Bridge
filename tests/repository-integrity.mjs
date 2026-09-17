@@ -89,8 +89,9 @@ assert.match(updater, /credentials:\s*"omit"/);
 assert.match(updater, /codeload\.github\.com\/\$\{OWNER\}\/\$\{REPO\}\/zip\/\$\{sha\}/);
 
 const mutex = read("coordinator-mutex-prelude.js");
-assert.match(mutex, /version:\s*5/);
+assert.match(mutex, /version:\s*6/);
 assert.match(mutex, /artifactProvenanceGate:\s*true/);
+assert.match(mutex, /artifactProvenanceSupportsDynamicSides:/);
 assert.match(mutex, /validateArtifactFetchRequest/);
 
 const wrapper = read("background-wrapper.js");
