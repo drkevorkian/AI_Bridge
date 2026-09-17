@@ -344,6 +344,38 @@
     throw new Error("Provider health probe could not reach a stable state.");
   }
 
+  // Internal snapshots intentionally retain tabId and threadKey because duplicate
+  // tab/thread classification needs them. Extension pages do not. Build public
+  // responses from an explicit allowlist so a future internal field cannot leak
+  // across the runtime-message boundary merely because it was added to a row.
+  function publicHealthSnapshot(snapshot) {
+    const bySide = Object.fromEntries(Object.entries(snapshot?.bySide || {}).map(([side, row]) => [
+      side,
+      Object.freeze({
+        side: String(row?.side || side),
+        label: String(row?.label || `AI ${side}`),
+        status: String(row?.status || "UNASSIGNED"),
+        providerId: row?.providerId == null ? null : String(row.providerId),
+        providerName: row?.providerName == null ? null : String(row.providerName),
+        threadPath: row?.threadPath == null ? null : String(row.threadPath),
+        reachable: Boolean(row?.reachable),
+        ready: Boolean(row?.ready),
+        checkedAt: Number(row?.checkedAt) || 0,
+        reason: String(row?.reason || "")
+      })
+    ]));
+    return Object.freeze({
+      version: Number(snapshot?.version) || 1,
+      checkedAt: Number(snapshot?.checkedAt) || 0,
+      agentCount: Number(snapshot?.agentCount) || 0,
+      sides: Object.freeze(Array.from(snapshot?.sides || [], side => String(side))),
+      bySide: Object.freeze(bySide),
+      readySides: Object.freeze(Array.from(snapshot?.readySides || [], side => String(side))),
+      blockedSides: Object.freeze(Array.from(snapshot?.blockedSides || [], side => String(side))),
+      duplicateProviderAgentsEnabled: snapshot?.duplicateProviderAgentsEnabled === true
+    });
+  }
+
   function recommendStartSide(snapshot, preferred) {
     const health = snapshot || lastSnapshot;
     if (!health) {
@@ -397,10 +429,11 @@
         .then(async () => {
           requireHealthCaller(sender);
           const snapshot = await probeActiveAgents({ force: msg.force === true });
+          const publicHealth = publicHealthSnapshot(snapshot);
           if (msg.type === "AI_BRIDGE_ADAPTIVE_SELECT") {
-            return { ok: true, health: snapshot, recommendation: recommendStartSide(snapshot, msg.preferredSide || liveState().startSide) };
+            return { ok: true, health: publicHealth, recommendation: recommendStartSide(snapshot, msg.preferredSide || liveState().startSide) };
           }
-          return { ok: true, health: snapshot };
+          return { ok: true, health: publicHealth };
         })
         .then(result => sendResponse(result))
         .catch(err => sendResponse({ ok: false, error: String(err?.message || err) }));
@@ -419,6 +452,7 @@
     stateKeyedProbeCache: true,
     tabLifecycleInvalidatesProbeCache: true,
     rejectsUnstableInflightProbes: true,
+    publicHealthRedactsSensitiveIdentity: true,
     mutatesRouting: false,
     sendsProviderPrompts: false,
     probeActiveAgents,
