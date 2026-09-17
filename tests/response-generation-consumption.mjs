@@ -14,7 +14,7 @@ const wrapper = fs.readFileSync(path.join(root, "background-wrapper.js"), "utf8"
 // handleCompletedResponse so its generation re-check executes inside that queue.
 assert.match(background, /const task = \(\) => handleCompletedResponse\(side, text,/);
 assert.match(background, /responseCommitQueue = responseCommitQueue\.catch\(\(\) => \{\}\)\.then\(task\)/);
-assert.match(wrapper, /rechecksGenerationAtSerializedCommit\?\.*/s);
+assert.match(wrapper, /rechecksGenerationAtSerializedCommit !== true/);
 assert.match(wrapper, /consumesAcceptedGenerationBeforeCommit/);
 assert.match(wrapper, /preventsSequentialReplayWindow/);
 
