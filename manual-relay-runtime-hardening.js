@@ -61,11 +61,11 @@
       throw new Error("Relay, Collaborate, and Direct Mesh have one coordinator cursor. Choose one Manual Relay destination so later replies cannot be silently discarded.");
     }
 
-    if (isBatchWorkMode?.(state.workMode) && dest.length > 1) {
+    if (isBatchWorkMode?.(state.workMode)) {
       const pending = new Set(Array.isArray(state.phasePendingSides) ? state.phasePendingSides : []);
       const unsafe = dest.filter(side => !pending.has(side));
       if (unsafe.length) {
-        throw new Error(`Batch Manual Relay can fan out only to currently pending AIs. Not pending: ${unsafe.map(side => `AI ${side}`).join(", ")}.`);
+        throw new Error(`Batch Manual Relay can target only currently pending AIs. Not pending: ${unsafe.map(side => `AI ${side}`).join(", ")}.`);
       }
     }
     return dest;
