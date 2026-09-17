@@ -24,13 +24,21 @@
     return badge;
   }
 
+  function setBadgeState(badge, { text, title, phase, hidden }) {
+    if (!badge) return;
+    // Each queue badge is a polite live region. Avoid rewriting unchanged text
+    // on every Provider Health cadence tick: some assistive technologies may
+    // announce a live-region mutation even when the resulting string is the
+    // same. Only genuine queue-state changes should mutate the live text.
+    if (badge.textContent !== text) badge.textContent = text;
+    if (badge.title !== title) badge.title = title;
+    if (badge.dataset.phase !== phase) badge.dataset.phase = phase;
+    if (badge.hidden !== hidden) badge.hidden = hidden;
+  }
+
   function clearBadge(side) {
     const badge = ensureBadge(side);
-    if (!badge) return;
-    badge.textContent = "";
-    badge.title = "";
-    badge.dataset.phase = "idle";
-    badge.hidden = true;
+    setBadgeState(badge, { text: "", title: "", phase: "idle", hidden: true });
   }
 
   function applyQueueSnapshot(snapshot) {
@@ -42,17 +50,22 @@
         continue;
       }
       const phase = String(row.phase || "");
-      badge.dataset.phase = phase;
       if (phase === "queued") {
         const position = Math.max(1, Number(row.queuePosition) || 1);
         const waitSeconds = Math.max(0, Math.floor((Number(row.waitMs) || 0) / 1000));
-        badge.textContent = position > 1 ? `Queued #${position}` : "Queued";
-        badge.title = waitSeconds > 0 ? `Waiting for provider lock · ${waitSeconds}s` : "Waiting for provider lock";
-        badge.hidden = false;
+        setBadgeState(badge, {
+          text: position > 1 ? `Queued #${position}` : "Queued",
+          title: waitSeconds > 0 ? `Waiting for provider lock · ${waitSeconds}s` : "Waiting for provider lock",
+          phase,
+          hidden: false
+        });
       } else if (phase === "sending") {
-        badge.textContent = "Sending";
-        badge.title = "This provider-family queue currently owns the send lock.";
-        badge.hidden = false;
+        setBadgeState(badge, {
+          text: "Sending",
+          title: "This provider-family queue currently owns the send lock.",
+          phase,
+          hidden: false
+        });
       } else {
         clearBadge(side);
       }
@@ -100,6 +113,7 @@
     version: 1,
     exposesSensitiveIdentity: false,
     usesAriaLive: true,
+    deduplicatesLiveText: true,
     reusesHealthCadence: true,
     independentTimer: false,
     refreshQueueStatus
