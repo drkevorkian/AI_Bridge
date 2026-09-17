@@ -21,6 +21,7 @@ const context = vm.createContext({
   Set,
   Object,
   Promise,
+  URL,
   state: {
     sessionActive: true,
     running: true,
@@ -29,7 +30,15 @@ const context = vm.createContext({
     currentSide: "B",
     activeSides: ["A", "B", "C"],
     phasePendingSides: [],
+    tabA: 101,
+    tabB: 202,
+    tabC: 303,
     generationIdBySide: { A: "gen-a", B: "gen-b", C: "gen-c" },
+    viewpointIdentityBySide: {
+      A: { provenanceId: "chatgpt:tab:101:https://chatgpt.com/c/a", threadKey: "https://chatgpt.com/c/a", providerFamily: "chatgpt", boundTabId: 101 },
+      B: { provenanceId: "chatgpt:tab:202:https://chatgpt.com/c/b", threadKey: "https://chatgpt.com/c/b", providerFamily: "chatgpt", boundTabId: 202 },
+      C: { provenanceId: "chatgpt:tab:303:https://chatgpt.com/c/c", threadKey: "https://chatgpt.com/c/c", providerFamily: "chatgpt", boundTabId: 303 }
+    },
     roundStartedAtBySide: { A: 1, B: 1, C: 1 },
     lastProgressAtBySide: { A: null, B: null, C: null },
     checkpointPending: false,
@@ -37,10 +46,24 @@ const context = vm.createContext({
     stuckTimeoutMinutes: 30
   },
   SIDES: ["A", "B", "C"],
+  __AI_BRIDGE_AGENT_CAPABILITIES__: {
+    version: 1,
+    conversationIdentity({ side, tabId, url }) {
+      try {
+        const parsed = new URL(String(url || ""));
+        if (parsed.protocol !== "https:" || parsed.hostname !== "chatgpt.com") return null;
+        const pathname = parsed.pathname.replace(/\/+$/, "") || "/";
+        const threadKey = `${parsed.protocol}//${parsed.hostname}${pathname}`;
+        return { side, tabId, familyId: "chatgpt", threadKey, provenanceId: `chatgpt:tab:${tabId}:${threadKey}` };
+      } catch (_) { return null; }
+    }
+  },
+  tabForSide(side) { return context.state[`tab${side}`]; },
   isBatchWorkMode() { return ["compete", "parallel", "review"].includes(context.state.workMode); },
   async queryGenerationStatus(side) {
     probeCalls.push(side);
-    return { ok: true, generating: true, pendingSend: true, lastChangeAt: 123 };
+    const path = String(side || "").toLowerCase();
+    return { ok: true, generating: true, pendingSend: true, lastChangeAt: 123, pageUrl: `https://chatgpt.com/c/${path}` };
   },
   async runWatchdogTick() { return { checked: false }; },
   clampStuckTimeoutMinutes() { return 30; },
@@ -49,6 +72,12 @@ const context = vm.createContext({
   async saveState() {},
   async skipStalledCheckpoint() { return { skipped: true }; },
   async recoverStuckSide() { return { recovered: true }; },
+  completeRoundTimer() {},
+  async pauseBridge(reason) {
+    context.state.running = false;
+    context.state.paused = true;
+    context.state.pauseReason = reason;
+  },
   async enqueueCoordinatorMutation(task) { return task(); }
 });
 context.globalThis = context;
@@ -78,6 +107,9 @@ context.state.awaitingHuman = true;
 result = await context.runWatchdogTick(700);
 assert.equal(result.checked, false, "watchdog must stay idle while human input is pending");
 
+assert.equal(context.__AI_BRIDGE_WATCHDOG_SECURITY__.version, 3);
 assert.equal(context.__AI_BRIDGE_WATCHDOG_SECURITY__.serializedWithCoordinator, true);
+assert.equal(context.__AI_BRIDGE_WATCHDOG_SECURITY__.generationStatusCarriesPageIdentity, true);
+assert.equal(context.__AI_BRIDGE_WATCHDOG_SECURITY__.revokesMismatchedConversationBeforeTimeout, true);
 assert.equal(context.__AI_BRIDGE_WATCHDOG_SECURITY__.mutatesActiveSides, false);
 console.log("v1.16.4 watchdog hardening regression checks passed.");
