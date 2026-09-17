@@ -52,7 +52,7 @@ assert.match(content, /generationId:\s*currentGenerationId/);
 assert.match(content, /candidateSignature/);
 assert.match(content, /authenticatedLocalArtifactAllowed/);
 assert.match(content, /credentials:\s*authenticatedLocalArtifactAllowed\(url\) \? "include" : "omit"/);
-assert.match(content, /if \(\/\^https:\/\/i\.test\(url\)\)/);
+assert.match(content, /if \(\/\^https:\/i\.test\(url\)\)/);
 
 // Focus accessibility -------------------------------------------------------
 assert.match(release, /role", "tabpanel"/);
