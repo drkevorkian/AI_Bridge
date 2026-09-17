@@ -13,9 +13,6 @@ function size(relative) {
   return fs.statSync(path.join(root, relative)).size;
 }
 
-// Conservative lower bounds: normal refactors remain possible, while a
-// one-line placeholder/truncated upload can no longer pass CI just because it
-// is syntactically valid JavaScript.
 assert.ok(size("content.js") > 20000, "content.js appears truncated");
 assert.ok(size("background.js") > 150000, "background.js appears truncated");
 assert.ok(size("dashboard.js") > 60000, "dashboard.js appears truncated");
@@ -24,6 +21,7 @@ assert.ok(size("human-input-runtime-hardening.js") > 4000, "human-input hardenin
 assert.ok(size("content-runtime-prelude.js") > 4000, "content runtime prelude appears truncated");
 assert.ok(size("content-artifact-security-prelude.js") > 1000, "content artifact security prelude appears truncated");
 assert.ok(size("manual-relay-runtime-hardening.js") > 500, "manual relay hardening appears truncated");
+assert.ok(size("dashboard-focus.css") > 3000, "Focus layout stylesheet appears truncated");
 
 const content = read("content.js");
 for (const marker of [
@@ -50,15 +48,16 @@ for (const marker of [
 }
 
 const manifest = JSON.parse(read("manifest.json"));
-assert.equal(manifest.version, "1.17.0", "debug/security release must be versioned as 1.17.0");
+assert.equal(manifest.version, "1.17.0", "debug/security release must remain versioned as 1.17.0 until the next release bump");
 assert.ok(Number(manifest.minimum_chrome_version) >= 106, "minimum Chrome must cover Promise-based Identity APIs");
 assert.equal(
   manifest.content_security_policy?.extension_pages,
-  "script-src 'self'; object-src 'none'; base-uri 'none'; frame-ancestors 'none';",
+  "script-src 'self'; object-src 'none'; base-uri 'none'; frame-ancestors 'none'",
   "extension pages must retain the explicit fail-closed CSP"
 );
 assert.ok(!manifest.host_permissions.includes("https://x.ai/*"), "x.ai host permission must stay removed");
 assert.ok(!manifest.host_permissions.includes("https://api.x.ai/*"), "api.x.ai host permission must stay removed");
+assert.ok(!manifest.host_permissions.includes("https://oauth2.googleapis.com/*"), "undocumented Google Web OAuth token exchange host must stay removed");
 
 const scripts = manifest.content_scripts?.[0]?.js || [];
 assert.deepEqual(
@@ -91,12 +90,13 @@ const contentArtifactSecurity = read("content-artifact-security-prelude.js");
 assert.match(contentArtifactSecurity, /defaultCredentials:\s*"omit"/);
 assert.match(contentArtifactSecurity, /current-chatgpt-interpreter-download-only/);
 
+const artifactHardening = read("artifact-fetch-runtime-hardening.js");
+assert.match(artifactHardening, /credentials:\s*"omit"/);
+assert.match(artifactHardening, /streamedSizeLimit:\s*true/);
+assert.match(artifactHardening, /finalUrlRevalidation:\s*true/);
+assert.doesNotMatch(artifactHardening, /"x\.ai"|"api\.x\.ai"/);
+
 const wrapper = read("background-wrapper.js");
-assert.match(
-  wrapper,
-  /importScripts\("background\.js",\s*"completion-runtime-hardening\.js",\s*"oauth-runtime-hardening\.js",\s*"power\.js"\)/,
-  "established service-worker bootstrap chain changed unexpectedly"
-);
 for (const requiredModule of [
   "artifact-fetch-runtime-hardening.js",
   "manual-relay-runtime-hardening.js",
@@ -107,10 +107,13 @@ for (const requiredModule of [
 ]) {
   assert.ok(wrapper.includes(`importScripts("${requiredModule}")`), `service worker is not loading ${requiredModule}`);
 }
-assert.ok(
-  wrapper.indexOf('importScripts("coordinator-mutex-prelude.js")') < wrapper.indexOf('importScripts("background.js"'),
-  "coordinator mutation prelude must load before background.js registers its message listener"
-);
+const mutexIndex = wrapper.indexOf('importScripts("coordinator-mutex-prelude.js")');
+const backgroundIndex = wrapper.indexOf('importScripts("background.js")');
+const artifactIndex = wrapper.indexOf('importScripts("artifact-fetch-runtime-hardening.js")');
+const helperIndex = wrapper.indexOf('importScripts("completion-runtime-hardening.js", "oauth-runtime-hardening.js", "power.js")');
+assert.ok(mutexIndex >= 0 && mutexIndex < backgroundIndex, "coordinator mutex must load before background.js");
+assert.ok(backgroundIndex >= 0 && backgroundIndex < artifactIndex, "artifact hardening must load immediately after background.js");
+assert.ok(artifactIndex >= 0 && artifactIndex < helperIndex, "privileged artifact fetch must be hardened before other helper modules load");
 
 const textExtensions = new Set([".js", ".mjs", ".json", ".html", ".css", ".md", ".yml", ".yaml"]);
 function walk(directory) {
@@ -123,16 +126,8 @@ function walk(directory) {
     }
     if (!entry.isFile() || !textExtensions.has(path.extname(entry.name).toLowerCase())) continue;
     const text = fs.readFileSync(absolute, "utf8");
-    assert.notEqual(
-      text.trim(),
-      "see-local-file",
-      `${path.relative(root, absolute)} contains a placeholder instead of source code`
-    );
-    assert.notEqual(
-      text.trim(),
-      "placeholder",
-      `${path.relative(root, absolute)} contains a placeholder instead of source code`
-    );
+    assert.notEqual(text.trim(), "see-local-file", `${path.relative(root, absolute)} contains a placeholder instead of source code`);
+    assert.notEqual(text.trim(), "placeholder", `${path.relative(root, absolute)} contains a placeholder instead of source code`);
   }
 }
 walk(root);
