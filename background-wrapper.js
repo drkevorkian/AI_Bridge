@@ -156,7 +156,14 @@ if (
 }
 
 importScripts("coordinator-generation-hardening.js");
-if (globalThis.__AI_BRIDGE_GENERATION_SECURITY__?.failClosedWhenUnarmed !== true) {
+if (
+  globalThis.__AI_BRIDGE_GENERATION_SECURITY__?.version !== 2 ||
+  globalThis.__AI_BRIDGE_GENERATION_SECURITY__?.failClosedWhenUnarmed !== true ||
+  globalThis.__AI_BRIDGE_GENERATION_SECURITY__?.rechecksGenerationAtSerializedCommit !== true ||
+  globalThis.__AI_BRIDGE_GENERATION_SECURITY__?.consumesAcceptedGenerationBeforeCommit !== true ||
+  globalThis.__AI_BRIDGE_GENERATION_SECURITY__?.preservesNewerGenerationArmedByCommit !== true ||
+  globalThis.__AI_BRIDGE_GENERATION_SECURITY__?.preventsSequentialReplayWindow !== true
+) {
   throw new Error("AI Bridge generation hardening failed to initialize.");
 }
 
