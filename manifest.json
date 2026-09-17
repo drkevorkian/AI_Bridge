@@ -30,11 +30,10 @@
     "https://www.googleapis.com/*",
     "https://api.github.com/*",
     "https://raw.githubusercontent.com/*",
-    "https://codeload.github.com/*",
-    "https://oauth2.googleapis.com/*"
+    "https://codeload.github.com/*"
   ],
   "content_security_policy": {
-    "extension_pages": "script-src 'self'; object-src 'none'; base-uri 'none'; frame-ancestors 'none';"
+    "extension_pages": "script-src 'self'; object-src 'none'; base-uri 'none'; frame-ancestors 'none'"
   },
   "background": {
     "service_worker": "background-wrapper.js"
@@ -68,8 +67,5 @@
   ],
   "icons": {
     "128": "icon128.png"
-  },
-  "content_security_policy": {
-    "extension_pages": "script-src 'self'; object-src 'none'; base-uri 'self'; frame-ancestors 'none'"
   }
 }
