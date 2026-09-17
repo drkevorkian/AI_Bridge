@@ -46,12 +46,12 @@ const sandbox = {
       return response({ url: String(url), body: { sha } });
     }
     if (String(url) === `https://raw.githubusercontent.com/drkevorkian/AI_Bridge/${sha}/manifest.json`) {
-      return response({ url: String(url), body: { version: "1.17.1" } });
+      return response({ url: String(url), body: { version: "1.17.2" } });
     }
     throw new Error(`unexpected fetch ${url}`);
   },
   chrome: {
-    runtime: { getManifest() { return { version: "1.17.0" }; } },
+    runtime: { getManifest() { return { version: "1.17.1" }; } },
     storage: {
       session: {
         async set(pack) { session = { ...session, ...pack }; },
@@ -90,7 +90,7 @@ assert.equal(downloaded.commitSha, sha);
 assert.equal(downloaded.immutablePin, true);
 assert.equal(downloads.length, 1);
 assert.equal(downloads[0].url, `https://codeload.github.com/drkevorkian/AI_Bridge/zip/${sha}`);
-assert.match(downloads[0].filename, /AI_Bridge_v1\.17\.1_0123456789ab\.zip/);
+assert.match(downloads[0].filename, /AI_Bridge_v1\.17\.2_0123456789ab\.zip/);
 assert.equal(downloads[0].saveAs, true);
 
 console.log("v1.17 immutable updater regression passed.");

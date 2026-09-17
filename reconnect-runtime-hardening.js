@@ -7,7 +7,7 @@
 (() => {
   "use strict";
 
-  const EXPECTED_CONTENT_VERSION = "1.17.0";
+  const EXPECTED_CONTENT_VERSION = "1.17.1";
   const PING_ATTEMPTS = 12;
   const PING_DELAY_MS = 250;
   const RELOAD_TIMEOUT_MS = 20000;
@@ -78,9 +78,6 @@
       throw new Error(`Selected tab is not on a supported AI site: ${tab?.url || "unknown URL"}`);
     }
 
-    // Any missing/mismatched listener is recovered through a full page reload.
-    // This destroys the old isolated world, response wrappers, completion guard,
-    // and monitor interval before Chrome injects the manifest stack again.
     try {
       await chrome.tabs.reload(tabId);
       tab = await waitForReadyTab(tabId);
@@ -94,9 +91,6 @@
     const pong = await pingUntilCurrent(tabId);
     if (pong) return pong;
 
-    // Do not inject over a live/partially initialized isolated world. A second
-    // reload is safer than double-wrapping chrome.runtime.sendMessage or
-    // stacking content.js polling timers.
     try {
       await chrome.tabs.reload(tabId);
       tab = await waitForReadyTab(tabId);
