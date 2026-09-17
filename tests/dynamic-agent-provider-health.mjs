@@ -16,6 +16,7 @@ assert.ok(
 );
 assert.ok(healthSrc.includes('sendsProviderPrompts: false'));
 assert.ok(healthSrc.includes('mutatesRouting: false'));
+assert.ok(healthSrc.includes('stateKeyedProbeCache: true'));
 assert.ok(healthSrc.includes("AI_BRIDGE_PROVIDER_HEALTH"));
 assert.doesNotMatch(healthSrc, /AI_BRIDGE_SEND/);
 
@@ -175,6 +176,35 @@ const busyPick = busyContext.recommendStartSide(busyHealth, "A");
 assert.equal(busyPick.side, "B");
 assert.match(busyPick.reason, /A is not READY; using B/);
 
+// The probe cache must never preserve READY across health-relevant coordinator
+// state changes, even when the second request arrives inside the 750ms cache
+// window. This protects direct Adaptive Selector callers, not just the dashboard.
+const mutableState = {
+  agentCount: 3,
+  tabA: 11,
+  tabB: 22,
+  tabC: 33,
+  startSide: "A",
+  sessionActive: false,
+  running: false,
+  generationIdBySide: { A: null, B: null, C: null }
+};
+const cacheContext = load(mutableState);
+const cachedReady = await cacheContext.probeActiveAgents({ force: true });
+assert.equal(cachedReady.bySide.A.status, "READY");
+mutableState.sessionActive = true;
+mutableState.running = true;
+mutableState.generationIdBySide.A = "A-1720000000000-cache111";
+const cacheAfterGeneration = await cacheContext.probeActiveAgents({ force: false });
+assert.notEqual(cacheAfterGeneration, cachedReady);
+assert.equal(cacheAfterGeneration.bySide.A.status, "GENERATING");
+assert.equal(cacheAfterGeneration.bySide.A.ready, false);
+mutableState.tabA = 77;
+const cacheAfterRebind = await cacheContext.probeActiveAgents({ force: false });
+assert.notEqual(cacheAfterRebind, cacheAfterGeneration);
+assert.equal(cacheAfterRebind.bySide.A.status, "UNSUPPORTED");
+assert.equal(cacheAfterRebind.bySide.A.ready, false);
+
 // When every live side is blocked, fail closed. Returning the first roster side
 // would contradict the READY-only recommendation contract and could lead a
 // future caller to dispatch into an unhealthy/busy agent.
@@ -201,6 +231,7 @@ assert.equal(noneReadySelect.health.readySides.length, 0);
 assert.equal(noneReadySelect.recommendation.side, null);
 assert.match(noneReadySelect.recommendation.reason, /No READY agent/);
 
+assert.equal(three.__AI_BRIDGE_PROVIDER_HEALTH_V1__.stateKeyedProbeCache, true);
 assert.equal(three.__AI_BRIDGE_PROVIDER_HEALTH_V1__.mutatesRouting, false);
 assert.equal(three.__AI_BRIDGE_PROVIDER_HEALTH_V1__.sendsProviderPrompts, false);
 

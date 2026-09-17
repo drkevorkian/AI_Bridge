@@ -33,6 +33,7 @@
   const MIN_PROBE_INTERVAL_MS = 750;
   let lastProbeAt = 0;
   let lastSnapshot = null;
+  let lastStateKey = "";
 
   function liveState() {
     try {
@@ -51,6 +52,22 @@
     const raw = current[`tab${side}`];
     const id = Number(raw);
     return Number.isInteger(id) && id > 0 ? id : null;
+  }
+
+  // The short probe cache is safe only while all coordinator fields that can
+  // change READY/blocked classification remain identical. This keeps the 750ms
+  // de-duplication optimization without allowing a just-started generation,
+  // roster resize, or tab rebind to inherit an older READY snapshot.
+  function healthStateKey(current, sides) {
+    return JSON.stringify([
+      Boolean(current?.sessionActive),
+      Boolean(current?.running),
+      ...sides.map(side => [
+        side,
+        tabIdFor(side, current),
+        Boolean(current?.generationIdBySide?.[side])
+      ])
+    ]);
   }
 
   function threadPathForIdentity(identity) {
@@ -240,12 +257,18 @@
 
   async function probeActiveAgents({ force = false } = {}) {
     const now = Date.now();
-    if (!force && lastSnapshot && now - lastProbeAt < MIN_PROBE_INTERVAL_MS) {
+    const current = liveState();
+    const sides = liveSides();
+    const stateKey = healthStateKey(current, sides);
+    if (
+      !force &&
+      lastSnapshot &&
+      stateKey === lastStateKey &&
+      now - lastProbeAt < MIN_PROBE_INTERVAL_MS
+    ) {
       return lastSnapshot;
     }
 
-    const current = liveState();
-    const sides = liveSides();
     const raw = [];
     for (const side of sides) {
       raw.push(await probeSide(side, current));
@@ -263,6 +286,7 @@
     });
     lastProbeAt = now;
     lastSnapshot = snapshot;
+    lastStateKey = stateKey;
     return snapshot;
   }
 
@@ -319,6 +343,7 @@
     uniqueTabBinding: true,
     includesSanitizedThreadIdentity: true,
     detectsDuplicateThreads: true,
+    stateKeyedProbeCache: true,
     mutatesRouting: false,
     sendsProviderPrompts: false,
     probeActiveAgents,
