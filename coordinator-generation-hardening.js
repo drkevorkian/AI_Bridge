@@ -15,6 +15,7 @@
   };
 
   const persistenceAvailable = typeof saveState === "function";
+  const caps = globalThis.__AI_BRIDGE_AGENT_CAPABILITIES__ || null;
   let generationPersistenceQueue = Promise.resolve();
 
   // Generation authorization changes cross the MV3 persistence boundary in both
@@ -97,6 +98,20 @@
   }
 
   let consumptionAttached = false;
+  let conversationBindingAttached = false;
+
+  function responseConversationMatches(side, pageUrl) {
+    if (!caps || caps.version !== 1 || typeof caps.conversationIdentity !== "function") return false;
+    const normalizedSide = String(side || "").toUpperCase();
+    const tabId = Number(typeof tabForSide === "function" ? tabForSide(normalizedSide) : state?.[`tab${normalizedSide}`]);
+    const expected = state?.viewpointIdentityBySide?.[normalizedSide] || null;
+    const observed = caps.conversationIdentity({ side: normalizedSide, tabId, url: String(pageUrl || "") });
+    if (!expected || !observed) return false;
+    return String(expected.provenanceId || "") === String(observed.provenanceId || "") &&
+      String(expected.threadKey || "") === String(observed.threadKey || "") &&
+      String(expected.providerFamily || "") === String(observed.familyId || "") &&
+      Number(expected.boundTabId) === Number(observed.tabId);
+  }
 
   if (typeof handleCompletedResponse === "function" && persistenceAvailable) {
     const baseHandleCompletedResponse = handleCompletedResponse;
@@ -112,6 +127,25 @@
       const normalizedSide = String(side || "").toUpperCase();
       const incomingGenerationId = String(options?.generationId || "");
       const expectedGenerationId = String(state?.generationIdBySide?.[normalizedSide] || "");
+      const responsePageUrl = String(options?.pageUrl || "");
+
+      // Sender-tab and generation authority are necessary but not sufficient on
+      // modern provider SPAs: the same content script can survive navigation to
+      // another conversation. Require the current response page to match the
+      // exact trusted conversation identity captured when this generation was
+      // dispatched. Reject before consuming the token so navigation noise does
+      // not destroy an otherwise recoverable generation capability.
+      if (!responseConversationMatches(normalizedSide, responsePageUrl)) {
+        try {
+          appendLog({
+            time: Date.now(),
+            type: "stale-response",
+            side: normalizedSide || null,
+            text: `Ignored response from AI ${normalizedSide || "?"} because its conversation identity changed after dispatch`
+          });
+        } catch (_) {}
+        return { ok: false, ignored: true, staleConversation: true };
+      }
 
       if (!generationMatches(expectedGenerationId, incomingGenerationId)) {
         try {
@@ -143,6 +177,7 @@
       return baseHandleCompletedResponse(side, text, options);
     };
     consumptionAttached = true;
+    conversationBindingAttached = Boolean(caps && caps.version === 1 && typeof caps.conversationIdentity === "function");
   }
 
   let failedDispatchRollbackAttached = false;
@@ -167,7 +202,7 @@
   // requires every response/dispatch capability below, so a missing coordinator,
   // provider-boundary, or persistence hook still fails closed in the real worker.
   globalThis.__AI_BRIDGE_GENERATION_SECURITY__ = Object.freeze({
-    version: 4,
+    version: 5,
     failClosedWhenUnarmed: true,
     durablyArmsGenerationBeforeProviderSend: providerBoundaryAttached,
     providerSendBoundaryGuarded: providerBoundaryAttached,
@@ -178,6 +213,8 @@
     durablyPersistsConsumedGenerationBeforeCommit: consumptionAttached,
     preservesNewerGenerationArmedByCommit: consumptionAttached,
     preventsSequentialReplayWindow: consumptionAttached,
-    preventsRestartGenerationResurrection: consumptionAttached
+    preventsRestartGenerationResurrection: consumptionAttached,
+    requiresAutomaticResponsePageIdentity: conversationBindingAttached,
+    rejectsCrossThreadSpaResponseBeforeConsumption: conversationBindingAttached
   });
 })();
