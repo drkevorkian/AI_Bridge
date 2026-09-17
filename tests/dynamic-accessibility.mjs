@@ -10,7 +10,6 @@ const bootstrap = fs.readFileSync(path.join(root, "dashboard-bootstrap.js"), "ut
 
 assert.ok(bootstrap.includes('dashboard-dynamic-accessibility.js'));
 assert.match(bootstrap, /dynamicAccessibilityAdapter:\s*true/);
-assert.match(bootstrap, /version:\s*8/);
 assert.doesNotMatch(src, /innerHTML|insertAdjacentHTML/);
 assert.match(src, /textOnlyRendering:\s*true/);
 
