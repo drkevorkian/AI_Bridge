@@ -53,12 +53,25 @@
 
   captureLatestFromSide = hardenedCaptureLatestFromSide;
 
-  function validateManualTargets(targets) {
+  function validateManualTargets(fromSide, targets) {
     const dest = sanitizeForceRelaySides(targets);
     if (!dest.length) throw new Error("Choose at least one destination AI.");
 
-    if (isSequentialWorkMode?.(state.workMode) && dest.length > 1) {
-      throw new Error("Relay, Collaborate, and Direct Mesh have one coordinator cursor. Choose one Manual Relay destination so later replies cannot be silently discarded.");
+    if (isSequentialWorkMode?.(state.workMode)) {
+      if (dest.length > 1) {
+        throw new Error("Relay, Collaborate, and Direct Mesh have one coordinator cursor. Choose one Manual Relay destination so later replies cannot be silently discarded.");
+      }
+
+      // In sequential modes the coordinator accepts the next normal response
+      // only from state.currentSide. The legacy manual-relay helper advances
+      // that cursor when the captured source itself is current. If the source
+      // is not current, only relaying back to the existing cursor is safe;
+      // silently moving the cursor here could orphan an AI that is already
+      // generating its assigned turn.
+      const current = String(state.currentSide || "").toUpperCase();
+      if (SIDES.includes(current) && fromSide !== current && dest[0] !== current) {
+        throw new Error(`Sequential Manual Relay would abandon the coordinator cursor at AI ${current}. Relay to AI ${current}, or capture from AI ${current} before routing to another AI.`);
+      }
     }
 
     if (isBatchWorkMode?.(state.workMode)) {
@@ -73,7 +86,7 @@
 
   forceRelayCapturedResponse = async function hardenedForceRelayCapturedResponse(source, targets) {
     const fromSide = String(source || "").toUpperCase();
-    const dest = validateManualTargets(targets);
+    const dest = validateManualTargets(fromSide, targets);
     const captured = await hardenedCaptureLatestFromSide(fromSide);
 
     // The legacy implementation calls captureLatestFromSide internally. Reuse
@@ -116,10 +129,11 @@
   };
 
   globalThis[FLAG] = Object.freeze({
-    version: 2,
+    version: 3,
     rejectsStreamingCapture: true,
     generationAwareIdentity: true,
     sequentialFanoutSafe: true,
+    sequentialCursorGate: true,
     batchPendingTargetGate: true
   });
 })();
