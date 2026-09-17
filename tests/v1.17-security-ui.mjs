@@ -8,7 +8,7 @@ const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const read = relative => fs.readFileSync(path.join(root, relative), "utf8");
 
 const manifest = JSON.parse(read("manifest.json"));
-assert.equal(manifest.version, "1.17.0");
+assert.equal(manifest.version, "1.17.1");
 assert.ok(Number(manifest.minimum_chrome_version) >= 106);
 assert.equal(
   manifest.content_security_policy?.extension_pages,
@@ -49,9 +49,6 @@ assert.match(focusCss, /html\[data-layout="focus"\]/);
 assert.match(focusCss, /min-height:\s*44px/);
 assert.match(focusRuntime, /ALLOWED_CLOUD_LAYOUTS\.add\("focus"\)/);
 
-// The content-side fetch wrapper may carry cookies only to the current
-// ChatGPT conversation's interpreter download endpoint. Everything else is
-// forced to credentials:"omit".
 const contentArtifactSource = read("content-artifact-security-prelude.js");
 const calls = [];
 const context = vm.createContext({

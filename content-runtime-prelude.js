@@ -1,13 +1,10 @@
 (() => {
   "use strict";
 
-  const RUNTIME_VERSION = "1.17.0";
+  const RUNTIME_VERSION = "1.17.1";
   const FLAG = "__AI_BRIDGE_CONTENT_RUNTIME_PRELUDE__";
   if (window[FLAG]?.version === RUNTIME_VERSION) return;
 
-  // If an older in-page runtime was reinjected, stop its polling loop before
-  // the new content.js creates another one. A normal page reload starts with no
-  // handle, so this is a no-op in the common case.
   try {
     if (window.__AI_BRIDGE_MONITOR_TIMER__) {
       clearInterval(window.__AI_BRIDGE_MONITOR_TIMER__);
@@ -27,18 +24,11 @@
         }
       } catch (_) {}
       window.__AI_BRIDGE_MONITOR_TIMER__ = handle;
-      // Restore the native API immediately; only AI Bridge's monitor interval
-      // needs ownership tracking.
       window.setInterval = nativeSetInterval;
     }
     return handle;
   };
 
-  // Content-side idempotency protects provider DOM from a duplicated
-  // chrome.tabs.sendMessage delivery. A generation is remembered only after
-  // the provider visibly acknowledges the submission; an optimistic click is
-  // not enough. Keep a bounded cache because a provider tab can stay open for
-  // days during a long relay session.
   const acceptedSends = new Map();
   const MAX_ACCEPTED_SENDS = 64;
   const SEND_ACK_TIMEOUT_MS = 8000;
@@ -152,20 +142,9 @@
 
   function providerAcknowledgedSend(promptText, baseline) {
     const probe = providerProbe();
-
-    // A visible Stop control is strong evidence that a generation began.
     if (visibleNodes(probe.stop).some(element => !element.disabled)) return true;
-
-    // First-turn submissions commonly navigate to a conversation URL.
     if (baseline?.href && location.href !== baseline.href) return true;
-
-    // A newly rendered user turn means the provider accepted the prompt even
-    // if generation UI has not appeared yet.
     if (visibleNodes(probe.userMessages).length > Number(baseline?.userMessageCount || 0)) return true;
-
-    // The provider normally clears the composer after accepting a send. Do not
-    // accept merely because a different textarea exists; require that at least
-    // one visible known composer exists and none still contains the exact prompt.
     const composers = visibleNodes(probe.composers);
     const expected = normalizedComparableText(promptText);
     if (composers.length && expected) {
@@ -174,7 +153,6 @@
         return true;
       }
     }
-
     return false;
   }
 
@@ -187,11 +165,6 @@
     return providerAcknowledgedSend(promptText, baseline);
   }
 
-  // Exact prompt echoes are never valid assistant completions. Broad provider
-  // selectors can momentarily surface the just-submitted user prompt on SPAs;
-  // short-circuit only exact same-generation echoes so real repeated answers
-  // remain valid. Return an intentional terminal ignore that the delivery layer
-  // already understands, avoiding retry churn while the real response renders.
   const nativeSendMessage = chrome.runtime.sendMessage.bind(chrome.runtime);
   chrome.runtime.sendMessage = function hardenedRuntimeSendMessage(message, ...args) {
     if (message?.type === "AI_BRIDGE_RESPONSE") {
@@ -204,10 +177,6 @@
     return nativeSendMessage(message, ...args);
   };
 
-  // content.js historically replies with its source-era version string. Rewrite
-  // only AI_BRIDGE_PING responses so the service worker can verify the actual
-  // injected runtime stack rather than one legacy file's internal label. The
-  // same wrapper also makes AI_BRIDGE_SEND idempotent per generation id.
   const nativeAddListener = chrome.runtime.onMessage.addListener.bind(chrome.runtime.onMessage);
   chrome.runtime.onMessage.addListener = function versionedAddListener(listener) {
     if (typeof listener !== "function") return nativeAddListener(listener);
