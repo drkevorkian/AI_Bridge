@@ -16,15 +16,16 @@
 
   let consumptionAttached = false;
 
-  if (typeof handleCompletedResponse === "function") {
+  if (typeof handleCompletedResponse === "function" && typeof saveState === "function") {
     const baseHandleCompletedResponse = handleCompletedResponse;
 
     // The background listener performs an early generation check before placing
     // a response into responseCommitQueue. Two near-simultaneous deliveries can
     // both pass that early check before either commits. Re-check here because
-    // this function is invoked by the serialized queue task, then consume the
-    // accepted token before response processing can advance the cursor or wait
-    // for the next dispatch. A duplicate queued behind it therefore fails closed.
+    // this function is invoked by the serialized queue task, then consume and
+    // durably persist the accepted token before response processing can advance
+    // the cursor or wait for the next dispatch. A duplicate queued behind it —
+    // or a worker restarted after consumption — therefore fails closed.
     handleCompletedResponse = async function generationHardenedHandleCompletedResponse(side, text, options = {}) {
       const normalizedSide = String(side || "").toUpperCase();
       const incomingGenerationId = String(options?.generationId || "");
@@ -50,6 +51,13 @@
         [normalizedSide]: null
       };
 
+      // MV3 workers are disposable. Persist the disarm before any further
+      // response processing so a worker termination, an ignored/duplicate early
+      // return, or a later handler error cannot resurrect the consumed token from
+      // chrome.storage.local on restart. This intentionally favors fail-closed
+      // authorization over replaying an incompletely committed provider reply.
+      await saveState();
+
       return baseHandleCompletedResponse(side, text, options);
     };
     consumptionAttached = true;
@@ -57,13 +65,15 @@
 
   // Unit tests may intentionally load only the matcher. Production bootstrap
   // requires every response-consumption capability below, so a missing
-  // coordinator hook still fails closed in the real service worker.
+  // coordinator/persistence hook still fails closed in the real service worker.
   globalThis.__AI_BRIDGE_GENERATION_SECURITY__ = Object.freeze({
-    version: 2,
+    version: 3,
     failClosedWhenUnarmed: true,
     rechecksGenerationAtSerializedCommit: consumptionAttached,
     consumesAcceptedGenerationBeforeCommit: consumptionAttached,
+    durablyPersistsConsumedGenerationBeforeCommit: consumptionAttached,
     preservesNewerGenerationArmedByCommit: consumptionAttached,
-    preventsSequentialReplayWindow: consumptionAttached
+    preventsSequentialReplayWindow: consumptionAttached,
+    preventsRestartGenerationResurrection: consumptionAttached
   });
 })();
