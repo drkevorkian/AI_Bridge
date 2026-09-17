@@ -105,8 +105,9 @@ assert.equal(contract.preservesNewerGenerationArmedByCommit, true);
 assert.equal(contract.preventsSequentialReplayWindow, true);
 assert.equal(contract.preventsRestartGenerationResurrection, true);
 
-// A provider prompt cannot cross chrome.tabs.sendMessage until its generation is
-// durable. The base sendMessage stub observes storage after the guard completes.
+// A coordinator-owned provider prompt cannot cross chrome.tabs.sendMessage until
+// its currently armed generation is durable. The base sendMessage stub observes
+// storage only after the guard completes.
 sandbox.state.generationIdBySide.A = "generation-arm";
 const persistedBeforeArm = persisted.length;
 await sandbox.chrome.tabs.sendMessage(101, {
@@ -119,8 +120,39 @@ assert.equal(persisted.length, persistedBeforeArm + 1);
 assert.equal(providerCalls.at(-1).persistedGeneration, "generation-arm");
 assert.equal(persisted.at(-1).generationIdBySide.A, "generation-arm");
 
+// Transport-only smoke traffic may exercise AI_BRIDGE_SEND without participating
+// in coordinator routing. An unarmed synthetic generation is not a coordinator
+// capability and therefore passes through without a storage mutation.
+sandbox.state.generationIdBySide.A = null;
+const persistedBeforeSynthetic = persisted.length;
+const callsBeforeSynthetic = providerCalls.length;
+await sandbox.chrome.tabs.sendMessage(999, {
+  type: "AI_BRIDGE_SEND",
+  text: "transport smoke",
+  artifacts: [],
+  generationId: "synthetic-unarmed-generation"
+});
+assert.equal(persisted.length, persistedBeforeSynthetic);
+assert.equal(providerCalls.length, callsBeforeSynthetic + 1);
+
+// If a generation is coordinator-armed, its provider message must target that
+// side's current bound tab. A cross-side/mismatched tab fails before provider IO.
+sandbox.state.generationIdBySide = { A: null, B: "generation-b" };
+const callsBeforeMismatch = providerCalls.length;
+await assert.rejects(
+  () => sandbox.chrome.tabs.sendMessage(101, {
+    type: "AI_BRIDGE_SEND",
+    text: "wrong binding",
+    artifacts: [],
+    generationId: "generation-b"
+  }),
+  /does not target its current bound tab/
+);
+assert.equal(providerCalls.length, callsBeforeMismatch);
+
 // Unrelated provider traffic is not intercepted by the generation persistence
 // boundary and therefore causes no storage write.
+sandbox.state.generationIdBySide = { A: null, B: null };
 const persistedBeforePing = persisted.length;
 await sandbox.chrome.tabs.sendMessage(101, { type: "AI_BRIDGE_PING" });
 assert.equal(persisted.length, persistedBeforePing);
