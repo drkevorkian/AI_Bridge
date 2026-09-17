@@ -21,12 +21,11 @@ if (globalThis.__AI_BRIDGE_WORKER_FETCH_SECURITY_V1__?.httpCredentials !== "omit
   throw new Error("AI Bridge worker fetch credential guard failed to initialize.");
 }
 
-// Load the coordinator core by itself. background.js still contains legacy
-// artifact helper declarations for source compatibility; replace those globals
-// immediately, in the same synchronous service-worker bootstrap turn, before
-// any other helper module loads and before Chrome can dispatch an extension
-// event to the registered listeners.
+// Load the coordinator core by itself. background.js retains legacy helper
+// declarations for source compatibility, but privileged implementations are
+// replaced synchronously before Chrome can dispatch extension events.
 importScripts("background.js");
+
 importScripts("artifact-fetch-runtime-hardening.js");
 if (
   globalThis.__AI_BRIDGE_ARTIFACT_FETCH_SECURITY__?.credentials !== "omit" ||
@@ -36,8 +35,14 @@ if (
   throw new Error("AI Bridge artifact security hardening failed to initialize.");
 }
 
-// Established helpers load only after the privileged artifact primitive is
-// credentialless and byte-bounded.
+// Update check and download are pinned to one immutable Git commit SHA so a
+// moving main branch cannot create a check/download time-of-check race.
+importScripts("update-runtime-hardening.js");
+if (globalThis.__AI_BRIDGE_UPDATE_HARDENING_V1__?.immutableCommitPin !== true) {
+  throw new Error("AI Bridge immutable update hardening failed to initialize.");
+}
+
+// Established helpers load only after privileged network paths are hardened.
 importScripts("completion-runtime-hardening.js", "oauth-runtime-hardening.js", "power.js");
 
 // Focus is a third dashboard layout. Extend the existing cloud-settings layout
@@ -56,7 +61,6 @@ if (globalThis.__AI_BRIDGE_RESEND_HARDENING_V1__?.stopBeforeReplacement !== true
 }
 
 // Manual relay is recovery-only and may commit a provider response directly.
-// Refuse incomplete/streaming captures before that path can mutate state.
 importScripts("manual-relay-runtime-hardening.js");
 if (globalThis.__AI_BRIDGE_MANUAL_RELAY_HARDENING_V1__?.rejectsStreamingCapture !== true) {
   throw new Error("AI Bridge manual-relay hardening failed to initialize.");
