@@ -33,8 +33,8 @@ jobs:
             echo "Source fold is already present; nothing to do."
             exit 0
           fi
-          git apply --check patches/p0-background-source-fold.diff
-          git apply patches/p0-background-source-fold.diff
+          git apply --check --include=background.js patches/p0-background-source-fold.diff
+          git apply --include=background.js patches/p0-background-source-fold.diff
           node --check background.js
           if grep -q 'credentials: "include"' background.js; then
             echo "Refusing commit: credentials include remains in background.js" >&2
