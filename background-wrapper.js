@@ -12,6 +12,15 @@ if (
   throw new Error("AI Bridge coordinator mutex failed to initialize.");
 }
 
+// Enforce the worker's network credential boundary before any coordinator source
+// is evaluated. Even stale or accidentally reordered code cannot attach ambient
+// browser cookies/HTTP auth to an HTTP(S) fetch. Explicit Authorization headers
+// (used by the Google API client) are unaffected.
+importScripts("worker-fetch-security-prelude.js");
+if (globalThis.__AI_BRIDGE_WORKER_FETCH_SECURITY_V1__?.httpCredentials !== "omit") {
+  throw new Error("AI Bridge worker fetch credential guard failed to initialize.");
+}
+
 // Load the coordinator core by itself. background.js still contains legacy
 // artifact helper declarations for source compatibility; replace those globals
 // immediately, in the same synchronous service-worker bootstrap turn, before
