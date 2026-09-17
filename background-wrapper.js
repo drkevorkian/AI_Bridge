@@ -7,6 +7,7 @@ importScripts("agent-capabilities.js");
 if (
   globalThis.__AI_BRIDGE_AGENT_CAPABILITIES__?.version !== 1 ||
   globalThis.__AI_BRIDGE_AGENT_CAPABILITIES__?.maxUniqueProviderAgents !== 5 ||
+  globalThis.__AI_BRIDGE_AGENT_CAPABILITIES__?.uniqueTabBindingNeverRelaxed !== true ||
   globalThis.__AI_BRIDGE_AGENT_CAPABILITIES__?.duplicateProviderAgentsEnabled !== false
 ) {
   throw new Error("AI Bridge agent capability contract failed to initialize.");

@@ -36,6 +36,8 @@ assert.deepEqual(Array.from(caps.providerFamilies, provider => provider.id), [
   "copilot"
 ]);
 assert.equal(caps.duplicateProviderAgentsEnabled, false);
+assert.equal(caps.uniqueTabBindingNeverRelaxed, true);
+assert.equal(typeof caps.evaluateAgentBindings, "function");
 
 assert.equal(caps.parseAgentCount(1), 1);
 assert.equal(caps.parseAgentCount("5"), 5);
