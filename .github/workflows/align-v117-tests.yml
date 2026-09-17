@@ -31,12 +31,14 @@ jobs:
           node --check tests/v1.16.3-completion.mjs
           node --check tests/v1.16.3-human-input-hardening.mjs
           git diff --check
-          changed="$(git diff --name-only | tr -d '\r')"
-          expected="tests/v1.16-oauth-callback-hotfix.mjs
-tests/v1.16-oauth-power.mjs
-tests/v1.16.3-completion.mjs
-tests/v1.16.3-human-input-hardening.mjs"
-          test "$changed" = "$expected"
+          mapfile -t changed < <(git diff --name-only)
+          test "${#changed[@]}" -eq 4
+          for file in "${changed[@]}"; do
+            case "$file" in
+              tests/v1.16-oauth-callback-hotfix.mjs|tests/v1.16-oauth-power.mjs|tests/v1.16.3-completion.mjs|tests/v1.16.3-human-input-hardening.mjs) ;;
+              *) echo "Unexpected changed file: $file" >&2; exit 1 ;;
+            esac
+          done
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add tests/v1.16-oauth-callback-hotfix.mjs tests/v1.16-oauth-power.mjs tests/v1.16.3-completion.mjs tests/v1.16.3-human-input-hardening.mjs
