@@ -45,7 +45,7 @@ preludeContext.globalThis = preludeContext;
 vm.runInContext(prelude, preludeContext, { filename: "coordinator-mutex-prelude.js" });
 assert.equal(preludeContext.__AI_BRIDGE_COORDINATOR_MUTEX__.isSerializedType("AI_BRIDGE_START"), true);
 assert.equal(preludeContext.__AI_BRIDGE_COORDINATOR_MUTEX__.isSerializedType("AI_BRIDGE_RESPONSE"), true);
-assert.equal(preludeContext.__AI_BRIDGE_COORDINATOR_MUTEX__.isSerializedType("AI_BRIDGE_GET_STATE"), false);
+assert.equal(preludeContext.__AI_BRIDGE_COORDINATOR_MUTEX__.isSerializedType("AI_BRIDGE_GET_STATE"), true, "client state snapshots must wait for committed coordinator mutations");
 
 preludeContext.chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
   order.push(`start:${message.type}`);
