@@ -98,6 +98,16 @@ if (
   throw new Error("AI Bridge viewpoint runtime failed to initialize.");
 }
 
+importScripts("client-state-privacy-hardening.js");
+if (
+  globalThis.__AI_BRIDGE_CLIENT_STATE_PRIVACY_V1__?.version !== 1 ||
+  globalThis.__AI_BRIDGE_CLIENT_STATE_PRIVACY_V1__?.redactsViewpointIdentityMap !== true ||
+  globalThis.__AI_BRIDGE_CLIENT_STATE_PRIVACY_V1__?.redactsTranscriptViewpointIdentity !== true ||
+  globalThis.__AI_BRIDGE_CLIENT_STATE_PRIVACY_V1__?.preservesFunctionalBindingTabIds !== true
+) {
+  throw new Error("AI Bridge client-state privacy hardening failed to initialize.");
+}
+
 importScripts("artifact-fetch-runtime-hardening.js");
 if (
   globalThis.__AI_BRIDGE_ARTIFACT_FETCH_SECURITY__?.credentials !== "omit" ||
