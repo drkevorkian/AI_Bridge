@@ -232,6 +232,7 @@
       return {
         ...row,
         status: "GENERATING",
+        ready: false,
         reason: `${row.providerName || "Provider"} is currently generating.`
       };
     });
