@@ -46,4 +46,32 @@ assert.match(background, /referrerPolicy:\s*"no-referrer"/);
 assert.match(background, /readResponseBytesBounded/);
 assert.doesNotMatch(background, /host === "x\.ai"/);
 assert.doesNotMatch(background, /endsWith\("\.microsoft\.com"\)/);
-assert.match(background, /ALLOWED_CLOUD_LAYOUTS = new Set\(\[
+assert.match(background, /ALLOWED_CLOUD_LAYOUTS = new Set\(\["studio", "classic", "focus"\]\)/);
+assert.doesNotMatch(background, /response_type:\s*"token"/);
+assert.match(background, /msg\.observed !== true/);
+
+assert.match(mutex, /version:\s*5/);
+assert.match(mutex, /artifactProvenanceGate:\s*true/);
+assert.match(mutex, /message\.observed !== true/);
+assert.match(mutex, /generationIdBySide/);
+assert.match(mutex, /candidateSignature/);
+assert.match(mutex, /parsed\.protocol !== "https:"/);
+assert.match(content, /observed:\s*true/);
+assert.match(content, /generationId:\s*currentGenerationId/);
+assert.match(content, /candidateSignature/);
+assert.match(content, /authenticatedLocalArtifactAllowed/);
+assert.match(content, /credentials:\s*authenticatedLocalArtifactAllowed\(url\) \? "include" : "omit"/);
+assert.match(content, /if \(\/\^https:\/i\.test\(url\)\)/);
+
+assert.match(release, /role", "tabpanel"/);
+assert.match(release, /aria-labelledby/);
+assert.match(release, /aria-controls/);
+assert.match(release, /aria-hidden/);
+assert.match(release, /panel\.inert = !active/);
+assert.match(release, /aria-label", "Focus View Navigation"/);
+assert.match(focusCss, /@media \(max-width: 720px\)/);
+assert.match(focusCss, /grid-template-columns:\s*repeat\(2, minmax\(0, 1fr\)\)/);
+assert.match(focusCss, /min-height:\s*44px/);
+assert.match(focusCss, /:focus-visible/);
+
+console.log("v1.17.1 final security + Focus accessibility checks passed.");
