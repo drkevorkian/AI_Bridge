@@ -75,6 +75,17 @@
     return safe;
   }
 
+  function clearFailedDispatchState(side) {
+    if (state?.viewpointIdentityBySide && typeof state.viewpointIdentityBySide === "object") {
+      const next = { ...state.viewpointIdentityBySide };
+      delete next[side];
+      state.viewpointIdentityBySide = next;
+    }
+    if (state?.generationIdBySide && typeof state.generationIdBySide === "object") {
+      state.generationIdBySide = { ...state.generationIdBySide, [side]: null };
+    }
+  }
+
   function stampEntry(entry, identity) {
     if (!entry || typeof entry !== "object" || !identity) return entry;
     entry.provenanceId = identity.provenanceId;
@@ -297,11 +308,20 @@
         }
 
         rememberIdentity(side, dispatchRawIdentity);
-        const result = await baseSend(side, text, options);
-        if (options?.record === false && typeof saveState === "function") {
-          await saveState();
+        try {
+          const result = await baseSend(side, text, options);
+          if (options?.record === false && typeof saveState === "function") {
+            await saveState();
+          }
+          return result;
+        } catch (error) {
+          // `baseSend` may arm a generation before Chrome reports a closed tab,
+          // disconnected content script, or final provider-send failure. Never
+          // leave that failed dispatch's identity/generation available to stamp
+          // a delayed or unrelated response.
+          clearFailedDispatchState(side);
+          throw error;
         }
-        return result;
       };
 
       if (caps.serializeSameFamilySends === true && queue?.serialize) {
@@ -345,6 +365,7 @@
     revalidatesIdentityAtDispatch: true,
     cancelsQueuedOnTabClose: true,
     restoresQueuedSendsAfterWorkerRestart: false,
+    clearsTransientIdentityOnDispatchFailure: true,
     queueTelemetryReadOnly: true,
     queueTelemetryEphemeral: true,
     queueTelemetryContainsSensitiveIdentity: false,
