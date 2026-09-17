@@ -31,12 +31,15 @@ if (globalThis.__AI_BRIDGE_WORKER_FETCH_SECURITY_V1__?.httpCredentials !== "omit
 }
 
 importScripts("background.js");
+
 importScripts("coordinator-dynamic-agents.js");
 if (
   globalThis.__AI_BRIDGE_DYNAMIC_AGENTS_V1__?.version !== 1 ||
   globalThis.__AI_BRIDGE_DYNAMIC_AGENTS_V1__?.uniqueTabBinding !== true ||
   globalThis.__AI_BRIDGE_DYNAMIC_AGENTS_V1__?.duplicateProviderAgentsEnabled !== true
-) throw new Error("AI Bridge dynamic-agent coordinator failed to initialize.");
+) {
+  throw new Error("AI Bridge dynamic-agent coordinator failed to initialize.");
+}
 
 importScripts("dynamic-state-restart-hardening.js");
 if (
@@ -45,7 +48,9 @@ if (
   globalThis.__AI_BRIDGE_DYNAMIC_RESTART_HYDRATION_V1__?.restoresPersistedPhaseLists !== true ||
   globalThis.__AI_BRIDGE_DYNAMIC_RESTART_HYDRATION_V1__?.restoresPersistedCycleParticipants !== true ||
   globalThis.__AI_BRIDGE_DYNAMIC_RESTART_HYDRATION_V1__?.restoresServiceWorkerQueue !== false
-) throw new Error("AI Bridge dynamic restart hydration failed to initialize.");
+) {
+  throw new Error("AI Bridge dynamic restart hydration failed to initialize.");
+}
 
 importScripts("coordinator-dynamic-semantics.js");
 if (
@@ -53,7 +58,9 @@ if (
   globalThis.__AI_BRIDGE_DYNAMIC_SEMANTICS_V1__?.liveRosterMeshTargets !== true ||
   globalThis.__AI_BRIDGE_DYNAMIC_SEMANTICS_V1__?.derivedTurnMinimums !== true ||
   globalThis.__AI_BRIDGE_DYNAMIC_SEMANTICS_V1__?.cloudJobsThroughE !== true
-) throw new Error("AI Bridge dynamic-agent semantics failed to initialize.");
+) {
+  throw new Error("AI Bridge dynamic-agent semantics failed to initialize.");
+}
 
 importScripts("provider-health-runtime.js");
 if (
@@ -67,7 +74,9 @@ if (
   globalThis.__AI_BRIDGE_PROVIDER_HEALTH_V1__?.publicHealthRedactsSensitiveIdentity !== true ||
   globalThis.__AI_BRIDGE_PROVIDER_HEALTH_V1__?.mutatesRouting !== false ||
   globalThis.__AI_BRIDGE_PROVIDER_HEALTH_V1__?.sendsProviderPrompts !== false
-) throw new Error("AI Bridge provider health monitor failed to initialize.");
+) {
+  throw new Error("AI Bridge provider health monitor failed to initialize.");
+}
 
 importScripts("start-provider-health-hardening.js");
 if (
@@ -76,7 +85,9 @@ if (
   globalThis.__AI_BRIDGE_START_PROVIDER_HEALTH_GATE_V1__?.probesAfterFreshChatReset !== true ||
   globalThis.__AI_BRIDGE_START_PROVIDER_HEALTH_GATE_V1__?.restoresPersistedStateOnRejectedFreshStart !== true ||
   globalThis.__AI_BRIDGE_START_PROVIDER_HEALTH_GATE_V1__?.doesNotSendProviderPrompts !== true
-) throw new Error("AI Bridge backend start Provider Health gate failed to initialize.");
+) {
+  throw new Error("AI Bridge backend start Provider Health gate failed to initialize.");
+}
 
 importScripts("viewpoint-runtime.js");
 if (
@@ -95,7 +106,9 @@ if (
   globalThis.__AI_BRIDGE_VIEWPOINT_RUNTIME_V1__?.queueTelemetryEphemeral !== true ||
   globalThis.__AI_BRIDGE_VIEWPOINT_RUNTIME_V1__?.queueTelemetryContainsSensitiveIdentity !== false ||
   globalThis.__AI_BRIDGE_VIEWPOINT_RUNTIME_V1__?.enablesDuplicateProviders !== true
-) throw new Error("AI Bridge viewpoint runtime failed to initialize.");
+) {
+  throw new Error("AI Bridge viewpoint runtime failed to initialize.");
+}
 
 importScripts("client-state-privacy-hardening.js");
 if (
@@ -103,31 +116,55 @@ if (
   globalThis.__AI_BRIDGE_CLIENT_STATE_PRIVACY_V1__?.redactsViewpointIdentityMap !== true ||
   globalThis.__AI_BRIDGE_CLIENT_STATE_PRIVACY_V1__?.redactsTranscriptViewpointIdentity !== true ||
   globalThis.__AI_BRIDGE_CLIENT_STATE_PRIVACY_V1__?.preservesFunctionalBindingTabIds !== true
-) throw new Error("AI Bridge client-state privacy hardening failed to initialize.");
+) {
+  throw new Error("AI Bridge client-state privacy hardening failed to initialize.");
+}
 
 importScripts("artifact-fetch-runtime-hardening.js");
 if (
   globalThis.__AI_BRIDGE_ARTIFACT_FETCH_SECURITY__?.credentials !== "omit" ||
   globalThis.__AI_BRIDGE_ARTIFACT_FETCH_SECURITY__?.finalUrlRevalidation !== true ||
   globalThis.__AI_BRIDGE_ARTIFACT_FETCH_SECURITY__?.streamedSizeLimit !== true
-) throw new Error("AI Bridge artifact security hardening failed to initialize.");
+) {
+  throw new Error("AI Bridge artifact security hardening failed to initialize.");
+}
 
 importScripts("update-runtime-hardening.js");
-if (globalThis.__AI_BRIDGE_UPDATE_HARDENING_V1__?.immutableCommitPin !== true) throw new Error("AI Bridge immutable update hardening failed to initialize.");
+if (globalThis.__AI_BRIDGE_UPDATE_HARDENING_V1__?.immutableCommitPin !== true) {
+  throw new Error("AI Bridge immutable update hardening failed to initialize.");
+}
+
 importScripts("completion-runtime-hardening.js", "oauth-runtime-hardening.js", "power.js");
+
 importScripts("focus-runtime-hardening.js");
-if (globalThis.__AI_BRIDGE_FOCUS_RUNTIME_V1__?.cloudLayoutAllowed !== true) throw new Error("AI Bridge Focus layout hardening failed to initialize.");
+if (globalThis.__AI_BRIDGE_FOCUS_RUNTIME_V1__?.cloudLayoutAllowed !== true) {
+  throw new Error("AI Bridge Focus layout hardening failed to initialize.");
+}
+
 importScripts("resend-runtime-hardening.js");
-if (globalThis.__AI_BRIDGE_RESEND_HARDENING_V1__?.stopBeforeReplacement !== true) throw new Error("AI Bridge resend hardening failed to initialize.");
+if (globalThis.__AI_BRIDGE_RESEND_HARDENING_V1__?.stopBeforeReplacement !== true) {
+  throw new Error("AI Bridge resend hardening failed to initialize.");
+}
+
 importScripts("manual-relay-runtime-hardening.js");
-if (globalThis.__AI_BRIDGE_MANUAL_RELAY_HARDENING_V1__?.rejectsStreamingCapture !== true) throw new Error("AI Bridge manual-relay hardening failed to initialize.");
+if (globalThis.__AI_BRIDGE_MANUAL_RELAY_HARDENING_V1__?.rejectsStreamingCapture !== true) {
+  throw new Error("AI Bridge manual-relay hardening failed to initialize.");
+}
+
 importScripts("coordinator-generation-hardening.js");
-if (globalThis.__AI_BRIDGE_GENERATION_SECURITY__?.failClosedWhenUnarmed !== true) throw new Error("AI Bridge generation hardening failed to initialize.");
+if (globalThis.__AI_BRIDGE_GENERATION_SECURITY__?.failClosedWhenUnarmed !== true) {
+  throw new Error("AI Bridge generation hardening failed to initialize.");
+}
+
 importScripts("human-input-runtime-hardening.js");
+
 importScripts("watchdog-runtime-hardening.js");
 if (
   globalThis.__AI_BRIDGE_WATCHDOG_SECURITY__?.pendingSendCountsAsModelProgress !== false ||
   globalThis.__AI_BRIDGE_WATCHDOG_SECURITY__?.serializedWithCoordinator !== true ||
   globalThis.__AI_BRIDGE_WATCHDOG_SECURITY__?.mutatesActiveSides !== false
-) throw new Error("AI Bridge watchdog hardening failed to initialize.");
+) {
+  throw new Error("AI Bridge watchdog hardening failed to initialize.");
+}
+
 importScripts("reconnect-runtime-hardening.js");
