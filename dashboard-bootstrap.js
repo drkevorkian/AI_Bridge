@@ -63,9 +63,10 @@
     // Load dynamic roster wiring only after dashboard.js and dashboard-release.js
     // have registered their legacy A/B/C handlers. The roster adapter is followed
     // by packaged compatibility/read-only adapters that remove fixed-three UI
-    // assumptions, add side-specific accessible names, keep work-mode copy aligned
-    // to the live A-E roster, and expose viewpoint activation diagnostics. Routing
-    // authority remains in the centralized background binding evaluator.
+    // assumptions, add side-specific accessible names, expose live provider-health
+    // status to assistive technology, keep work-mode copy aligned to the live A-E
+    // roster, and expose viewpoint activation diagnostics. Routing authority remains
+    // in the centralized background binding evaluator.
     if (!document.querySelector("script[data-ai-bridge-dynamic-agents]")) {
       const script = document.createElement("script");
       script.src = chrome.runtime.getURL("dashboard-dynamic-agents.js");
@@ -78,6 +79,13 @@
           accessibility.async = false;
           accessibility.dataset.aiBridgeDynamicAccessibility = "true";
           document.body.appendChild(accessibility);
+        }
+        if (!document.querySelector("script[data-ai-bridge-provider-health-accessibility]")) {
+          const healthAccessibility = document.createElement("script");
+          healthAccessibility.src = chrome.runtime.getURL("dashboard-provider-health-accessibility.js");
+          healthAccessibility.async = false;
+          healthAccessibility.dataset.aiBridgeProviderHealthAccessibility = "true";
+          document.body.appendChild(healthAccessibility);
         }
         if (!document.querySelector("script[data-ai-bridge-dynamic-validation]")) {
           const validation = document.createElement("script");
@@ -106,11 +114,12 @@
   }, { once: true });
 
   window.__AI_BRIDGE_DASHBOARD_BOOTSTRAP__ = Object.freeze({
-    version: 8,
+    version: 9,
     providerScopedTabQuery: true,
     legacyWebOauthDisabled: true,
     dynamicAgentAdapter: true,
     dynamicAccessibilityAdapter: true,
+    providerHealthAccessibilityAdapter: true,
     dynamicTabValidationAdapter: true,
     dynamicWorkModeCopyAdapter: true,
     viewpointActivationAdapter: true,
