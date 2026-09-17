@@ -10,7 +10,7 @@ const bootstrap = fs.readFileSync(path.join(root, "dashboard-bootstrap.js"), "ut
 
 assert.ok(bootstrap.includes('dashboard-provider-health-accessibility.js'));
 assert.match(bootstrap, /providerHealthAccessibilityAdapter:\s*true/);
-assert.match(bootstrap, /version:\s*9/);
+assert.match(bootstrap, /version:\s*10/);
 assert.doesNotMatch(src, /innerHTML|insertAdjacentHTML|eval\s*\(|new Function/);
 assert.match(src, /textOnlyRendering:\s*true/);
 
