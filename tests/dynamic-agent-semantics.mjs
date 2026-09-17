@@ -74,6 +74,37 @@ function load(agentCount) {
         text: "Establish a strong shared starting point for the other two agents to improve.\nproduce something useful for the next two agents to build on."
       };
     },
+    normalizeTargetToken(raw) {
+      return String(raw || "")
+        .trim()
+        .replace(/[()[\]{}]/g, " ")
+        .replace(/\s+/g, " ")
+        .toLowerCase();
+    },
+    resolveCommandTarget(raw, fromSide = null) {
+      const token = context.normalizeTargetToken(raw);
+      const sideMatch = token.match(/(?:^|\b)ai\s*[-:]?\s*([abc])(?:\b|$)/i) || token.match(/^([abc])$/i);
+      if (sideMatch) {
+        const side = String(sideMatch[1]).toUpperCase();
+        return side === fromSide ? null : side;
+      }
+      const matches = context.SIDES.filter(side => {
+        const label = context.normalizeTargetToken(context.state[`label${side}`] || `AI ${side}`);
+        if (!label) return false;
+        return token === label || token.includes(label) || label.includes(token);
+      });
+      if (matches.length !== 1) return null;
+      return matches[0] === fromSide ? null : matches[0];
+    },
+    bridgeCommandProtocolText() {
+      if (context.state.workMode !== "mesh") return "";
+      return [
+        "DIRECT-MESH COMMAND PROTOCOL:",
+        "SEND TO: AI A",
+        "SEND TO: AI B",
+        "SEND TO: AI C"
+      ].join("\n");
+    },
     requireBoundSessionTab() {
       throw new Error("Artifact fetch is only allowed from a currently bound AI A/B/C tab.");
     },
@@ -131,6 +162,23 @@ for (const count of [1, 3, 5]) {
     assert.doesNotMatch(first.text, /other two agents/);
   }
 }
+
+const mesh = load(5);
+mesh.state.workMode = "mesh";
+assert.equal(mesh.resolveCommandTarget("AI D", "A"), "D", "five-agent Mesh should route explicit AI D targets");
+assert.equal(mesh.resolveCommandTarget("E", "A"), "E", "five-agent Mesh should route shorthand E targets");
+assert.equal(mesh.resolveCommandTarget("AI E", "E"), null, "Mesh must continue rejecting self-targets");
+mesh.state.labelE = "Auditor";
+assert.equal(mesh.resolveCommandTarget("Auditor", "A"), "E", "dynamic Mesh routing must preserve custom-label targets");
+const meshProtocol = mesh.bridgeCommandProtocolText();
+assert.match(meshProtocol, /SEND TO: AI D/);
+assert.match(meshProtocol, /SEND TO: AI E/);
+assert.equal(mesh.__AI_BRIDGE_DYNAMIC_SEMANTICS_V1__.liveRosterMeshTargets, true);
+
+const threeMesh = load(3);
+threeMesh.state.workMode = "mesh";
+assert.equal(threeMesh.resolveCommandTarget("AI D", "A"), null, "inactive AI D must remain unavailable in a three-agent roster");
+assert.doesNotMatch(threeMesh.bridgeCommandProtocolText(), /SEND TO: AI D/);
 
 const cloud = load(3);
 const stored = cloud.sanitizeCloudSettings({
