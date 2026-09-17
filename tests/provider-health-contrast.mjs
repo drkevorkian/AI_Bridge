@@ -15,16 +15,16 @@ assert.doesNotMatch(healthRule[1], /opacity:\s*0\.[0-9]+\s*;/,
 assert.match(css, /\.dynamic-health-badge\s+\.status-label\s*\{[^}]*white-space:\s*nowrap/s,
   "health states must continue to provide a textual, non-color status label");
 
-// The first textual occurrence of `.agent-card-queue-badge {` can be the second
-// selector in the shared thread/queue layout rule. Pin the standalone status
-// rule by requiring it to follow a closed declaration block, which excludes the
-// comma-separated shared selector and verifies the queue-only opacity contract.
-const queueRule = css.match(/\}\s*\.agent-card-queue-badge\s*\{([^}]*)\}/s);
-assert.ok(queueRule, "standalone queue status badge rule must exist");
-assert.match(queueRule[1], /opacity:\s*1\s*;/,
+// `.agent-card-queue-badge {` appears both as the second selector in the shared
+// thread/queue layout rule and as its own operational-status rule. Enumerate all
+// occurrences so this regression verifies the actual opacity contract without
+// depending on comments or formatting between CSS blocks.
+const queueRules = [...css.matchAll(/\.agent-card-queue-badge\s*\{([^}]*)\}/gs)].map(match => match[1]);
+assert.ok(queueRules.length >= 1, "queue status badge rule must exist");
+assert.ok(queueRules.some(body => /opacity:\s*1\s*;/.test(body)),
   "queued and sending states must stay fully opaque so operational status keeps theme contrast");
-assert.doesNotMatch(queueRule[1], /opacity:\s*0\.[0-9]+\s*;/,
-  "queue status must not use fractional opacity that can reduce readability");
+assert.equal(queueRules.some(body => /opacity:\s*0\.[0-9]+\s*;/.test(body)), false,
+  "queue status rules must not use fractional opacity that can reduce readability");
 
 const threadRule = css.match(/\.agent-card-thread-badge\s*\{([^}]*)\}/s);
 assert.ok(threadRule, "thread identity badge rule must remain separate from queue status styling");
