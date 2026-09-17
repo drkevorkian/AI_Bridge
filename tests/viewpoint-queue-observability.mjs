@@ -12,6 +12,8 @@ const queueUiSrc = fs.readFileSync(path.join(root, "dashboard-viewpoint-queue.js
 assert.match(runtimeSrc, /queueTelemetryReadOnly:\s*true/);
 assert.match(runtimeSrc, /queueTelemetryEphemeral:\s*true/);
 assert.match(runtimeSrc, /queueTelemetryContainsSensitiveIdentity:\s*false/);
+assert.match(runtimeSrc, /cancelsQueuedOnTabClose:\s*true/);
+assert.match(runtimeSrc, /restoresQueuedSendsAfterWorkerRestart:\s*false/);
 assert.match(queueUiSrc, /aria-live/);
 assert.match(queueUiSrc, /AI_BRIDGE_VIEWPOINT_QUEUE_STATUS/);
 assert.match(queueUiSrc, /reusesHealthCadence:\s*true/);
@@ -33,6 +35,7 @@ async function waitFor(predicate, timeoutMs = 1000) {
 
 function load(tabs, sendDelayMs = 15) {
   const listeners = [];
+  const tabRemovedListeners = [];
   const order = [];
   let activeSends = 0;
   let maxConcurrent = 0;
@@ -53,7 +56,8 @@ function load(tabs, sendDelayMs = 15) {
           const row = Object.values(tabs).find(item => item.id === id);
           if (!row) throw new Error("missing tab");
           return { id, url: row.url };
-        }
+        },
+        onRemoved: { addListener(fn) { tabRemovedListeners.push(fn); } }
       },
       runtime: {
         getURL(value = "") { return `chrome-extension://bridge/${value}`; },
@@ -82,8 +86,15 @@ function load(tabs, sendDelayMs = 15) {
   vm.runInContext(runtimeSrc, context, { filename: "viewpoint-runtime.js" });
   context.__tabs = tabs;
   context.__listeners = listeners;
+  context.__tabRemovedListeners = tabRemovedListeners;
   context.__order = order;
   context.__maxConcurrent = () => maxConcurrent;
+  context.__removeTab = tabId => {
+    for (const [side, row] of Object.entries(tabs)) {
+      if (row?.id === tabId) delete tabs[side];
+    }
+    for (const listener of tabRemovedListeners) listener(tabId, { isWindowClosing: false });
+  };
   return context;
 }
 
@@ -184,5 +195,37 @@ assert.equal(raceSnapshot.byFamily.chatgpt.depth, 0);
 assert.equal(race.__order.at(-2), "D");
 assert.equal(race.__order.at(-1), "done:D");
 assert.equal(race.state.viewpointIdentityBySide.D.threadKey, "https://chatgpt.com/c/recovered");
+
+// Closing a tab while it waits behind another same-family send must cancel that
+// queued work immediately. Telemetry should stop showing the closed side before
+// the active send finishes, and the provider must never receive the cancelled
+// payload when the serialized chain later reaches that entry.
+const closeTabs = {
+  A: { id: 101, url: "https://chatgpt.com/c/active" },
+  D: { id: 404, url: "https://chatgpt.com/c/will-close" },
+  B: { id: 202, url: "https://grok.com/chat/b" }
+};
+const closeCtx = load(closeTabs, 60);
+assert.equal(closeCtx.__tabRemovedListeners.length, 1, "runtime must subscribe to tab removal events");
+const active = closeCtx.sendToSide("A", "hold-lock");
+const willClose = closeCtx.sendToSide("D", "must-never-dispatch");
+await waitFor(() => closeCtx.getViewpointQueueSnapshot().bySide.D?.phase === "queued");
+closeCtx.__removeTab(404);
+await assert.rejects(willClose, /target tab closed while queued/i);
+const immediatelyAfterClose = closeCtx.getViewpointQueueSnapshot();
+assert.equal(immediatelyAfterClose.byFamily.chatgpt.waiting, 0,
+  "closed queued tab must disappear from telemetry immediately");
+assert.equal(immediatelyAfterClose.byFamily.chatgpt.totalRejected, 1);
+assert.equal(immediatelyAfterClose.bySide.D, undefined);
+assert.equal(closeCtx.__order.includes("D"), false,
+  "closed queued target must never reach the provider send function");
+await active;
+await delay(5);
+const afterActive = closeCtx.getViewpointQueueSnapshot();
+assert.equal(afterActive.byFamily.chatgpt.depth, 0);
+assert.equal(afterActive.byFamily.chatgpt.totalCompleted, 1);
+assert.equal(afterActive.byFamily.chatgpt.totalRejected, 1,
+  "tab-close cancellation must be counted exactly once");
+assert.equal(closeCtx.__order.includes("D"), false);
 
 console.log("viewpoint-queue-observability: ok");
