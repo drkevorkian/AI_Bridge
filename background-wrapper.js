@@ -36,6 +36,15 @@ if (
   throw new Error("AI Bridge dynamic-agent coordinator failed to initialize.");
 }
 
+importScripts("coordinator-dynamic-semantics.js");
+if (
+  globalThis.__AI_BRIDGE_DYNAMIC_SEMANTICS_V1__?.version !== 1 ||
+  globalThis.__AI_BRIDGE_DYNAMIC_SEMANTICS_V1__?.derivedTurnMinimums !== true ||
+  globalThis.__AI_BRIDGE_DYNAMIC_SEMANTICS_V1__?.cloudJobsThroughE !== true
+) {
+  throw new Error("AI Bridge dynamic-agent semantics failed to initialize.");
+}
+
 importScripts("provider-health-runtime.js");
 if (
   globalThis.__AI_BRIDGE_PROVIDER_HEALTH_V1__?.version !== 1 ||
