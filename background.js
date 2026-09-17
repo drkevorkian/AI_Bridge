@@ -746,6 +746,22 @@ function bytesToBase64(bytes) {
   return btoa(binary);
 }
 
+const ARTIFACT_EXACT_HOSTS = new Set([
+  "chatgpt.com",
+  "chat.openai.com",
+  "grok.com",
+  "assets.grok.com",
+  "assets.grokusercontent.com",
+  "claude.ai",
+  "gemini.google.com",
+  "copilot.microsoft.com"
+]);
+const ARTIFACT_HOST_SUFFIXES = Object.freeze([
+  ".oaiusercontent.com",
+  ".googleusercontent.com",
+  ".anthropic.com"
+]);
+
 function artifactFetchHostAllowed(rawUrl) {
   try {
     const url = new URL(String(rawUrl || ""));
@@ -755,8 +771,8 @@ function artifactFetchHostAllowed(rawUrl) {
 
     const host = url.hostname.toLowerCase();
     if (!host || host.includes("..")) return false;
-    if (EXACT_HOSTS.has(host)) return true;
-    return HOST_SUFFIXES.some(suffix => host.length > suffix.length && host.endsWith(suffix));
+    if (ARTIFACT_EXACT_HOSTS.has(host)) return true;
+    return ARTIFACT_HOST_SUFFIXES.some(suffix => host.length > suffix.length && host.endsWith(suffix));
   } catch (_) {
     return false;
   }
@@ -810,7 +826,7 @@ async function fetchArtifactInBackground(rawUrl, name = "artifact.bin", mime = "
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), 20000);
   try {
-    // IMPORTANT: do not use credentials:"include" here. A model-controlled
+    // IMPORTANT: never attach ambient browser credentials here. A model-controlled
     // link must not be able to turn AI Bridge into an authenticated request
     // primitive against a provider or sibling service.
     //
