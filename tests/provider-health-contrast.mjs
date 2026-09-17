@@ -15,8 +15,12 @@ assert.doesNotMatch(healthRule[1], /opacity:\s*0\.[0-9]+\s*;/,
 assert.match(css, /\.dynamic-health-badge\s+\.status-label\s*\{[^}]*white-space:\s*nowrap/s,
   "health states must continue to provide a textual, non-color status label");
 
-const queueRule = css.match(/\.agent-card-queue-badge\s*\{([^}]*)\}/s);
-assert.ok(queueRule, "queue status badge rule must exist");
+// The first textual occurrence of `.agent-card-queue-badge {` can be the second
+// selector in the shared thread/queue layout rule. Pin the standalone status
+// rule by requiring it to follow a closed declaration block, which excludes the
+// comma-separated shared selector and verifies the queue-only opacity contract.
+const queueRule = css.match(/\}\s*\.agent-card-queue-badge\s*\{([^}]*)\}/s);
+assert.ok(queueRule, "standalone queue status badge rule must exist");
 assert.match(queueRule[1], /opacity:\s*1\s*;/,
   "queued and sending states must stay fully opaque so operational status keeps theme contrast");
 assert.doesNotMatch(queueRule[1], /opacity:\s*0\.[0-9]+\s*;/,
