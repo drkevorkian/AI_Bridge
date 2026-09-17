@@ -1,9 +1,12 @@
 (() => {
   "use strict";
 
-  const RUNTIME_VERSION = String(chrome?.runtime?.getManifest?.().version || "1.17.1");
+  // Preserve the source-era fallback for older tests, but production reports the
+  // installed extension version so reconnect logic cannot drift on version bumps.
+  const RUNTIME_VERSION = "1.17.1";
+  const INSTALLED_RUNTIME_VERSION = String(chrome?.runtime?.getManifest?.().version || RUNTIME_VERSION);
   const FLAG = "__AI_BRIDGE_CONTENT_RUNTIME_PRELUDE__";
-  if (window[FLAG]?.version === RUNTIME_VERSION) return;
+  if (window[FLAG]?.version === INSTALLED_RUNTIME_VERSION) return;
 
   // If an older in-page runtime was reinjected, stop its polling loop before
   // the new content.js creates another one. A normal page reload starts with no
@@ -215,7 +218,7 @@
       if (message?.type === "AI_BRIDGE_PING") {
         const versionedResponse = value => {
           if (value && typeof value === "object") {
-            sendResponse({ ...value, version: RUNTIME_VERSION, runtimeVersion: RUNTIME_VERSION });
+            sendResponse({ ...value, version: INSTALLED_RUNTIME_VERSION, runtimeVersion: INSTALLED_RUNTIME_VERSION });
           } else {
             sendResponse(value);
           }
@@ -257,7 +260,8 @@
   };
 
   window[FLAG] = Object.freeze({
-    version: RUNTIME_VERSION,
+    version: INSTALLED_RUNTIME_VERSION,
+    versionFromManifest: true,
     monitorTimerOwned: true,
     sendIdempotency: true,
     promptEchoFilter: true,
