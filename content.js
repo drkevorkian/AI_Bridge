@@ -579,7 +579,7 @@
     return new Blob(chunks, { type: response.headers.get("content-type") || "application/octet-stream" });
   }
 
-  async function fetchArtifact(node, index) {
+  async function fetchArtifact(node, index, options = {}) {
     const url = artifactUrl(node);
     if (!url) throw new Error("download control has no resolvable URL");
     const name = artifactName(node, url, index);
@@ -617,6 +617,8 @@
         mime: "",
         observed: true,
         generationId: currentGenerationId,
+        pageUrl: location.href,
+        manualCapture: options.manualCapture === true,
         candidateSignature
       });
       if (remote?.ok && remote.artifact?.dataBase64) return { ...remote.artifact, sourceUrl: url };
@@ -646,7 +648,7 @@
     ].join("\u0000");
   }
 
-  async function captureArtifacts(node) {
+  async function captureArtifacts(node, options = {}) {
     const root = artifactRoot(node);
     const candidates = downloadCandidates(root);
     const artifacts = [];
@@ -655,7 +657,7 @@
     let total = 0;
     for (let i = 0; i < candidates.length; i++) {
       try {
-        const artifact = await fetchArtifact(candidates[i], i);
+        const artifact = await fetchArtifact(candidates[i], i, options);
         if (!artifact) continue;
         const identity = artifactIdentity(artifact);
         if (identities.has(identity)) continue;
@@ -773,7 +775,7 @@
     if (!text || isResponseStub(text)) {
       throw new Error("No assistant reply is visible on this page yet.");
     }
-    const captured = await captureArtifacts(node);
+    const captured = await captureArtifacts(node, { manualCapture: true });
     return {
       ok: true,
       text,
