@@ -15,8 +15,18 @@ assert.match(bootstrap, /dashboard-dynamic-agents\.js/);
 assert.match(bootstrap, /dynamicAgentAdapter:\s*true/);
 assert.match(dynamic, /\["A", "B", "C", "D", "E"\]/);
 assert.match(dynamic, /AI_BRIDGE_SET_AGENT_COUNT/);
-assert.match(dynamic, /AI_BRIDGE_PROVIDER_HEALTH/);
 assert.match(dynamic, /AI_BRIDGE_ADAPTIVE_SELECT/);
+assert.doesNotMatch(dynamic, /type:\s*"AI_BRIDGE_PROVIDER_HEALTH"/,
+  "dashboard refresh must use the Adaptive Selector's returned health snapshot instead of a separate TOCTOU-prone health request");
+assert.match(dynamic, /let healthRefreshEpoch = 0/);
+assert.match(dynamic, /const refreshEpoch = \+\+healthRefreshEpoch/,
+  "each dashboard health refresh must acquire a monotonically increasing UI commit token");
+assert.match(dynamic, /if \(refreshEpoch !== healthRefreshEpoch\) return null/,
+  "older overlapping health refreshes must not repaint newer dashboard state");
+assert.match(dynamic, /applyHealth\(adaptive\.health\)/,
+  "health rendering must use the exact snapshot returned with the Adaptive Selector recommendation");
+assert.match(dynamic, /atomicHealthRecommendation:\s*true/);
+assert.match(dynamic, /latestRefreshWins:\s*true/);
 assert.match(dynamic, /selectedBindings\s*=\s*wrapped/);
 assert.doesNotMatch(dynamic, /chrome\.runtime\.sendMessage\s*=\s*/,
   "dashboard adapter must not monkey-patch Chrome message transport");
