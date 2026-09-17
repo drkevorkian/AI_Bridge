@@ -1,3 +1,26 @@
+:root {
+  /*
+   * D/E were added after the original A/B/C palette. Derive their accents from
+   * existing theme colors so every current theme gets distinct viewpoint colors
+   * without duplicating theme-specific constants or overriding the base palette.
+   */
+  --agent-d-accent: color-mix(in srgb, var(--a) 45%, var(--c));
+  --agent-e-accent: color-mix(in srgb, var(--b) 45%, var(--c));
+}
+
+.agent-card.agent-d { border-left-color: var(--agent-d-accent); }
+.agent-card.agent-e { border-left-color: var(--agent-e-accent); }
+.transcript-card.side-d { border-left-color: var(--agent-d-accent); }
+.transcript-card.side-e { border-left-color: var(--agent-e-accent); }
+.history-badge.side-d { color: var(--agent-d-accent); }
+.history-badge.side-e { color: var(--agent-e-accent); }
+.relay-row.relay-side-d { border-left: 3px solid var(--agent-d-accent); }
+.relay-row.relay-side-e { border-left: 3px solid var(--agent-e-accent); }
+.vault-source-badge.side-d,
+.vault-chip.relay-side-d { border-color: var(--agent-d-accent); }
+.vault-source-badge.side-e,
+.vault-chip.relay-side-e { border-color: var(--agent-e-accent); }
+
 .dynamic-agent-count {
   display: grid;
   grid-template-columns: max-content minmax(72px, 120px) minmax(220px, 1fr);
