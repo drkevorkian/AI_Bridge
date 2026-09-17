@@ -33,7 +33,7 @@
     return record;
   };
 
-  // The implicit Google Web flow is intentionally unreachable in v1.17.0.
+  // The implicit Google Web flow is intentionally unreachable in v1.17.1.
   // Leave the core implementation present for migration archaeology, but make
   // the loaded service-worker binding fail closed before launchWebAuthFlow.
   launchGoogleWebAuth = async function disabledLegacyGoogleWebAuth() {
