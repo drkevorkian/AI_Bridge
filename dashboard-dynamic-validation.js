@@ -41,6 +41,35 @@
     return chosen.length === roster.length && chosen.every((side, index) => side === roster[index]);
   }
 
+  function availableSupportedTabCount() {
+    try {
+      return tabsById instanceof Map ? tabsById.size : 0;
+    } catch (_) {
+      return 0;
+    }
+  }
+
+  function refreshTabCapacityStatus() {
+    const status = document.getElementById("status");
+    if (!status) return;
+
+    const required = selectedSides().length;
+    const available = availableSupportedTabCount();
+    const legacyWarning = "Open at least three supported AI chat tabs, then click Refresh AI tabs.";
+
+    if (available < required) {
+      status.textContent = `Open at least ${required} supported AI chat tab${required === 1 ? "" : "s"}, then click Refresh AI tabs.`;
+      return;
+    }
+
+    // For 1-2 agent rosters the legacy loader may have emitted its fixed-three
+    // warning even though enough supported tabs are already available. Replace
+    // only that exact legacy message so unrelated status output is preserved.
+    if (status.textContent === legacyWarning) {
+      status.textContent = `${available} supported AI chat tab${available === 1 ? "" : "s"} ready for ${required} selected agent${required === 1 ? "" : "s"}.`;
+    }
+  }
+
   // dashboard.js predates the dynamic A-E roster and its legacy validator still
   // compares the number of unique tabs to the literal value 3. The Start and
   // Resume click handlers resolve this binding when they run, so replacing the
@@ -53,6 +82,25 @@
     }
   } catch (error) {
     console.error("AI Bridge could not install dynamic dashboard tab validation", error);
+  }
+
+  // The legacy tab loader reports capacity against a literal threshold of three.
+  // Reconcile only its post-refresh feedback against the active roster. This is
+  // advisory UI feedback; Start/Resume still run dynamic validation and the
+  // background binding evaluator remains authoritative and fail-closed.
+  try {
+    if (typeof loadTabs === "function" && !loadTabs.__aiBridgeDynamicCapacity) {
+      const baseLoadTabs = loadTabs;
+      const wrappedLoadTabs = async function dynamicLoadTabs(options) {
+        const result = await baseLoadTabs(options);
+        refreshTabCapacityStatus();
+        return result;
+      };
+      wrappedLoadTabs.__aiBridgeDynamicCapacity = true;
+      loadTabs = wrappedLoadTabs;
+    }
+  } catch (error) {
+    console.error("AI Bridge could not install dynamic tab refresh feedback", error);
   }
 
   // The legacy fresh-chat helper validates and manages the shared "New all"
@@ -100,9 +148,10 @@
   }
 
   window.__AI_BRIDGE_DYNAMIC_TAB_VALIDATION__ = Object.freeze({
-    version: 2,
+    version: 3,
     dynamicAgentCount: true,
     uniquePhysicalTabsRequired: true,
+    dynamicTabRefreshFeedback: true,
     dynamicFreshChatValidation: true,
     backgroundEvaluatorAuthoritative: true
   });
