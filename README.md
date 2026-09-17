@@ -190,6 +190,8 @@ Login is never required. Chrome Sync works without Google.
 
 A linked Google account optionally stores the same sanitized settings copy in Drive `appDataFolder` as `ai-bridge-settings.json`. OAuth access tokens remain session-only and are never synced or stored in Drive.
 
+For unpacked builds that use a user-supplied Google Web OAuth client, AI Bridge generates a **cryptographically random** per-request CSRF `state`, stores the pending value only in `chrome.storage.session`, validates the returned value before accepting a token, and expires it after 10 minutes. OAuth access tokens remain session-only.
+
 Synced configuration may include:
 
 - theme and dashboard layout;
@@ -234,6 +236,7 @@ Important protections include:
 - structural wrapping of peer/file/vault data as untrusted evidence;
 - HTTPS-only artifact/update fetching with redirect re-validation;
 - OAuth CSRF `state` validation and session-only token storage;
+- `chrome.power.requestKeepAwake("system")` during active orchestration, released when the run no longer needs keep-awake;
 - locked `chrome.storage` access for trusted extension contexts;
 - fail-closed queue/tab/thread behavior.
 
