@@ -1,0 +1,138 @@
+(() => {
+  "use strict";
+
+  // Cosmetic same-provider viewpoint labels.
+  //
+  // Provider Health intentionally redacts worker-only tab/thread identity before
+  // crossing into extension pages. This adapter therefore derives viewpoint
+  // numbering solely from the public health roster order + providerId and reuses
+  // the already-sanitized threadPath. It never needs raw tab IDs, provenance IDs,
+  // or internal thread keys.
+  const FLAG = "__AI_BRIDGE_VIEWPOINT_BADGES_V1__";
+  if (window[FLAG]) return;
+
+  const MAX_THREAD_BADGE_CHARS = 18;
+  let refreshEpoch = 0;
+  let observer = null;
+  let refreshScheduled = false;
+
+  const byId = id => document.getElementById(id);
+
+  function formatThreadPath(rawPath) {
+    const value = String(rawPath || "").split("?")[0].split("#")[0];
+    if (!value.startsWith("/")) return "";
+    return value.length > MAX_THREAD_BADGE_CHARS
+      ? `${value.slice(0, MAX_THREAD_BADGE_CHARS - 1)}…`
+      : value;
+  }
+
+  function viewpointRows(health) {
+    const sides = Array.isArray(health?.sides) ? health.sides.map(side => String(side)) : [];
+    const groups = new Map();
+
+    for (const side of sides) {
+      const row = health?.bySide?.[side] || null;
+      const providerId = String(row?.providerId || "");
+      if (!providerId) continue;
+      const group = groups.get(providerId) || [];
+      group.push(side);
+      groups.set(providerId, group);
+    }
+
+    const out = new Map();
+    for (const [providerId, group] of groups.entries()) {
+      if (group.length < 2) continue;
+      group.forEach((side, index) => {
+        out.set(side, Object.freeze({
+          providerId,
+          index: index + 1,
+          count: group.length
+        }));
+      });
+    }
+    return out;
+  }
+
+  function applyViewpointBadges(health) {
+    const rows = viewpointRows(health);
+    for (const side of Array.isArray(health?.sides) ? health.sides : []) {
+      const badge = byId(`threadBadge${side}`);
+      if (!badge) continue;
+
+      const viewpoint = rows.get(String(side));
+      if (!viewpoint) continue;
+
+      const row = health?.bySide?.[side] || null;
+      const thread = formatThreadPath(row?.threadPath);
+      const providerName = String(row?.providerName || "Provider");
+      const label = `Viewpoint #${viewpoint.index}`;
+      const visibleText = thread ? `${label} · ${thread}` : label;
+      const accessibleText = thread
+        ? `${providerName} viewpoint ${viewpoint.index} of ${viewpoint.count}; conversation thread ${thread}`
+        : `${providerName} viewpoint ${viewpoint.index} of ${viewpoint.count}`;
+
+      // All strings are assigned as text/attributes; none are interpreted as HTML.
+      badge.textContent = visibleText;
+      badge.title = accessibleText;
+      badge.setAttribute("aria-label", accessibleText);
+      badge.dataset.viewpointIndex = String(viewpoint.index);
+      badge.dataset.viewpointCount = String(viewpoint.count);
+      badge.hidden = false;
+    }
+    return rows;
+  }
+
+  async function refreshViewpointBadges() {
+    if (document.hidden) return null;
+    const epoch = ++refreshEpoch;
+    const preferredSide = byId("startSide")?.value || "A";
+    const response = await chrome.runtime.sendMessage({
+      type: "AI_BRIDGE_ADAPTIVE_SELECT",
+      force: false,
+      preferredSide
+    });
+    if (!response?.ok) throw new Error(response?.error || "Viewpoint health unavailable.");
+    if (epoch !== refreshEpoch) return null;
+    applyViewpointBadges(response.health);
+    return response.health;
+  }
+
+  function scheduleRefresh() {
+    if (refreshScheduled) return;
+    refreshScheduled = true;
+    queueMicrotask(() => {
+      refreshScheduled = false;
+      refreshViewpointBadges().catch(() => {});
+    });
+  }
+
+  function start() {
+    // The dynamic dashboard rewrites adaptiveRecommendation after each atomic
+    // health+recommendation refresh. Observe that existing cadence instead of
+    // adding another timer. The follow-up read normally reuses Provider Health's
+    // short state-keyed cache and is cosmetic only; routing never consumes it.
+    const cadenceAnchor = byId("adaptiveRecommendation");
+    if (cadenceAnchor && typeof MutationObserver === "function") {
+      observer = new MutationObserver(() => scheduleRefresh());
+      observer.observe(cadenceAnchor, { childList: true, subtree: true, characterData: true });
+    }
+    scheduleRefresh();
+    window.addEventListener("pagehide", () => {
+      observer?.disconnect();
+      observer = null;
+    }, { once: true });
+  }
+
+  window[FLAG] = Object.freeze({
+    version: 1,
+    exposesSensitiveIdentity: false,
+    usesRedactedProviderHealth: true,
+    viewpointIndexFromRosterOrder: true,
+    usesTextContentOnly: true,
+    independentTimer: false,
+    applyViewpointBadges,
+    refreshViewpointBadges
+  });
+
+  start();
+})();
