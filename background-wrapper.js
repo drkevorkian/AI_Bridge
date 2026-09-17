@@ -36,7 +36,10 @@ importScripts("coordinator-dynamic-agents.js");
 if (
   globalThis.__AI_BRIDGE_DYNAMIC_AGENTS_V1__?.version !== 1 ||
   globalThis.__AI_BRIDGE_DYNAMIC_AGENTS_V1__?.uniqueTabBinding !== true ||
-  globalThis.__AI_BRIDGE_DYNAMIC_AGENTS_V1__?.duplicateProviderAgentsEnabled !== true
+  globalThis.__AI_BRIDGE_DYNAMIC_AGENTS_V1__?.duplicateProviderAgentsEnabled !== true ||
+  globalThis.__AI_BRIDGE_DYNAMIC_AGENTS_V1__?.revokesRetiredTabAuthority !== true ||
+  globalThis.__AI_BRIDGE_DYNAMIC_AGENTS_V1__?.pausesOnBoundTabReplacement !== true ||
+  globalThis.__AI_BRIDGE_DYNAMIC_AGENTS_V1__?.neverAutoTrustsReplacementTab !== true
 ) {
   throw new Error("AI Bridge dynamic-agent coordinator failed to initialize.");
 }
