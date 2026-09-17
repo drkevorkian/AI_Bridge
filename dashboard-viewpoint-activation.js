@@ -13,7 +13,8 @@
     ...current,
     duplicateProviderAgentsEnabled: true,
     viewpointModeEnabled: true,
-    queueObservability: true
+    queueObservability: true,
+    sanitizedViewpointBadges: true
   });
 
   if (!document.querySelector("script[data-ai-bridge-viewpoint-queue]")) {
@@ -21,6 +22,14 @@
     script.src = chrome.runtime.getURL("dashboard-viewpoint-queue.js");
     script.async = false;
     script.dataset.aiBridgeViewpointQueue = "true";
+    document.body.appendChild(script);
+  }
+
+  if (!document.querySelector("script[data-ai-bridge-viewpoint-badges]")) {
+    const script = document.createElement("script");
+    script.src = chrome.runtime.getURL("dashboard-viewpoint-badges.js");
+    script.async = false;
+    script.dataset.aiBridgeViewpointBadges = "true";
     document.body.appendChild(script);
   }
 })();
