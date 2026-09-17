@@ -2,8 +2,9 @@
   "use strict";
 
   // Slice 2 scaffolding on the Slice 1 baseline.
-  // Stamp sanitized thread identity onto recorded responses and serialize
-  // provider-family sends when more than one live agent shares that family.
+  // Capture sanitized conversation identity before provider dispatch, stamp it
+  // synchronously into response transcript entries during the normal commit,
+  // and serialize sends when more than one live agent shares a provider family.
   // duplicateProviderAgentsEnabled stays false.
   const FLAG = "__AI_BRIDGE_VIEWPOINT_RUNTIME_V1__";
   if (globalThis[FLAG]) return;
@@ -39,28 +40,32 @@
     return caps.conversationIdentity({ side, tabId, url: await tabUrl(tabId) });
   }
 
+  function sanitizedIdentity(identity) {
+    if (!identity) return null;
+    return {
+      provenanceId: String(identity.provenanceId || ""),
+      threadKey: String(identity.threadKey || ""),
+      providerFamily: String(identity.familyId || ""),
+      boundTabId: Number(identity.tabId) || null
+    };
+  }
+
+  function rememberIdentity(side, identity) {
+    const safe = sanitizedIdentity(identity);
+    state.viewpointIdentityBySide = {
+      ...(state.viewpointIdentityBySide && typeof state.viewpointIdentityBySide === "object" ? state.viewpointIdentityBySide : {}),
+      [side]: safe
+    };
+    return safe;
+  }
+
   function stampEntry(entry, identity) {
     if (!entry || typeof entry !== "object" || !identity) return entry;
     entry.provenanceId = identity.provenanceId;
     entry.threadKey = identity.threadKey;
-    entry.providerFamily = identity.familyId;
-    entry.boundTabId = identity.tabId;
+    entry.providerFamily = identity.providerFamily;
+    entry.boundTabId = identity.boundTabId;
     return entry;
-  }
-
-  async function stampResponseNow(side, entry) {
-    const identity = await identityForSide(side);
-    if (identity && entry) stampEntry(entry, identity);
-    return identity;
-  }
-
-  async function latestResponseEntry(side) {
-    const list = Array.isArray(state?.transcript) ? state.transcript : [];
-    for (let index = list.length - 1; index >= 0; index -= 1) {
-      const entry = list[index];
-      if (entry?.type === "response" && entry.side === side) return entry;
-    }
-    return null;
   }
 
   async function currentAssignments() {
@@ -80,34 +85,42 @@
     return next;
   }
 
-  if (typeof handleCompletedResponse === "function") {
-    const baseHandle = handleCompletedResponse;
-    handleCompletedResponse = async function viewpointHandleCompletedResponse(side, text, options) {
-      const result = await baseHandle(side, text, options);
-      const entry = await latestResponseEntry(side);
-      if (entry) await stampResponseNow(side, entry);
-      return result;
-    };
-  }
-
-  if (typeof handleBatchCompletedResponse === "function") {
-    const baseBatch = handleBatchCompletedResponse;
-    handleBatchCompletedResponse = async function viewpointHandleBatchCompletedResponse(side, text, options) {
-      const result = await baseBatch(side, text, options);
-      const entry = await latestResponseEntry(side);
-      if (entry) await stampResponseNow(side, entry);
-      return result;
+  // Stamp inside recordTranscript so the base response handler persists the
+  // provenance fields in the same save as the response itself. Never resolve
+  // the current tab URL after completion: navigation after dispatch must not
+  // rewrite which conversation actually received the prompt.
+  if (typeof recordTranscript === "function") {
+    const baseRecordTranscript = recordTranscript;
+    recordTranscript = function viewpointRecordTranscript(type, payload = {}) {
+      const entry = baseRecordTranscript(type, payload);
+      if (type === "response" && payload?.side) {
+        const identity = state?.viewpointIdentityBySide?.[payload.side] || null;
+        if (identity) stampEntry(entry, identity);
+      }
+      return entry;
     };
   }
 
   if (typeof sendToSide === "function") {
     const baseSend = sendToSide;
     sendToSide = async function viewpointSendToSide(side, text, options) {
-      const plan = caps.sameFamilySendPlan(await currentAssignments());
-      const identity = await identityForSide(side);
-      const familyId = identity?.familyId || "unknown";
+      const assignments = await currentAssignments();
+      const plan = caps.sameFamilySendPlan(assignments);
+      const row = assignments.find(item => item.side === side) || null;
+      const identity = row ? caps.conversationIdentity(row) : await identityForSide(side);
+      const remembered = rememberIdentity(side, identity);
+      const familyId = remembered?.providerFamily || "unknown";
       const queue = plan.queues.find(item => item.familyId === familyId);
-      const run = () => baseSend(side, text, options);
+      const run = async () => {
+        const result = await baseSend(side, text, options);
+        // Normal recorded sends persist state inside baseSend. Resends use
+        // record:false, so explicitly persist the captured identity after a
+        // successful resend to survive service-worker suspension.
+        if (options?.record === false && typeof saveState === "function") {
+          await saveState();
+        }
+        return result;
+      };
       if (caps.serializeSameFamilySends === true && queue?.serialize) {
         return enqueueFamily(familyId, run);
       }
@@ -115,10 +128,12 @@
     };
   }
 
-  globalThis.stampViewpointProvenance = stampResponseNow;
+  globalThis.viewpointIdentityForSide = identityForSide;
   globalThis[FLAG] = Object.freeze({
     version: 1,
     stampsTranscript: true,
+    stampsBeforeCommitSave: true,
+    capturesIdentityBeforeDispatch: true,
     serializesSameFamilySends: true,
     enablesDuplicateProviders: false
   });
