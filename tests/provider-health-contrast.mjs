@@ -15,4 +15,16 @@ assert.doesNotMatch(healthRule[1], /opacity:\s*0\.[0-9]+\s*;/,
 assert.match(css, /\.dynamic-health-badge\s+\.status-label\s*\{[^}]*white-space:\s*nowrap/s,
   "health states must continue to provide a textual, non-color status label");
 
-console.log("provider health contrast regression: ok");
+const queueRule = css.match(/\.agent-card-queue-badge\s*\{([^}]*)\}/s);
+assert.ok(queueRule, "queue status badge rule must exist");
+assert.match(queueRule[1], /opacity:\s*1\s*;/,
+  "queued and sending states must stay fully opaque so operational status keeps theme contrast");
+assert.doesNotMatch(queueRule[1], /opacity:\s*0\.[0-9]+\s*;/,
+  "queue status must not use fractional opacity that can reduce readability");
+
+const threadRule = css.match(/\.agent-card-thread-badge\s*\{([^}]*)\}/s);
+assert.ok(threadRule, "thread identity badge rule must remain separate from queue status styling");
+assert.match(threadRule[1], /opacity:\s*0\.72\s*;/,
+  "secondary viewpoint identity may remain visually subdued without weakening live queue status");
+
+console.log("provider health and queue contrast regression: ok");
