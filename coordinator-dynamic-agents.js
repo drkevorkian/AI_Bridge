@@ -13,8 +13,15 @@
   const ALL_SIDES = Object.freeze([...caps.supportedAgentSides]);
   const DEFAULT_COUNT = caps.defaultAgentCount;
 
+  function liveState() {
+    try {
+      if (typeof state !== "undefined" && state) return state;
+    } catch (_) {}
+    return globalThis.state;
+  }
+
   function liveCount(raw) {
-    return caps.normalizeAgentCount(raw == null ? globalThis.state?.agentCount : raw, DEFAULT_COUNT);
+    return caps.normalizeAgentCount(raw == null ? liveState()?.agentCount : raw, DEFAULT_COUNT);
   }
 
   function liveSides(rawCount) {
@@ -41,9 +48,13 @@
     try {
       SIDES = next;
     } catch (_) {
-      // Fail closed if background.js is still a const binding. Helpers use liveSides().
+      // background.js ships `const SIDES`. Mutate the array in place so every
+      // existing SIDES loop sees the live 1-5 roster without a rebinding.
+      if (Array.isArray(SIDES)) {
+        SIDES.splice(0, SIDES.length, ...next);
+      }
     }
-    return next;
+    return Array.isArray(SIDES) ? SIDES : next;
   }
 
   function migrateDynamicAgentState(bridgeState) {
@@ -169,22 +180,60 @@
   };
 
   async function applyAgentCount(rawCount, { persist = true } = {}) {
-    if (globalThis.state?.sessionActive) {
+    if (liveState()?.sessionActive) {
       throw new Error("Stop the session before changing how many agents are on the team.");
     }
     const count = caps.parseAgentCount(rawCount);
     if (count === null) {
       throw new RangeError(`Agent count must be an integer from 1 to ${caps.maxUniqueProviderAgents}.`);
     }
-    const next = migrateDynamicAgentState({ ...(globalThis.state || {}), agentCount: count });
-    if (globalThis.state) Object.assign(globalThis.state, next);
+    const current = liveState() || {};
+    const next = migrateDynamicAgentState({ ...current, agentCount: count });
+    if (current) Object.assign(current, next);
     assignLiveSides(count);
     if (persist && typeof saveState === "function") await saveState();
     return { agentCount: count, sides: liveSides(count) };
   }
 
-  if (globalThis.state) migrateDynamicAgentState(globalThis.state);
-  assignLiveSides(globalThis.state?.agentCount);
+  function seedDefaultAgentFields() {
+    const target = typeof DEFAULT_STATE === "object" && DEFAULT_STATE ? DEFAULT_STATE : null;
+    if (!target) return;
+    if (target.agentCount == null) target.agentCount = DEFAULT_COUNT;
+    for (const side of ALL_SIDES) {
+      if (target[`tab${side}`] === undefined) target[`tab${side}`] = null;
+      if (target[`label${side}`] === undefined) target[`label${side}`] = `AI ${side}`;
+      if (target[`job${side}`] === undefined) target[`job${side}`] = "";
+    }
+  }
+
+  async function migrateLoadedState() {
+    seedDefaultAgentFields();
+    const current = liveState();
+    if (current) migrateDynamicAgentState(current);
+    assignLiveSides(current?.agentCount);
+  }
+
+  // background.js starts loadState() during parse, before this overlay exists.
+  // Chain the already-started promise so v1.17.1 snapshots are expanded after
+  // they replace the in-memory default state.
+  migrateLoadedState();
+  try {
+    if (typeof stateReady !== "undefined" && stateReady && typeof stateReady.then === "function") {
+      stateReady = stateReady.then(migrateLoadedState);
+    }
+  } catch (_) {
+    if (globalThis.stateReady && typeof globalThis.stateReady.then === "function") {
+      globalThis.stateReady = globalThis.stateReady.then(migrateLoadedState);
+    }
+  }
+  if (typeof loadState === "function") {
+    const baseLoadState = loadState;
+    loadState = async function dynamicLoadState() {
+      const result = await baseLoadState.apply(this, arguments);
+      await migrateLoadedState();
+      return result;
+    };
+  }
 
   if (chrome?.runtime?.onMessage?.addListener) {
     chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {

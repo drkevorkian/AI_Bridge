@@ -10,10 +10,7 @@ const overlaySrc = fs.readFileSync(path.join(root, "coordinator-dynamic-agents.j
 const wrapper = fs.readFileSync(path.join(root, "background-wrapper.js"), "utf8");
 const background = fs.readFileSync(path.join(root, "background.js"), "utf8");
 
-assert.match(background, /var SIDES = \["A", "B", "C"\]/);
-assert.match(background, /agentCount: 3/);
-assert.match(background, /tabD: null/);
-assert.match(background, /tabE: null/);
+assert.match(background, /SIDES = \["A", "B", "C"\]/);
 assert.ok(wrapper.includes('importScripts("coordinator-dynamic-agents.js")'));
 assert.ok(wrapper.indexOf('importScripts("background.js")') < wrapper.indexOf('importScripts("coordinator-dynamic-agents.js")'));
 assert.ok(wrapper.indexOf('importScripts("coordinator-dynamic-agents.js")') < wrapper.indexOf('importScripts("artifact-fetch-runtime-hardening.js")'));
@@ -31,7 +28,7 @@ function same(actual, expected) {
   assert.equal(JSON.stringify(actual), JSON.stringify(expected));
 }
 
-function loadOverlay(state) {
+function loadOverlay(state, { freezeSides = false } = {}) {
   const context = vm.createContext({
     URL, console, Object, Array, Number, String, Boolean, Set, Map, Promise, RangeError, Error,
     SIDES: ["A", "B", "C"],
@@ -61,6 +58,14 @@ function loadOverlay(state) {
     }
   });
   context.globalThis = context;
+  if (freezeSides) {
+    Object.defineProperty(context, "SIDES", {
+      configurable: false,
+      enumerable: true,
+      writable: false,
+      value: context.SIDES
+    });
+  }
   vm.runInContext(capsSrc, context, { filename: "agent-capabilities.js" });
   vm.runInContext(overlaySrc, context, { filename: "coordinator-dynamic-agents.js" });
   return context;
@@ -102,6 +107,11 @@ await shrinking.applyAgentCount(2, { persist: false });
 same(Array.from(shrinking.SIDES), ["A", "B"]);
 assert.equal(shrinking.state.startSide, "A");
 same(shrinking.sanitizeForceRelaySides(["A", "C", "E", "A"]), ["A"]);
+
+const frozen = loadOverlay({ tabA: 11, tabB: 22, tabC: 33, agentCount: 3 }, { freezeSides: true });
+await frozen.applyAgentCount(5, { persist: false });
+same(Array.from(frozen.SIDES), ["A", "B", "C", "D", "E"]);
+assert.equal(frozen.nextSide("E"), "A");
 
 const legacy = loadOverlay({
   stateVersion: 3,
