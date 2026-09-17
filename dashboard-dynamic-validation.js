@@ -37,6 +37,10 @@
     return null;
   }
 
+  function sameRoster(chosen, roster) {
+    return chosen.length === roster.length && chosen.every((side, index) => side === roster[index]);
+  }
+
   // dashboard.js predates the dynamic A-E roster and its legacy validator still
   // compares the number of unique tabs to the literal value 3. The Start and
   // Resume click handlers resolve this binding when they run, so replacing the
@@ -51,10 +55,55 @@
     console.error("AI Bridge could not install dynamic dashboard tab validation", error);
   }
 
+  // The legacy fresh-chat helper validates and manages the shared "New all"
+  // button only when exactly three sides are requested. Wrap only full-roster
+  // calls outside that legacy case so 1/2/4/5-agent sessions get equivalent early
+  // validation and busy-state behavior without changing single-side reset logic.
+  try {
+    if (typeof openFreshChats === "function" && !openFreshChats.__aiBridgeDynamicValidation) {
+      const baseOpenFreshChats = openFreshChats;
+      const wrappedOpenFreshChats = async function dynamicOpenFreshChats(sides) {
+        const roster = selectedSides();
+        const chosen = Array.isArray(sides) ? [...sides] : roster;
+        if (!sameRoster(chosen, roster) || chosen.length === 3) {
+          return baseOpenFreshChats(sides);
+        }
+
+        const error = dynamicTabValidation();
+        if (error) {
+          const status = document.getElementById("status");
+          if (status) status.textContent = error;
+          return;
+        }
+
+        const button = document.getElementById("newAllChats");
+        const oldText = button?.textContent;
+        const oldDisabled = button?.disabled;
+        if (button) {
+          button.textContent = "Opening…";
+          button.disabled = true;
+        }
+        try {
+          return await baseOpenFreshChats(sides);
+        } finally {
+          if (button) {
+            button.textContent = oldText;
+            button.disabled = Boolean(oldDisabled);
+          }
+        }
+      };
+      wrappedOpenFreshChats.__aiBridgeDynamicValidation = true;
+      openFreshChats = wrappedOpenFreshChats;
+    }
+  } catch (error) {
+    console.error("AI Bridge could not install dynamic fresh-chat validation", error);
+  }
+
   window.__AI_BRIDGE_DYNAMIC_TAB_VALIDATION__ = Object.freeze({
-    version: 1,
+    version: 2,
     dynamicAgentCount: true,
     uniquePhysicalTabsRequired: true,
+    dynamicFreshChatValidation: true,
     backgroundEvaluatorAuthoritative: true
   });
 })();
