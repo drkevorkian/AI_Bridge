@@ -42,6 +42,10 @@ assert.match(copy, /Starting \$\{count\}-AI session/,
   "Start status should report the live roster size");
 assert.match(copy, /all \$\{count\} selected roles/,
   "Resume guidance should report the live roster size");
+assert.match(copy, /Every later turn from \$\{recipients\}/,
+  "team-rules success copy should report the live roster rather than A/B/C");
+assert.match(copy, /dynamicTeamRulesStatusCopy:\s*true/,
+  "diagnostics should expose dynamic team-rules status copy");
 assert.match(copy, /statusObserver\.observe\(status/,
   "copy adapter should react when legacy handlers update session status");
 assert.match(copy, /dynamicSessionStatusCopy:\s*true/,

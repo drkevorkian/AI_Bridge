@@ -20,8 +20,13 @@ assert.doesNotMatch(source, /new Set\(ids\)\.size !== 3/,
   "dynamic validation must not reintroduce the fixed-three defect");
 assert.match(source, /dynamicFreshChatValidation:\s*true/,
   "adapter should report full-roster fresh-chat validation");
+assert.match(source, /dynamicTabRefreshFeedback:\s*true/,
+  "adapter should report roster-aware tab refresh feedback");
+assert.match(source, /available < required/,
+  "tab refresh feedback should compare supported tabs against the live roster");
 
 const tabBySide = new Map();
+const tabsById = new Map();
 const status = { textContent: "" };
 const newAllChats = { textContent: "New all chats", disabled: false };
 const elements = new Map([
@@ -29,11 +34,20 @@ const elements = new Map([
   ["newAllChats", newAllChats]
 ]);
 const freshChatCalls = [];
+let loadTabsCalls = 0;
 const context = vm.createContext({
   console,
   SIDES: ["A", "B", "C", "D", "E"],
+  tabsById,
   selectedTab(side) { return tabBySide.get(side) ?? null; },
   validateThreeTabs() { return "legacy validator still active"; },
+  async loadTabs() {
+    loadTabsCalls += 1;
+    if (tabsById.size < 3) {
+      status.textContent = "Open at least three supported AI chat tabs, then click Refresh AI tabs.";
+    }
+    return "loaded";
+  },
   async openFreshChats(sides) {
     freshChatCalls.push(Array.isArray(sides) ? [...sides] : sides);
     return "opened";
@@ -51,6 +65,8 @@ assert.equal(context.__AI_BRIDGE_DYNAMIC_TAB_VALIDATION__.uniquePhysicalTabsRequ
   "adapter should preserve unique physical tab enforcement");
 assert.equal(context.__AI_BRIDGE_DYNAMIC_TAB_VALIDATION__.dynamicFreshChatValidation, true,
   "adapter should expose fresh-chat validation diagnostics");
+assert.equal(context.__AI_BRIDGE_DYNAMIC_TAB_VALIDATION__.dynamicTabRefreshFeedback, true,
+  "adapter should expose tab-refresh feedback diagnostics");
 
 function bindUnique(sides) {
   tabBySide.clear();
@@ -59,6 +75,11 @@ function bindUnique(sides) {
   status.textContent = "";
   newAllChats.textContent = "New all chats";
   newAllChats.disabled = false;
+}
+
+function setAvailableTabs(count) {
+  tabsById.clear();
+  for (let index = 0; index < count; index += 1) tabsById.set(500 + index, { id: 500 + index });
 }
 
 for (const sides of [
@@ -87,6 +108,34 @@ bindUnique(["A"]);
 tabBySide.delete("A");
 assert.equal(context.validateThreeTabs(), "Choose 1 supported AI tab.",
   "single-agent mode should use singular validation copy");
+
+// Refresh feedback must use the selected roster size rather than the legacy
+// literal-three threshold. This is advisory only; validation remains separate.
+bindUnique(["A", "B", "C", "D", "E"]);
+setAvailableTabs(4);
+status.textContent = "unchanged";
+assert.equal(await context.loadTabs(), "loaded");
+assert.equal(status.textContent,
+  "Open at least 5 supported AI chat tabs, then click Refresh AI tabs.",
+  "five-agent refresh should warn when only four supported tabs are open");
+
+bindUnique(["A", "B"]);
+setAvailableTabs(2);
+status.textContent = "";
+assert.equal(await context.loadTabs(), "loaded");
+assert.equal(status.textContent,
+  "2 supported AI chat tabs ready for 2 selected agents.",
+  "two-agent refresh should replace the legacy false three-tab warning when capacity is sufficient");
+
+bindUnique(["A"]);
+setAvailableTabs(1);
+status.textContent = "";
+assert.equal(await context.loadTabs(), "loaded");
+assert.equal(status.textContent,
+  "1 supported AI chat tab ready for 1 selected agent.",
+  "single-agent refresh should use singular ready feedback");
+assert.equal(loadTabsCalls, 3,
+  "dynamic refresh wrapper should delegate exactly once per refresh");
 
 // Full-roster fresh-chat calls outside the legacy 3-agent case must get the
 // same early validation and busy-state semantics instead of bypassing them.

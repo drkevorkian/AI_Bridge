@@ -92,6 +92,13 @@
       const binding = count === 1 ? "the selected role" : `all ${count} selected roles`;
       const tabs = count === 1 ? "tab" : "tabs";
       status.textContent = text.replace(legacyResume, `To resume, bind ${binding} to open AI ${tabs}.`);
+      return;
+    }
+
+    const legacyRules = "Team rules applied. Every later A/B/C turn will receive them, regardless of job.";
+    if (text === legacyRules) {
+      const recipients = count === 1 ? "the selected AI" : `all ${count} selected AIs`;
+      status.textContent = `Team rules applied. Every later turn from ${recipients} will receive them, regardless of job.`;
     }
   }
 
@@ -139,9 +146,10 @@
   install();
 
   window.__AI_BRIDGE_DYNAMIC_WORKMODE_COPY__ = Object.freeze({
-    version: 2,
+    version: 3,
     liveRosterCopy: true,
     dynamicSessionStatusCopy: true,
+    dynamicTeamRulesStatusCopy: true,
     textOnlyRendering: true,
     refresh: refreshDynamicWorkModeCopy
   });
