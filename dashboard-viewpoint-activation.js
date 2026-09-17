@@ -12,6 +12,15 @@
   window.__AI_BRIDGE_DYNAMIC_DASHBOARD_V1__ = Object.freeze({
     ...current,
     duplicateProviderAgentsEnabled: true,
-    viewpointModeEnabled: true
+    viewpointModeEnabled: true,
+    queueObservability: true
   });
+
+  if (!document.querySelector("script[data-ai-bridge-viewpoint-queue]")) {
+    const script = document.createElement("script");
+    script.src = chrome.runtime.getURL("dashboard-viewpoint-queue.js");
+    script.async = false;
+    script.dataset.aiBridgeViewpointQueue = "true";
+    document.body.appendChild(script);
+  }
 })();

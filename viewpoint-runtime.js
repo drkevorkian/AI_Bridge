@@ -17,6 +17,8 @@
   }
 
   const familyQueues = new Map();
+  const queueMetrics = new Map();
+  let queueSequence = 1;
 
   function liveSides() {
     const dynamic = globalThis.__AI_BRIDGE_DYNAMIC_AGENTS_V1__;
@@ -101,15 +103,125 @@
     return verdict;
   }
 
-  function enqueueFamily(familyId, work) {
+  function metricForFamily(familyId) {
     const key = familyId || "unknown";
+    let metric = queueMetrics.get(key);
+    if (!metric) {
+      metric = {
+        familyId: key,
+        pending: [],
+        activeSide: null,
+        activeStartedAt: 0,
+        totalEnqueued: 0,
+        totalCompleted: 0,
+        totalRejected: 0,
+        maxDepth: 0,
+        totalWaitMs: 0,
+        lastWaitMs: 0
+      };
+      queueMetrics.set(key, metric);
+    }
+    return metric;
+  }
+
+  function queueSnapshot() {
+    const now = Date.now();
+    const byFamily = {};
+    const bySide = {};
+    for (const [familyId, metric] of queueMetrics.entries()) {
+      const waiting = metric.pending.length;
+      const active = Boolean(metric.activeSide);
+      byFamily[familyId] = {
+        waiting,
+        active,
+        depth: waiting + (active ? 1 : 0),
+        activeSide: metric.activeSide || null,
+        totalEnqueued: metric.totalEnqueued,
+        totalCompleted: metric.totalCompleted,
+        totalRejected: metric.totalRejected,
+        maxDepth: metric.maxDepth,
+        lastWaitMs: metric.lastWaitMs,
+        averageWaitMs: metric.totalCompleted + metric.totalRejected > 0
+          ? Math.round(metric.totalWaitMs / (metric.totalCompleted + metric.totalRejected))
+          : 0
+      };
+      if (metric.activeSide) {
+        bySide[metric.activeSide] = {
+          phase: "sending",
+          familyId,
+          queuePosition: 0,
+          waitMs: 0,
+          activeMs: Math.max(0, now - metric.activeStartedAt)
+        };
+      }
+      metric.pending.forEach((entry, index) => {
+        bySide[entry.side] = {
+          phase: "queued",
+          familyId,
+          queuePosition: index + 1,
+          waitMs: Math.max(0, now - entry.enqueuedAt),
+          activeMs: 0
+        };
+      });
+    }
+    return {
+      capturedAt: now,
+      byFamily,
+      bySide
+    };
+  }
+
+  function enqueueFamily(familyId, side, work) {
+    const key = familyId || "unknown";
+    const metric = metricForFamily(key);
+    const entry = {
+      id: queueSequence++,
+      side,
+      enqueuedAt: Date.now()
+    };
+    metric.pending.push(entry);
+    metric.totalEnqueued += 1;
+    metric.maxDepth = Math.max(metric.maxDepth, metric.pending.length + (metric.activeSide ? 1 : 0));
+
     const previous = familyQueues.get(key) || Promise.resolve();
-    const next = previous.catch(() => undefined).then(work);
+    const next = previous.catch(() => undefined).then(async () => {
+      const pendingIndex = metric.pending.findIndex(item => item.id === entry.id);
+      if (pendingIndex >= 0) metric.pending.splice(pendingIndex, 1);
+      const startedAt = Date.now();
+      const waitMs = Math.max(0, startedAt - entry.enqueuedAt);
+      metric.activeSide = side;
+      metric.activeStartedAt = startedAt;
+      metric.lastWaitMs = waitMs;
+      metric.totalWaitMs += waitMs;
+      try {
+        const result = await work();
+        metric.totalCompleted += 1;
+        return result;
+      } catch (error) {
+        metric.totalRejected += 1;
+        throw error;
+      } finally {
+        metric.activeSide = null;
+        metric.activeStartedAt = 0;
+      }
+    });
     familyQueues.set(key, next);
     next.finally(() => {
       if (familyQueues.get(key) === next) familyQueues.delete(key);
     }).catch(() => {});
     return next;
+  }
+
+  function requireQueueStatusCaller(sender) {
+    if (typeof requireExtensionPage === "function") {
+      requireExtensionPage(sender, "Viewpoint queue status");
+      return;
+    }
+    const extensionRoot = typeof chrome?.runtime?.getURL === "function" ? chrome.runtime.getURL("") : "";
+    const senderUrl = String(sender?.url || "");
+    if (!extensionRoot || !senderUrl.startsWith(extensionRoot)) {
+      throw new Error("Viewpoint queue status is only available from an extension page.");
+    }
   }
 
   if (typeof recordTranscript === "function") {
@@ -161,14 +273,28 @@
       };
 
       if (caps.serializeSameFamilySends === true && queue?.serialize) {
-        return enqueueFamily(familyId, run);
+        return enqueueFamily(familyId, side, run);
       }
       return run();
     };
   }
 
+  if (chrome?.runtime?.onMessage?.addListener) {
+    chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
+      if (message?.type !== "AI_BRIDGE_VIEWPOINT_QUEUE_STATUS") return undefined;
+      Promise.resolve().then(() => {
+        requireQueueStatusCaller(sender);
+        sendResponse({ ok: true, queue: queueSnapshot() });
+      }).catch(error => {
+        sendResponse({ ok: false, error: String(error?.message || error) });
+      });
+      return true;
+    });
+  }
+
   globalThis.viewpointIdentityForSide = identityForSide;
   globalThis.requireViewpointDispatchIdentity = requireDispatchIdentity;
+  globalThis.getViewpointQueueSnapshot = queueSnapshot;
   globalThis[FLAG] = Object.freeze({
     version: 1,
     stampsTranscript: true,
@@ -178,6 +304,9 @@
     serializesSameFamilySends: true,
     validatesBindingsBeforeSend: true,
     revalidatesIdentityAtDispatch: true,
+    queueTelemetryReadOnly: true,
+    queueTelemetryEphemeral: true,
+    queueTelemetryContainsSensitiveIdentity: false,
     enablesDuplicateProviders: true
   });
 })();
