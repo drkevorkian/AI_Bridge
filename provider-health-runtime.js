@@ -268,7 +268,9 @@
 
   function recommendStartSide(snapshot, preferred) {
     const health = snapshot || lastSnapshot;
-    if (!health) return { side: liveSides()[0] || "A", reason: "Health has not been probed yet." };
+    if (!health) {
+      return { side: null, reason: "Health has not been probed yet; no READY agent can be recommended." };
+    }
     const preferredSide = String(preferred || "").toUpperCase();
     if (health.readySides.includes(preferredSide)) {
       return { side: preferredSide, reason: `${preferredSide} is READY.` };
@@ -276,8 +278,7 @@
     if (health.readySides.length) {
       return { side: health.readySides[0], reason: `${preferredSide || "requested side"} is not READY; using ${health.readySides[0]}.` };
     }
-    const fallback = health.sides[0] || "A";
-    return { side: fallback, reason: "No READY agent is available; keep the live roster order." };
+    return { side: null, reason: "No READY agent is available; no start side is recommended." };
   }
 
   function requireHealthCaller(sender) {
