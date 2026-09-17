@@ -10,7 +10,7 @@ if (
   globalThis.__AI_BRIDGE_AGENT_CAPABILITIES__?.uniqueTabBindingNeverRelaxed !== true ||
   globalThis.__AI_BRIDGE_AGENT_CAPABILITIES__?.distinctThreadRequiredWhenSameFamily !== true ||
   globalThis.__AI_BRIDGE_AGENT_CAPABILITIES__?.serializeSameFamilySends !== true ||
-  globalThis.__AI_BRIDGE_AGENT_CAPABILITIES__?.duplicateProviderAgentsEnabled !== false
+  globalThis.__AI_BRIDGE_AGENT_CAPABILITIES__?.duplicateProviderAgentsEnabled !== true
 ) {
   throw new Error("AI Bridge agent capability contract failed to initialize.");
 }
@@ -34,7 +34,8 @@ importScripts("background.js");
 importScripts("coordinator-dynamic-agents.js");
 if (
   globalThis.__AI_BRIDGE_DYNAMIC_AGENTS_V1__?.version !== 1 ||
-  globalThis.__AI_BRIDGE_DYNAMIC_AGENTS_V1__?.uniqueTabBinding !== true
+  globalThis.__AI_BRIDGE_DYNAMIC_AGENTS_V1__?.uniqueTabBinding !== true ||
+  globalThis.__AI_BRIDGE_DYNAMIC_AGENTS_V1__?.duplicateProviderAgentsEnabled !== true
 ) {
   throw new Error("AI Bridge dynamic-agent coordinator failed to initialize.");
 }
@@ -68,7 +69,7 @@ if (
   globalThis.__AI_BRIDGE_VIEWPOINT_RUNTIME_V1__?.capturesIdentityBeforeDispatch !== true ||
   globalThis.__AI_BRIDGE_VIEWPOINT_RUNTIME_V1__?.failsClosedWithoutDispatchIdentityWhenEnabled !== true ||
   globalThis.__AI_BRIDGE_VIEWPOINT_RUNTIME_V1__?.serializesSameFamilySends !== true ||
-  globalThis.__AI_BRIDGE_VIEWPOINT_RUNTIME_V1__?.enablesDuplicateProviders !== false
+  globalThis.__AI_BRIDGE_VIEWPOINT_RUNTIME_V1__?.enablesDuplicateProviders !== true
 ) {
   throw new Error("AI Bridge viewpoint runtime failed to initialize.");
 }
