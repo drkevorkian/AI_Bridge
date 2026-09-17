@@ -14,6 +14,9 @@ assert.match(runtimeSrc, /queueTelemetryEphemeral:\s*true/);
 assert.match(runtimeSrc, /queueTelemetryContainsSensitiveIdentity:\s*false/);
 assert.match(queueUiSrc, /aria-live/);
 assert.match(queueUiSrc, /AI_BRIDGE_VIEWPOINT_QUEUE_STATUS/);
+assert.match(queueUiSrc, /reusesHealthCadence:\s*true/);
+assert.match(queueUiSrc, /independentTimer:\s*false/);
+assert.doesNotMatch(queueUiSrc, /setInterval\s*\(/, "queue UI must reuse the existing health cadence instead of starting another timer");
 assert.doesNotMatch(queueUiSrc, /provenanceId|boundTabId|threadKey/);
 
 function delay(ms) {
