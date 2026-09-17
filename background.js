@@ -4354,7 +4354,8 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
           errors: Array.isArray(diagnostics.errors) ? diagnostics.errors.slice(0, 8) : []
         });
       }
-      const task = () => handleCompletedResponse(side, text, { relay, artifacts: msg.artifacts, completedAt, generationId: incomingGenerationId });
+      const responsePageUrl = String(msg.pageUrl || "");
+      const task = () => handleCompletedResponse(side, text, { relay, artifacts: msg.artifacts, completedAt, generationId: incomingGenerationId, pageUrl: responsePageUrl });
       responseCommitQueue = responseCommitQueue.catch(() => {}).then(task);
       const result = await responseCommitQueue;
       sendResponse(result);
