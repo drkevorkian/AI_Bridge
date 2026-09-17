@@ -10,6 +10,8 @@ const mutexSource = fs.readFileSync(path.join(root, "coordinator-mutex-prelude.j
 const watchdogSource = fs.readFileSync(path.join(root, "watchdog-runtime-hardening.js"), "utf8");
 
 assert.match(mutexSource, /globalThis\.enqueueCoordinatorMutation\s*=\s*enqueueCoordinatorMutation/);
+assert.match(mutexSource, /AI_BRIDGE_SET_TEAM_RULES/);
+assert.match(mutexSource, /hardenedTabRemovedAddListener/);
 assert.match(watchdogSource, /serializedWithCoordinator:\s*true/);
 assert.doesNotMatch(watchdogSource, /state\.activeSides\s*=\s*expected/);
 assert.doesNotMatch(watchdogSource, /configuredActiveSides/);
@@ -29,6 +31,11 @@ const chrome = {
         listeners.push(listener);
         return undefined;
       }
+    }
+  },
+  tabs: {
+    onRemoved: {
+      addListener() { return undefined; }
     }
   }
 };
@@ -85,7 +92,7 @@ context.globalThis = context;
 
 vm.runInContext(mutexSource, context, { filename: "coordinator-mutex-prelude.js" });
 assert.equal(typeof context.enqueueCoordinatorMutation, "function");
-assert.equal(context.__AI_BRIDGE_COORDINATOR_MUTEX__.version, 2);
+assert.equal(context.__AI_BRIDGE_COORDINATOR_MUTEX__.version, 4);
 
 // Register a representative response listener after the prelude so it is
 // serialized through the exact same queue as watchdog recovery.
@@ -139,4 +146,4 @@ assert.equal(staleResult.checked, true);
 assert.equal(Array.isArray(staleResult.results), true);
 assert.equal(staleResult.results.length, 0);
 
-console.log("v1.16.4 watchdog mutex regression: ok");
+console.log("v1.17 watchdog mutex regression: ok");

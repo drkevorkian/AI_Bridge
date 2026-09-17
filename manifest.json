@@ -1,8 +1,9 @@
 {
   "manifest_version": 3,
+  "minimum_chrome_version": "106",
   "name": "AI Bridge",
-  "version": "1.16.4",
-  "description": "Coordinate three AI agents with relay, direct-mesh routing, team-cycle timing, stuck recovery, reliable completion detection, a Settings tab, GitHub update checks, optional Chrome Sync and Google Drive appDataFolder settings, persistent artifact vault storage, ZIP/file relay, human control, OAuth CSRF state, system-awake protection during active runs, structural untrusted-peer-data wrapping, and a modern multi-theme workspace.",
+  "version": "1.17.0",
+  "description": "Coordinate three AI agents with secure relay, direct-mesh routing, team-cycle timing, stuck recovery, provider-send acknowledgement, reliable completion detection, a Settings tab, GitHub update checks, optional Chrome Sync and Google Drive appDataFolder settings, persistent artifact vault storage, ZIP/file relay, human control, OAuth hardening, system-awake protection during active runs, structural untrusted-peer-data wrapping, and multiple workspace layouts.",
   "permissions": [
     "tabs",
     "storage",
@@ -26,13 +27,14 @@
     "https://assets.grokusercontent.com/*",
     "https://*.googleusercontent.com/*",
     "https://*.anthropic.com/*",
-    "https://x.ai/*",
-    "https://api.x.ai/*",
     "https://www.googleapis.com/*",
     "https://api.github.com/*",
     "https://raw.githubusercontent.com/*",
     "https://codeload.github.com/*"
   ],
+  "content_security_policy": {
+    "extension_pages": "script-src 'self'; object-src 'none'; base-uri 'none'; frame-ancestors 'none';"
+  },
   "background": {
     "service_worker": "background-wrapper.js"
   },
@@ -55,6 +57,7 @@
       ],
       "js": [
         "content-runtime-prelude.js",
+        "content-artifact-security-prelude.js",
         "content-completion-guard.js",
         "content-response-delivery-hardening.js",
         "content.js"

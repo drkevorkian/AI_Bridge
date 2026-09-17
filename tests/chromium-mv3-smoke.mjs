@@ -33,6 +33,13 @@ const pageHtml = `<!doctype html><html><body>
 window.__mockSendCount=0;
 document.querySelector('[data-testid="send-button"]').addEventListener('click',()=>{
   window.__mockSendCount+=1;
+  const prompt=document.querySelector('#prompt-textarea');
+  const user=document.createElement('div');
+  user.setAttribute('data-message-author-role','user');
+  user.textContent=prompt.value;
+  document.querySelector('#conversation').appendChild(user);
+  prompt.value='';
+  prompt.dispatchEvent(new Event('input',{bubbles:true}));
   const answer=document.createElement('div');
   answer.setAttribute('data-message-author-role','assistant');
   const markdown=document.createElement('div');
@@ -153,22 +160,24 @@ try {
   await workerClient.call("Runtime.enable");
 
   const manifestVersion = await evaluate(workerClient, "chrome.runtime.getManifest().version");
-  assert.equal(manifestVersion, "1.16.4");
+  assert.equal(manifestVersion, "1.17.0");
 
   const tabLookup = `(await chrome.tabs.query({})).find(item=>String(item.url||'').includes('chatgpt.com:${mockPort}/mock'))`;
   const ping = await eventually(async () => evaluate(workerClient, `(async()=>{const tab=${tabLookup};if(!tab?.id)return null;try{return await chrome.tabs.sendMessage(tab.id,{type:'AI_BRIDGE_PING'});}catch(_){return null;}})()`), { label: "manifest content-script injection" });
   assert.equal(ping?.ok, true);
-  assert.equal(ping?.runtimeVersion, "1.16.4");
+  assert.equal(ping?.runtimeVersion, "1.17.0");
 
   const sendExpr = `(async()=>{const tab=${tabLookup};return chrome.tabs.sendMessage(tab.id,{type:'AI_BRIDGE_SEND',text:'integration smoke prompt',artifacts:[],generationId:'integration-generation-1'});})()`;
   const first = await evaluate(workerClient, sendExpr);
   assert.equal(first?.ok, true);
+  assert.equal(first?.sendAcknowledged, true);
   const duplicate = await evaluate(workerClient, sendExpr);
   assert.equal(duplicate?.ok, true);
   assert.equal(duplicate?.duplicateSend, true);
 
   await eventually(async () => (await evaluate(pageClient, "window.__mockSendCount")) === 1, { label: "exactly one provider DOM submission" });
-  assert.equal(await evaluate(pageClient, "document.querySelector('#prompt-textarea').value"), "integration smoke prompt");
+  assert.equal(await evaluate(pageClient, "document.querySelector('#prompt-textarea').value"), "");
+  assert.equal(await evaluate(pageClient, "document.querySelectorAll('[data-message-author-role=user]').length"), 1);
   assert.equal(await evaluate(pageClient, "document.querySelectorAll('[data-message-author-role=assistant]').length"), 1);
   console.log(`Chromium MV3 smoke passed (extension ${manifestVersion}, content runtime ${ping.runtimeVersion}).`);
 } catch (error) {

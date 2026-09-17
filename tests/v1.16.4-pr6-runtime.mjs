@@ -12,12 +12,14 @@ const wrapper = fs.readFileSync(path.join(root, "background-wrapper.js"), "utf8"
 assert.match(wrapper, /importScripts\("resend-runtime-hardening\.js"\)/);
 assert.match(wrapper, /stopBeforeReplacement !== true/);
 assert.doesNotMatch(prelude, /all_frames|x\.com|queryShadowSelector/);
+assert.match(prelude, /providerSendAcknowledgement:\s*true/);
 
 // Content-runtime idempotency and exact prompt-echo suppression.
 {
   const listeners = [];
   const outbound = [];
   const intervals = [];
+  const location = { hostname: "chatgpt.com", href: "https://chatgpt.com/" };
   const windowObject = {
     setInterval(callback, delay) {
       intervals.push({ callback, delay });
@@ -29,8 +31,15 @@ assert.doesNotMatch(prelude, /all_frames|x\.com|queryShadowSelector/);
     clearInterval() {},
     Promise,
     Map,
+    Set,
     String,
     Number,
+    URL,
+    Date,
+    location,
+    document: { querySelectorAll() { return []; } },
+    getComputedStyle() { return { visibility: "visible", display: "block" }; },
+    setTimeout,
     chrome: {
       runtime: {
         sendMessage: async message => {
@@ -43,16 +52,23 @@ assert.doesNotMatch(prelude, /all_frames|x\.com|queryShadowSelector/);
       }
     }
   };
+  // content-runtime-prelude stores flags and the monitor handle on window, but
+  // browser globals such as location/document live on the VM global object.
+  Object.assign(windowObject, {
+    setTimeout,
+    __AI_BRIDGE_MONITOR_TIMER__: null
+  });
   vm.createContext(sandbox);
   vm.runInContext(prelude, sandbox, { filename: "content-runtime-prelude.js" });
 
   // Register a minimal stand-in for content.js after the prelude has wrapped
-  // addListener. A successful first send is remembered; the same generation is
-  // then answered locally without invoking the provider send path again.
+  // addListener. Simulate a real provider acknowledgement by navigating to a
+  // conversation URL before returning optimistic content.js success.
   let providerSubmissions = 0;
   sandbox.chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
     if (message.type === "AI_BRIDGE_SEND") {
       providerSubmissions += 1;
+      location.href = `https://chatgpt.com/c/${providerSubmissions}`;
       sendResponse({ ok: true, uploadedCount: 0, generationId: message.generationId });
       return true;
     }
@@ -66,21 +82,19 @@ assert.doesNotMatch(prelude, /all_frames|x\.com|queryShadowSelector/);
 
   function dispatch(message) {
     return new Promise(resolve => {
-      const keepAlive = listeners[0](message, {}, resolve);
-      if (keepAlive !== true && message.type !== "AI_BRIDGE_SEND") {
-        // synchronous listeners already resolved through sendResponse
-      }
+      listeners[0](message, {}, resolve);
     });
   }
 
   let result = await dispatch({ type: "AI_BRIDGE_SEND", generationId: "gen-1", text: "hello", artifacts: [] });
   assert.equal(result.ok, true);
+  assert.equal(result.sendAcknowledged, true);
   assert.equal(providerSubmissions, 1);
 
   result = await dispatch({ type: "AI_BRIDGE_SEND", generationId: "gen-1", text: "hello", artifacts: [] });
   assert.equal(result.ok, true);
   assert.equal(result.duplicateSend, true);
-  assert.equal(providerSubmissions, 1, "same generation must not submit to provider DOM twice");
+  assert.equal(providerSubmissions, 1, "same acknowledged generation must not submit to provider DOM twice");
 
   result = await sandbox.chrome.runtime.sendMessage({
     type: "AI_BRIDGE_RESPONSE",
@@ -99,8 +113,8 @@ assert.doesNotMatch(prelude, /all_frames|x\.com|queryShadowSelector/);
   assert.equal(outbound.length, 1, "real response must pass through");
 
   const ping = await dispatch({ type: "AI_BRIDGE_PING" });
-  assert.equal(ping.version, "1.16.4");
-  assert.equal(ping.runtimeVersion, "1.16.4");
+  assert.equal(ping.version, "1.17.0");
+  assert.equal(ping.runtimeVersion, "1.17.0");
 }
 
 // Service-worker overlap guard: active generation must be stopped and observed
@@ -180,4 +194,4 @@ assert.doesNotMatch(prelude, /all_frames|x\.com|queryShadowSelector/);
   assert.equal(baseSendCalls, 0);
 }
 
-console.log("v1.16.4 PR6 idempotency, prompt-echo, and stop-before-send regression ok");
+console.log("v1.17 idempotency, prompt-echo, acknowledgement, and stop-before-send regression ok");

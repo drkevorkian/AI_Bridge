@@ -1,15 +1,12 @@
 (() => {
   "use strict";
 
-  // PR 1 security boundary for artifact relay fetches.
+  // Security boundary for artifact relay fetches.
   //
   // The provider page controls the DOM link that eventually reaches this
   // function, so treat every candidate URL as attacker-controlled. The
   // service worker must never attach browser credentials to that request.
-  // Signed/public artifact URLs still work because their authorization is in
-  // the URL itself; authenticated same-origin downloads are attempted in the
-  // provider page first by content.js before this fallback is used.
-  const FLAG = "__AI_BRIDGE_ARTIFACT_FETCH_HARDENING_V1__";
+  const FLAG = "__AI_BRIDGE_ARTIFACT_FETCH_HARDENING_V2__";
   if (globalThis[FLAG]) return;
   globalThis[FLAG] = true;
 
@@ -24,9 +21,7 @@
     "assets.grokusercontent.com",
     "claude.ai",
     "gemini.google.com",
-    "copilot.microsoft.com",
-    "x.ai",
-    "api.x.ai"
+    "copilot.microsoft.com"
   ]);
 
   // These are provider-controlled asset families used for generated/downloaded
@@ -55,7 +50,11 @@
   }
 
   function sanitizeName(raw, fallback = "artifact.bin") {
-    const value = String(raw || fallback).replace(/[\\/\0]/g, "_").trim();
+    const value = String(raw || fallback)
+      .replace(/[\\/\0]/g, "_")
+      .replace(/^[A-Za-z]:/, "_")
+      .replace(/[:*?"<>|\u0001-\u001f]/g, "_")
+      .trim();
     return (value || fallback).slice(0, 240);
   }
 
@@ -67,6 +66,45 @@
       binary += String.fromCharCode(...view.subarray(i, i + CHUNK));
     }
     return btoa(binary);
+  }
+
+  async function readResponseBytesBounded(response, maxBytes = MAX_FILE_BYTES) {
+    const body = response?.body;
+    if (!body?.getReader) {
+      const bytes = new Uint8Array(await response.arrayBuffer());
+      if (!bytes.length || bytes.byteLength > maxBytes) {
+        throw new Error("Artifact is empty or too large.");
+      }
+      return bytes;
+    }
+
+    const reader = body.getReader();
+    const chunks = [];
+    let total = 0;
+    try {
+      while (true) {
+        const { value, done } = await reader.read();
+        if (done) break;
+        const chunk = value instanceof Uint8Array ? value : new Uint8Array(value || 0);
+        total += chunk.byteLength;
+        if (total > maxBytes) {
+          try { await reader.cancel("Artifact exceeds relay limit"); } catch (_) {}
+          throw new Error("Artifact exceeds the per-file relay limit.");
+        }
+        if (chunk.byteLength) chunks.push(chunk);
+      }
+    } finally {
+      try { reader.releaseLock(); } catch (_) {}
+    }
+
+    if (!total) throw new Error("Artifact is empty.");
+    const output = new Uint8Array(total);
+    let offset = 0;
+    for (const chunk of chunks) {
+      output.set(chunk, offset);
+      offset += chunk.byteLength;
+    }
+    return output;
   }
 
   async function hardenedFetchArtifactInBackground(rawUrl, name = "artifact.bin", mime = "") {
@@ -105,14 +143,15 @@
         throw new Error("Artifact exceeds the per-file relay limit.");
       }
 
-      const bytes = new Uint8Array(await response.arrayBuffer());
-      if (!bytes.length || bytes.byteLength > MAX_FILE_BYTES) {
-        throw new Error("Artifact is empty or too large.");
-      }
+      // Enforce the cap while reading. Content-Length is optional and cannot be
+      // trusted as the sole memory bound for attacker-controlled responses.
+      const bytes = await readResponseBytesBounded(response, MAX_FILE_BYTES);
 
       return {
         name: sanitizeName(name, "artifact.bin"),
-        mime: String(mime || response.headers.get("content-type") || "application/octet-stream").slice(0, 160),
+        mime: String(mime || response.headers.get("content-type") || "application/octet-stream")
+          .replace(/[\r\n]/g, "")
+          .slice(0, 160),
         size: bytes.byteLength,
         dataBase64: encodeBase64(bytes)
       };
@@ -129,8 +168,9 @@
   globalThis.fetchArtifactInBackground = hardenedFetchArtifactInBackground;
 
   globalThis.__AI_BRIDGE_ARTIFACT_FETCH_SECURITY__ = Object.freeze({
-    version: 1,
+    version: 2,
     credentials: "omit",
-    finalUrlRevalidation: true
+    finalUrlRevalidation: true,
+    streamedSizeLimit: true
   });
 })();

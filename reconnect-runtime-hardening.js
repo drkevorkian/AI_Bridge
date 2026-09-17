@@ -7,7 +7,7 @@
 (() => {
   "use strict";
 
-  const EXPECTED_CONTENT_VERSION = "1.16.4";
+  const EXPECTED_CONTENT_VERSION = "1.17.0";
   const PING_ATTEMPTS = 12;
   const PING_DELAY_MS = 250;
   const RELOAD_TIMEOUT_MS = 20000;
@@ -114,7 +114,7 @@
 
   globalThis.ensureTabListener = hardenedEnsureTabListener;
   globalThis.__AI_BRIDGE_RECONNECT_HARDENING__ = Object.freeze({
-    version: 2,
+    version: 3,
     contentRuntimeVersion: EXPECTED_CONTENT_VERSION,
     recovery: "clean-reload"
   });

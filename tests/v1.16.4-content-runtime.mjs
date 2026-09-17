@@ -19,6 +19,11 @@ const context = {
   Map,
   String,
   Number,
+  URL,
+  location: { hostname: "chatgpt.com", href: "https://chatgpt.com/" },
+  document: { querySelectorAll() { return []; } },
+  getComputedStyle() { return { visibility: "visible", display: "block" }; },
+  setTimeout,
   chrome: {
     runtime: {
       async sendMessage(message) {
@@ -39,9 +44,10 @@ context.setInterval = function(callback, delay) {
 vm.createContext(context);
 vm.runInContext(source, context, { filename: "content-runtime-prelude.js" });
 
-assert.equal(context.__AI_BRIDGE_CONTENT_RUNTIME_PRELUDE__.version, "1.16.4");
+assert.equal(context.__AI_BRIDGE_CONTENT_RUNTIME_PRELUDE__.version, "1.17.0");
 assert.equal(context.__AI_BRIDGE_CONTENT_RUNTIME_PRELUDE__.sendIdempotency, true);
 assert.equal(context.__AI_BRIDGE_CONTENT_RUNTIME_PRELUDE__.promptEchoFilter, true);
+assert.equal(context.__AI_BRIDGE_CONTENT_RUNTIME_PRELUDE__.providerSendAcknowledgement, true);
 
 context.chrome.runtime.onMessage.addListener((_message, _sender, sendResponse) => {
   sendResponse({ ok: true, ready: true, version: "1.14.0" });
@@ -49,8 +55,8 @@ context.chrome.runtime.onMessage.addListener((_message, _sender, sendResponse) =
 });
 let pong = null;
 registered({ type: "AI_BRIDGE_PING" }, {}, value => { pong = value; });
-assert.equal(pong.version, "1.16.4");
-assert.equal(pong.runtimeVersion, "1.16.4");
+assert.equal(pong.version, "1.17.0");
+assert.equal(pong.runtimeVersion, "1.17.0");
 
 function monitor() {}
 const timer = context.setInterval(monitor, 650);
@@ -64,4 +70,4 @@ context.__AI_BRIDGE_CONTENT_RUNTIME_PRELUDE__ = { version: "old" };
 vm.runInContext(source, context, { filename: "content-runtime-prelude.js" });
 assert.ok(cleared.includes(1), "reinjection must stop the previous monitor timer");
 
-console.log("v1.16.4 content runtime prelude regression passed.");
+console.log("v1.17.0 content runtime prelude regression passed.");
