@@ -1,0 +1,54 @@
+name: Apply reviewed P0 source fold
+
+on:
+  push:
+    branches:
+      - "ai-b/v1.17.1-source-fold"
+
+permissions:
+  contents: read
+
+jobs:
+  apply-reviewed-patch:
+    if: github.repository == 'drkevorkian/AI_Bridge' && github.ref == 'refs/heads/ai-b/v1.17.1-source-fold'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout exact branch
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ai-b/v1.17.1-source-fold
+          fetch-depth: 0
+      - name: Configure Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: "22"
+      - name: Apply only the reviewed background.js patch
+        shell: bash
+        run: |
+          set -euo pipefail
+          if ! grep -q 'credentials: "include"' background.js && ! grep -q 'response_type: "token"' background.js; then
+            echo "Source fold is already present; nothing to do."
+            exit 0
+          fi
+          git apply --check patches/p0-background-source-fold.diff
+          git apply patches/p0-background-source-fold.diff
+          node --check background.js
+          if grep -q 'credentials: "include"' background.js; then
+            echo "Refusing commit: credentials include remains in background.js" >&2
+            exit 1
+          fi
+          if grep -q 'response_type: "token"' background.js; then
+            echo "Refusing commit: implicit OAuth token response remains in background.js" >&2
+            exit 1
+          fi
+          git diff --check
+          git status --short
+          test "$(git diff --name-only | tr -d '\r')" = "background.js"
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add background.js
+          git commit -m "security: fold P0 hardening into background source"
+          git push origin HEAD:ai-b/v1.17.1-source-fold
