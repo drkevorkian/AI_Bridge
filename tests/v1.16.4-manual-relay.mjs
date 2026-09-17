@@ -10,6 +10,7 @@ const content = fs.readFileSync(path.join(root, "content.js"), "utf8");
 const dashboardJs = fs.readFileSync(path.join(root, "dashboard.js"), "utf8");
 const html = fs.readFileSync(path.join(root, "dashboard.html"), "utf8");
 const mutex = fs.readFileSync(path.join(root, "coordinator-mutex-prelude.js"), "utf8");
+const hardening = fs.readFileSync(path.join(root, "manual-relay-runtime-hardening.js"), "utf8");
 
 function extractFunction(src, name) {
   const start = src.indexOf(`function ${name}(`);
@@ -37,6 +38,12 @@ assert.match(background, /function manualRelayMessage\(/);
 assert.match(background, /MANUAL RELAY FROM AI/);
 assert.match(background, /wrapUntrustedPeerData\(fromSide,/);
 assert.match(mutex, /AI_BRIDGE_FORCE_RELAY/);
+assert.match(hardening, /rejectsStreamingCapture:\s*true/);
+assert.match(hardening, /generationAwareIdentity:\s*true/);
+assert.match(hardening, /sequentialFanoutSafe:\s*true/);
+assert.match(hardening, /batchPendingTargetGate:\s*true/);
+assert.match(hardening, /one coordinator cursor/i);
+assert.match(hardening, /result\.generationId/);
 assert.match(html, /id="forceRelayBtn"/);
 assert.match(html, /id="forceFromA"/);
 assert.match(html, /id="forceToC"/);
@@ -59,4 +66,4 @@ assert.equal(JSON.stringify(sandbox.sanitizeForceRelaySides("b")), JSON.stringif
 assert.equal(JSON.stringify(sandbox.sanitizeForceRelaySides(["", null, "Q"])), JSON.stringify([]));
 assert.equal(JSON.stringify(sandbox.sanitizeForceRelaySides(["A", "B", "C"])), JSON.stringify(["A", "B", "C"]));
 
-console.log("v1.16.4 manual relay regression passed.");
+console.log("v1.17 manual relay safety regression passed.");
