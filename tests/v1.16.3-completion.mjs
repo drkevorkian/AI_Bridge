@@ -26,13 +26,13 @@ function extractFunction(src, name) {
   throw new Error(`${name} unclosed`);
 }
 
-assert.match(
-  wrapper,
-  /importScripts\("background\.js",\s*"completion-runtime-hardening\.js",\s*"oauth-runtime-hardening\.js",\s*"power\.js"\)/
-);
+const backgroundIndex = wrapper.indexOf('importScripts("background.js")');
+const completionHelperIndex = wrapper.indexOf('importScripts("completion-runtime-hardening.js", "oauth-runtime-hardening.js", "power.js")');
+assert.ok(backgroundIndex >= 0, "background.js must load through the service-worker wrapper");
+assert.ok(completionHelperIndex > backgroundIndex, "completion hardening must load after the coordinator source");
 assert.deepEqual(
   manifest.content_scripts?.[0]?.js,
-  ["content-runtime-prelude.js", "content-completion-guard.js", "content-response-delivery-hardening.js", "content.js"],
+  ["content-runtime-prelude.js", "content-artifact-security-prelude.js", "content-completion-guard.js", "content-response-delivery-hardening.js", "content.js"],
   "runtime prelude, DOM completion guard, and delivery hardening must load before the provider runtime"
 );
 assert.match(hardening, /GUARD_FILE = "content-completion-guard\.js"/);
