@@ -23,7 +23,8 @@ assert.doesNotMatch(dynamic, /chrome\.runtime\.sendMessage\s*=\s*/,
 assert.match(dynamic, /addEventListener\("click", event => \{/);
 assert.match(dynamic, /stopImmediatePropagation\(\)/,
   "start guard should block unhealthy sessions before the legacy click handler runs");
-assert.match(dynamic, /duplicateProviderAgentsEnabled:\s*false/);
+assert.match(dynamic, /duplicateProviderAgentsEnabled:\s*true/,
+  "dashboard diagnostics must reflect active same-provider viewpoint mode");
 assert.match(dynamic, /forceFrom\$\{side\}/);
 assert.match(dynamic, /forceTo\$\{side\}/);
 assert.match(dynamic, /newChat\$\{side\}/);
