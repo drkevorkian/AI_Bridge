@@ -89,7 +89,7 @@ assert.equal(api.sideSpecificControlNames, true);
 assert.equal(api.labelsStaticAndDynamicCards, true);
 assert.equal(api.textOnlyRendering, true);
 assert.equal(api.refresh(), 5);
-assert.deepEqual(observerConfig?.attributeFilter, ["data-agent-count"]);
+assert.deepEqual(Array.from(observerConfig?.attributeFilter || []), ["data-agent-count"]);
 
 for (const side of sides) {
   const title = cards.get(side).titleNode;
