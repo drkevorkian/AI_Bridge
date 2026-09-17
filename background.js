@@ -721,7 +721,11 @@ function sourceSectionForSide(side, { force = false } = {}) {
 }
 
 function sanitizeArtifactName(raw, fallback = "artifact.bin") {
-  const value = String(raw || fallback).replace(/[\\/\0]/g, "_").trim();
+  const value = String(raw || fallback)
+    .replace(/[\\/\0]/g, "_")
+    .replace(/^[A-Za-z]:/, "_")
+    .replace(/[:*?"<>|\u0001-\u001f]/g, "_")
+    .trim();
   return (value || fallback).slice(0, 240);
 }
 
@@ -745,38 +749,103 @@ function bytesToBase64(bytes) {
 function artifactFetchHostAllowed(rawUrl) {
   try {
     const url = new URL(String(rawUrl || ""));
-    // Fail closed: HTTPS only. http: is never an allowed artifact origin,
-    // even if a future host_permission were added by mistake.
     if (url.protocol !== "https:") return false;
     if (url.username || url.password) return false;
+    if (url.port && url.port !== "443") return false;
+
     const host = url.hostname.toLowerCase();
     if (!host || host.includes("..")) return false;
-    return host === "chatgpt.com" || host === "chat.openai.com" || host === "grok.com" ||
-      host === "assets.grok.com" || host === "claude.ai" || host === "gemini.google.com" ||
-      host === "copilot.microsoft.com" || host.endsWith(".oaiusercontent.com") ||
-      host === "x.ai" || host === "api.x.ai" || host.endsWith(".x.ai") || host.endsWith(".googleusercontent.com") ||
-      host.endsWith(".anthropic.com") || host === "www.microsoft.com" || host.endsWith(".microsoft.com");
+    if (EXACT_HOSTS.has(host)) return true;
+    return HOST_SUFFIXES.some(suffix => host.length > suffix.length && host.endsWith(suffix));
   } catch (_) {
     return false;
   }
 }
 
+async function readResponseBytesBounded(response, maxBytes = MAX_ARTIFACT_FILE_BYTES) {
+  const body = response?.body;
+  if (!body?.getReader) {
+    const bytes = new Uint8Array(await response.arrayBuffer());
+    if (!bytes.length || bytes.byteLength > maxBytes) {
+      throw new Error("Artifact is empty or too large.");
+    }
+    return bytes;
+  }
+
+  const reader = body.getReader();
+  const chunks = [];
+  let total = 0;
+  try {
+    while (true) {
+      const { value, done } = await reader.read();
+      if (done) break;
+      const chunk = value instanceof Uint8Array ? value : new Uint8Array(value || 0);
+      total += chunk.byteLength;
+      if (total > maxBytes) {
+        try { await reader.cancel("Artifact exceeds relay limit"); } catch (_) {}
+        throw new Error("Artifact exceeds the per-file relay limit.");
+      }
+      if (chunk.byteLength) chunks.push(chunk);
+    }
+  } finally {
+    try { reader.releaseLock(); } catch (_) {}
+  }
+
+  if (!total) throw new Error("Artifact is empty.");
+  const output = new Uint8Array(total);
+  let offset = 0;
+  for (const chunk of chunks) {
+    output.set(chunk, offset);
+    offset += chunk.byteLength;
+  }
+  return output;
+}
+
 async function fetchArtifactInBackground(rawUrl, name = "artifact.bin", mime = "") {
-  if (!artifactFetchHostAllowed(rawUrl)) throw new Error("Artifact URL host is not permitted by AI Bridge.");
+  const requestedUrl = String(rawUrl || "");
+  if (!artifactFetchHostAllowed(requestedUrl)) {
+    throw new Error("Artifact URL host is not permitted by AI Bridge.");
+  }
+
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), 20000);
   try {
-    const response = await fetch(String(rawUrl), { credentials: "include", redirect: "follow", signal: controller.signal });
-    // Re-validate the final URL. redirect:follow must not land on HTTP or a non-allowlisted host.
-    if (!artifactFetchHostAllowed(response.url)) throw new Error("Artifact fetch redirected off the HTTPS allowlist.");
+    // IMPORTANT: do not use credentials:"include" here. A model-controlled
+    // link must not be able to turn AI Bridge into an authenticated request
+    // primitive against a provider or sibling service.
+    //
+    // redirect:"manual" cannot be used for hop inspection: Fetch returns an
+    // opaque redirect for cross-origin manual redirects, hiding Location.
+    // We therefore follow using Chrome's normal host-permission boundary,
+    // send no credentials/referrer, and reject the result unless the final
+    // URL remains on the explicit artifact allowlist.
+    const response = await fetch(requestedUrl, {
+      credentials: "omit",
+      redirect: "follow",
+      referrerPolicy: "no-referrer",
+      cache: "no-store",
+      signal: controller.signal
+    });
+
+    if (!artifactFetchHostAllowed(response.url)) {
+      throw new Error("Artifact fetch redirected off the HTTPS allowlist.");
+    }
     if (!response.ok) throw new Error(`Artifact fetch failed with HTTP ${response.status}.`);
+
     const declared = Number(response.headers.get("content-length") || 0);
-    if (declared > MAX_ARTIFACT_FILE_BYTES) throw new Error("Artifact exceeds the per-file relay limit.");
-    const bytes = new Uint8Array(await response.arrayBuffer());
-    if (!bytes.length || bytes.byteLength > MAX_ARTIFACT_FILE_BYTES) throw new Error("Artifact is empty or too large.");
+    if (Number.isFinite(declared) && declared > MAX_ARTIFACT_FILE_BYTES) {
+      throw new Error("Artifact exceeds the per-file relay limit.");
+    }
+
+    // Enforce the cap while reading. Content-Length is optional and cannot be
+    // trusted as the sole memory bound for attacker-controlled responses.
+    const bytes = await readResponseBytesBounded(response, MAX_ARTIFACT_FILE_BYTES);
+
     return {
       name: sanitizeArtifactName(name, "artifact.bin"),
-      mime: String(mime || response.headers.get("content-type") || "application/octet-stream").slice(0, 160),
+      mime: String(mime || response.headers.get("content-type") || "application/octet-stream")
+        .replace(/[\r\n]/g, "")
+        .slice(0, 160),
       size: bytes.byteLength,
       dataBase64: bytesToBase64(bytes)
     };
@@ -2929,7 +2998,7 @@ const FRESH_ON_START_KEY = "aiBridgeFreshOnStart";
 const LAYOUT_STORAGE_KEY = "aiBridgeLayout";
 const GOOGLE_LINKED_KEY = "bridgeGoogleLinked";
 const ALLOWED_CLOUD_THEMES = new Set(["blizzard", "ghostwhite", "midnight", "slate", "light", "solarized", "ocean", "terminal"]);
-const ALLOWED_CLOUD_LAYOUTS = new Set(["studio", "classic"]);
+const ALLOWED_CLOUD_LAYOUTS = new Set(["studio", "classic", "focus"]);
 const CONTENT_SCRIPT_MESSAGE_TYPES = new Set(["AI_BRIDGE_FETCH_ARTIFACT", "AI_BRIDGE_RESPONSE"]);
 const SYNC_ITEM_MAX_CHARS = 7000;
 const CLOUD_SYNC_MAX_BYTES = 90000;
@@ -3265,51 +3334,8 @@ async function clearPendingOauthState() {
 }
 
 async function launchGoogleWebAuth({ clientId, interactive }) {
-  const redirectUri = extensionRedirectUri();
-  const state = createOauthCsrfState();
-  await writePendingOauthState({
-    state,
-    clientId,
-    createdAt: Date.now()
-  });
-  const params = new URLSearchParams({
-    client_id: clientId,
-    redirect_uri: redirectUri,
-    response_type: "token",
-    scope: DRIVE_APP_DATA_SCOPE,
-    include_granted_scopes: "true",
-    state
-  });
-  if (interactive) params.set("prompt", "consent");
-  else params.set("prompt", "none");
-  const url = `https://accounts.google.com/o/oauth2/v2/auth?${params.toString()}`;
-  if (!googleAuthUrlAllowed(url)) {
-    await clearPendingOauthState();
-    throw new Error("OAuth URL rejected.");
-  }
-  let redirectUrl;
-  try {
-    redirectUrl = await chrome.identity.launchWebAuthFlow({
-      url,
-      interactive: Boolean(interactive)
-    });
-  } catch (err) {
-    await clearPendingOauthState();
-    throw err;
-  }
-  const parsed = parseImplicitOAuthRedirect(redirectUrl, extensionRedirectHost());
-  const pending = await consumePendingOauthState();
-  if (!pending || pending.clientId !== clientId) {
-    throw new Error("OAuth state mismatch. Refusing the Google token.");
-  }
-  if (Date.now() - Number(pending.createdAt || 0) > OAUTH_STATE_TTL_MS) {
-    throw new Error("OAuth state expired. Try Link Google account again.");
-  }
-  if (!oauthStateMatches(pending.state, parsed.state)) {
-    throw new Error("OAuth state mismatch. Refusing the Google token.");
-  }
-  await writeSessionGoogleToken({ token: parsed.token, expiresAt: parsed.expiresAt });
-  return parsed.token;
+  await clearPendingOauthState();
+  throw new Error("Google Drive Web implicit OAuth is disabled. Configure a Chrome Extension OAuth client in manifest.oauth2, or use Chrome Sync.");
 }
 
 function driveUrlAllowed(rawUrl) {
@@ -3866,11 +3892,15 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
     }
 
     if (msg.type === "AI_BRIDGE_FETCH_ARTIFACT") {
-      requireBoundSessionTab(sender, "Artifact fetch");
-      const artifact = await fetchArtifactInBackground(msg.url, msg.name, msg.mime);
-      sendResponse({ ok: true, artifact });
-      return;
-    }
+    requireBoundSessionTab(sender, "Artifact fetch");
+    const requested = String(msg.url || "");
+    if (!/^https:/i.test(requested)) throw new Error("Artifact worker fallback accepts HTTPS URLs only.");
+    if (msg.observed !== true) throw new Error("Artifact worker fallback requires an observed provider-page URL.");
+    if (!artifactFetchHostAllowed(requested)) throw new Error("Artifact URL host is not permitted by AI Bridge.");
+    const artifact = await fetchArtifactInBackground(requested, msg.name, msg.mime);
+    sendResponse({ ok: true, artifact });
+    return;
+  }
 
     if (msg.type === "AI_BRIDGE_DOWNLOAD_ARTIFACT") {
       requireExtensionPage(sender, "Vault download");
