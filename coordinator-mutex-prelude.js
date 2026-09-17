@@ -1,9 +1,23 @@
 (() => {
   "use strict";
 
-  const FLAG = "__AI_BRIDGE_COORDINATOR_MUTEX_PRELUDE_V5__";
+  const FLAG = "__AI_BRIDGE_COORDINATOR_MUTEX_PRELUDE_V6__";
   if (globalThis[FLAG]) return;
   globalThis[FLAG] = true;
+
+  // agent-capabilities.js is loaded before this prelude by background-wrapper.
+  // Keep the A/B/C fallback only so this security prelude remains testable and
+  // backwards-compatible when evaluated in isolation by older regression
+  // harnesses. Production bootstrap separately fails closed if the capability
+  // contract is unavailable or malformed.
+  const capabilitySides = globalThis.__AI_BRIDGE_AGENT_CAPABILITIES__?.supportedAgentSides;
+  const supportedArtifactSides = Object.freeze(
+    Array.isArray(capabilitySides) && capabilitySides.length
+      ? capabilitySides
+          .map(side => String(side || "").toUpperCase())
+          .filter((side, index, list) => /^[A-Z]$/.test(side) && list.indexOf(side) === index)
+      : ["A", "B", "C"]
+  );
 
   const serializedTypes = new Set([
     "AI_BRIDGE_START",
@@ -74,9 +88,9 @@
     const tabId = Number(sender?.tab?.id);
     if (!Number.isInteger(tabId)) return null;
     try {
-      if (Number(state?.tabA) === tabId) return "A";
-      if (Number(state?.tabB) === tabId) return "B";
-      if (Number(state?.tabC) === tabId) return "C";
+      for (const side of supportedArtifactSides) {
+        if (Number(state?.[`tab${side}`]) === tabId) return side;
+      }
     } catch (_) {}
     return null;
   }
@@ -89,8 +103,16 @@
     if (!side) return { ok: false, error: "Artifact fallback sender is not a bound AI tab." };
 
     const generationId = String(message.generationId || "");
-    if (!generationId || generationId.length > 160 || !/^[A-C]-\d{6,}-[a-z0-9_-]{4,80}$/i.test(generationId)) {
-      return { ok: false, error: "Artifact fallback is missing a valid generation ID." };
+    const generationMatch = generationId.match(/^([A-Z])-\d{6,}-[a-z0-9_-]{4,80}$/i);
+    const generationSide = String(generationMatch?.[1] || "").toUpperCase();
+    if (
+      !generationId ||
+      generationId.length > 160 ||
+      !generationMatch ||
+      !supportedArtifactSides.includes(generationSide) ||
+      generationSide !== side
+    ) {
+      return { ok: false, error: "Artifact fallback is missing a valid generation ID for the bound AI side." };
     }
 
     try {
@@ -154,10 +176,12 @@
   globalThis.enqueueCoordinatorMutation = enqueueCoordinatorMutation;
 
   globalThis.__AI_BRIDGE_COORDINATOR_MUTEX__ = Object.freeze({
-    version: 5,
+    version: 6,
     enqueue: enqueueCoordinatorMutation,
     isSerializedType(type) { return serializedTypes.has(String(type || "")); },
     artifactProvenanceGate: true,
+    artifactProvenanceSupportsDynamicSides: supportedArtifactSides.includes("D") && supportedArtifactSides.includes("E"),
+    artifactProvenanceSides: supportedArtifactSides,
     get active() { return active; }
   });
 })();
