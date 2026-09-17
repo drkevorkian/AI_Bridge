@@ -16,6 +16,8 @@ const tabs = new Map([
 ]);
 const pingable = new Set([11, 22, 33]);
 const listeners = { updated: [], removed: [], replaced: [], message: [] };
+let blockNextTab11Ping = false;
+let releaseBlockedTab11Ping = null;
 const state = {
   agentCount: 3,
   tabA: 11,
@@ -39,6 +41,13 @@ const context = vm.createContext({
       },
       async sendMessage(id, msg) {
         if (!pingable.has(Number(id)) || msg?.type !== "AI_BRIDGE_PING") throw new Error("no receiver");
+        if (Number(id) === 11 && blockNextTab11Ping) {
+          blockNextTab11Ping = false;
+          await new Promise(resolve => {
+            releaseBlockedTab11Ping = resolve;
+          });
+          releaseBlockedTab11Ping = null;
+        }
         return { ok: true };
       },
       onUpdated: { addListener(fn) { listeners.updated.push(fn); } },
@@ -63,10 +72,18 @@ context.__AI_BRIDGE_DYNAMIC_AGENTS_V1__ = Object.freeze({
 });
 vm.runInContext(healthSrc, context, { filename: "provider-health-runtime.js" });
 
+async function waitForBlockedTab11Ping() {
+  for (let i = 0; i < 100 && !releaseBlockedTab11Ping; i += 1) {
+    await Promise.resolve();
+  }
+  assert.equal(typeof releaseBlockedTab11Ping, "function", "tab 11 ping should be blocked for race test");
+}
+
 assert.equal(listeners.updated.length, 1);
 assert.equal(listeners.removed.length, 1);
 assert.equal(listeners.replaced.length, 1);
 assert.equal(context.__AI_BRIDGE_PROVIDER_HEALTH_V1__.tabLifecycleInvalidatesProbeCache, true);
+assert.equal(context.__AI_BRIDGE_PROVIDER_HEALTH_V1__.rejectsUnstableInflightProbes, true);
 
 const ready = await context.probeActiveAgents({ force: true });
 assert.equal(ready.bySide.A.status, "READY");
@@ -107,5 +124,38 @@ listeners.replaced[0](111, 11);
 const afterReplace = await context.probeActiveAgents({ force: false });
 assert.notEqual(afterReplace, beforeReplace);
 assert.equal(afterReplace.bySide.A.status, "MISSING_TAB");
+
+// A lifecycle event can arrive while a forced probe is already waiting on the
+// bound provider. The old in-flight probe must not repopulate READY after the
+// invalidation. It should discard the mixed-state result and retry from scratch.
+tabs.set(11, { id: 11, url: "https://chatgpt.com/" });
+blockNextTab11Ping = true;
+const inflightNavigation = context.probeActiveAgents({ force: true });
+await waitForBlockedTab11Ping();
+tabs.set(11, { id: 11, url: "https://example.com/" });
+listeners.updated[0](11, { url: "https://example.com/" }, tabs.get(11));
+releaseBlockedTab11Ping();
+const afterInflightNavigation = await inflightNavigation;
+assert.equal(afterInflightNavigation.bySide.A.status, "UNSUPPORTED");
+assert.equal(afterInflightNavigation.bySide.A.ready, false);
+
+// Coordinator state may also change while a probe is in flight. Even without a
+// Chrome lifecycle event, the end-of-probe fingerprint must reject the original
+// READY result and retry so READY -> GENERATING cannot be missed.
+tabs.set(11, { id: 11, url: "https://chatgpt.com/" });
+state.sessionActive = false;
+state.running = false;
+state.generationIdBySide.A = null;
+blockNextTab11Ping = true;
+const inflightGeneration = context.probeActiveAgents({ force: true });
+await waitForBlockedTab11Ping();
+state.sessionActive = true;
+state.running = true;
+state.generationIdBySide.A = "A-1720000000000-race1111";
+releaseBlockedTab11Ping();
+const afterInflightGeneration = await inflightGeneration;
+assert.equal(afterInflightGeneration.bySide.A.status, "GENERATING");
+assert.equal(afterInflightGeneration.bySide.A.reachable, true);
+assert.equal(afterInflightGeneration.bySide.A.ready, false);
 
 console.log("provider-health-tab-lifecycle-cache: ok");
