@@ -65,12 +65,25 @@
       notice.textContent = "Google Drive now requires a packaged Chrome Extension OAuth client declared in manifest.oauth2. Chrome Sync Push/Pull does not require Google Drive.";
       input.insertAdjacentElement("afterend", notice);
     }
+
+    // Load dynamic roster wiring only after dashboard.js and dashboard-release.js
+    // have registered their legacy A/B/C handlers. The adapter expands the live
+    // SIDES array, creates D/E controls, and attaches only the missing listeners.
+    // Keeping this as a packaged extension script preserves the MV3 CSP boundary.
+    if (!document.querySelector("script[data-ai-bridge-dynamic-agents]")) {
+      const script = document.createElement("script");
+      script.src = chrome.runtime.getURL("dashboard-dynamic-agents.js");
+      script.async = false;
+      script.dataset.aiBridgeDynamicAgents = "true";
+      document.body.appendChild(script);
+    }
   }, { once: true });
 
   window.__AI_BRIDGE_DASHBOARD_BOOTSTRAP__ = Object.freeze({
-    version: 3,
+    version: 4,
     providerScopedTabQuery: true,
     legacyWebOauthDisabled: true,
+    dynamicAgentAdapter: true,
     layouts: Object.freeze(["studio", "classic", "focus"])
   });
 })();
