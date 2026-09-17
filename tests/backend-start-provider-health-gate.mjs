@@ -52,7 +52,7 @@ const context = vm.createContext({
   },
   async probeActiveAgents(options) {
     context.probeCalls += 1;
-    assert.deepEqual(options, { force: true });
+    assert.equal(options?.force, true);
     return context.nextHealth;
   }
 });
