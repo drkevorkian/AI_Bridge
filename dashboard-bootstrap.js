@@ -39,38 +39,11 @@
     console.error("AI Bridge could not install dashboard tab-query hardening", error);
   }
 
-  // v1.17 disables the old user-pasted Web OAuth implicit flow. Keep the legacy
-  // controls visible for migration context, but make them non-actionable and
-  // explain the supported path: manifest.oauth2 + Chrome Extension OAuth client
-  // (or Chrome Sync when Drive integration is not configured).
-  window.addEventListener("DOMContentLoaded", () => {
-    const input = document.getElementById("googleClientId");
-    const save = document.getElementById("saveGoogleClientId");
-    const label = document.querySelector("label[for='googleClientId']");
-    if (input) {
-      input.disabled = true;
-      input.value = "";
-      input.placeholder = "Disabled — configure manifest.oauth2 for packaged Drive support";
-    }
-    if (save) {
-      save.disabled = true;
-      save.textContent = "Web OAuth disabled";
-      save.title = "The legacy response_type=token Web OAuth flow is disabled for security.";
-    }
-    if (label) label.textContent = "Legacy Web OAuth client ID (disabled)";
-    if (input && !document.getElementById("oauthSecurityNotice")) {
-      const notice = document.createElement("div");
-      notice.id = "oauthSecurityNotice";
-      notice.className = "field-help";
-      notice.textContent = "Google Drive now requires a packaged Chrome Extension OAuth client declared in manifest.oauth2. Chrome Sync Push/Pull does not require Google Drive.";
-      input.insertAdjacentElement("afterend", notice);
-    }
-  }, { once: true });
-
   window.__AI_BRIDGE_DASHBOARD_BOOTSTRAP__ = Object.freeze({
     version: 3,
     providerScopedTabQuery: true,
-    legacyWebOauthDisabled: true,
-    layouts: Object.freeze(["studio", "classic", "focus"])
+    legacyWebOauthDisabled: false,
+    layouts: Object.freeze(["studio", "classic", "focus"]),
+    pkceAuthorizationCode: true
   });
 })();
