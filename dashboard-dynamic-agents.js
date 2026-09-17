@@ -500,7 +500,7 @@
     window.__AI_BRIDGE_DYNAMIC_DASHBOARD_V1__ = Object.freeze({
       version: 1,
       maxAgents: ALL_SIDES.length,
-      duplicateProviderAgentsEnabled: false,
+      duplicateProviderAgentsEnabled: true,
       threadBadges: true,
       duplicateThreadStartBlock: true,
       renderRoster,
