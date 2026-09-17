@@ -55,7 +55,7 @@ const sandbox = {
       try {
         const parsed = new URL(String(url || ""));
         if (parsed.protocol !== "https:" || parsed.hostname !== "chatgpt.com") return null;
-        const pathName = parsed.pathname.replace(/\\/+$/, "") || "/";
+        const pathName = parsed.pathname.replace(/\/+$/, "") || "/";
         const threadKey = `${parsed.protocol}//${parsed.hostname}${pathName}`;
         return {
           side,
