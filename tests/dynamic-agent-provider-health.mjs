@@ -146,9 +146,38 @@ assert.equal(pick.side, "B");
 const pickBlocked = sharedTab.recommendStartSide(shared, "A");
 assert.equal(pickBlocked.side, "C");
 
+// A provider with an active generation is reachable but not READY for a new
+// adaptive-selector start. The selector must skip it instead of recommending
+// concurrent work into the same logical-agent turn.
+const busyContext = load({
+  agentCount: 3,
+  tabA: 11,
+  tabB: 22,
+  tabC: 33,
+  startSide: "A",
+  sessionActive: true,
+  running: true,
+  generationIdBySide: { A: "A-1720000000000-busy1111", B: null, C: null }
+});
+const busyHealth = await busyContext.probeActiveAgents({ force: true });
+assert.equal(busyHealth.bySide.A.status, "GENERATING");
+assert.equal(busyHealth.bySide.A.reachable, true);
+assert.equal(busyHealth.bySide.A.ready, false);
+assert.equal(JSON.stringify(Array.from(busyHealth.readySides)), JSON.stringify(["B", "C"]));
+assert.equal(JSON.stringify(Array.from(busyHealth.blockedSides)), JSON.stringify(["A"]));
+const busyPick = busyContext.recommendStartSide(busyHealth, "A");
+assert.equal(busyPick.side, "B");
+assert.match(busyPick.reason, /A is not READY; using B/);
+
 const select = await request(three, { type: "AI_BRIDGE_ADAPTIVE_SELECT", preferredSide: "A", force: true });
 assert.equal(select.ok, true);
 assert.equal(select.recommendation.side, "A");
+
+const busySelect = await request(busyContext, { type: "AI_BRIDGE_ADAPTIVE_SELECT", preferredSide: "A", force: true });
+assert.equal(busySelect.ok, true);
+assert.equal(busySelect.health.bySide.A.status, "GENERATING");
+assert.equal(busySelect.recommendation.side, "B");
+
 assert.equal(three.__AI_BRIDGE_PROVIDER_HEALTH_V1__.mutatesRouting, false);
 assert.equal(three.__AI_BRIDGE_PROVIDER_HEALTH_V1__.sendsProviderPrompts, false);
 
