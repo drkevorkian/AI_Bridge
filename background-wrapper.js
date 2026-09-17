@@ -20,6 +20,8 @@ if (
   globalThis.__AI_BRIDGE_COORDINATOR_MUTEX__?.version !== 6 ||
   globalThis.__AI_BRIDGE_COORDINATOR_MUTEX__?.artifactProvenanceGate !== true ||
   globalThis.__AI_BRIDGE_COORDINATOR_MUTEX__?.artifactProvenanceSupportsDynamicSides !== true ||
+  globalThis.__AI_BRIDGE_COORDINATOR_MUTEX__?.serializesTabRemovalLifecycle !== true ||
+  globalThis.__AI_BRIDGE_COORDINATOR_MUTEX__?.serializesTabReplacementLifecycle !== true ||
   typeof globalThis.enqueueCoordinatorMutation !== "function"
 ) {
   throw new Error("AI Bridge coordinator mutex failed to initialize.");
