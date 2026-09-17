@@ -1,7 +1,7 @@
 (() => {
   "use strict";
 
-  // Coordinator migration for selectable logical-agent counts (A–E).
+  // Coordinator migration for selectable logical-agent counts (A-E).
   const FLAG = "__AI_BRIDGE_DYNAMIC_AGENTS_V1__";
   if (globalThis[FLAG]) return;
 
@@ -38,7 +38,12 @@
 
   function assignLiveSides(count) {
     const next = liveSides(count);
-    SIDES = next;
+    try {
+      SIDES = next;
+    } catch (_) {
+      // background.js still has `const SIDES`. Replaced helpers use liveSides();
+      // A must change that binding to var before count>3 is fully routed.
+    }
     return next;
   }
 
