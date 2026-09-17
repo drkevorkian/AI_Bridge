@@ -17,6 +17,10 @@ assert.match(src, /type:\s*"AI_BRIDGE_ADAPTIVE_SELECT"/,
 assert.match(src, /viewpointIndexFromRosterOrder:\s*true/);
 assert.match(src, /usesRedactedProviderHealth:\s*true/);
 assert.match(src, /exposesSensitiveIdentity:\s*false/);
+assert.match(src, /cardDescribedBySanitizedViewpoint:\s*true/,
+  "viewpoint diagnostics must advertise the accessible card-description relationship");
+assert.match(src, /aria-describedby/,
+  "duplicate-provider agent cards must be described by their sanitized viewpoint badge");
 assert.match(src, /\.textContent\s*=\s*visibleText/,
   "untrusted/provider-derived badge text must use textContent");
 assert.doesNotMatch(src, /\.innerHTML\s*=/,
@@ -29,9 +33,12 @@ assert.doesNotMatch(src, /\bprovenanceId\b/,
   "provenance identifiers must not enter the viewpoint badge adapter");
 assert.doesNotMatch(src, /setInterval\s*\(/,
   "viewpoint badges must reuse the existing health cadence instead of adding a timer");
+assert.doesNotMatch(src, /aria-roledescription/,
+  "plain viewpoint spans should not invent a custom ARIA role description");
 
 function element(initial = {}) {
   return {
+    id: "",
     textContent: "",
     title: "",
     hidden: true,
@@ -39,16 +46,23 @@ function element(initial = {}) {
     dataset: {},
     attributes: {},
     setAttribute(name, value) { this.attributes[name] = String(value); },
+    getAttribute(name) { return Object.prototype.hasOwnProperty.call(this.attributes, name) ? this.attributes[name] : null; },
+    removeAttribute(name) { delete this.attributes[name]; },
     ...initial
   };
 }
 
 const elements = new Map([
-  ["adaptiveRecommendation", element({ hidden: false })],
-  ["startSide", element({ hidden: false, value: "A" })],
-  ["threadBadgeA", element()],
-  ["threadBadgeB", element()],
-  ["threadBadgeC", element()]
+  ["adaptiveRecommendation", element({ id: "adaptiveRecommendation", hidden: false })],
+  ["startSide", element({ id: "startSide", hidden: false, value: "A" })],
+  ["threadBadgeA", element({ id: "threadBadgeA" })],
+  ["threadBadgeB", element({ id: "threadBadgeB" })],
+  ["threadBadgeC", element({ id: "threadBadgeC" })]
+]);
+const cards = new Map([
+  [".agent-card.agent-a", element({ id: "cardA", hidden: false, attributes: { "aria-labelledby": "labelTextA" } })],
+  [".agent-card.agent-b", element({ id: "cardB", hidden: false, attributes: { "aria-labelledby": "labelTextB", "aria-describedby": "existingB" } })],
+  [".agent-card.agent-c", element({ id: "cardC", hidden: false, attributes: { "aria-labelledby": "labelTextC" } })]
 ]);
 
 let observed = false;
@@ -62,7 +76,7 @@ class FakeMutationObserver {
 }
 
 let messageCount = 0;
-const health = {
+let health = {
   version: 1,
   sides: ["A", "B", "C"],
   bySide: {
@@ -77,6 +91,7 @@ const context = vm.createContext({
   Object,
   Array,
   Map,
+  Set,
   String,
   Promise,
   Error,
@@ -84,7 +99,8 @@ const context = vm.createContext({
   MutationObserver: FakeMutationObserver,
   document: {
     hidden: false,
-    getElementById(id) { return elements.get(id) || null; }
+    getElementById(id) { return elements.get(id) || null; },
+    querySelector(selector) { return cards.get(selector) || null; }
   },
   chrome: {
     runtime: {
@@ -110,6 +126,9 @@ assert.equal(messageCount, 1, "startup should perform one cosmetic cached health
 const a = elements.get("threadBadgeA");
 const b = elements.get("threadBadgeB");
 const c = elements.get("threadBadgeC");
+const cardA = cards.get(".agent-card.agent-a");
+const cardB = cards.get(".agent-card.agent-b");
+const cardC = cards.get(".agent-card.agent-c");
 assert.equal(a.textContent, "Viewpoint #1 · /c/alpha");
 assert.equal(b.textContent, "Viewpoint #2 · /c/beta");
 assert.equal(a.hidden, false);
@@ -120,11 +139,41 @@ assert.equal(a.dataset.viewpointIndex, "1");
 assert.equal(b.dataset.viewpointIndex, "2");
 assert.equal(a.dataset.viewpointCount, "2");
 assert.equal(b.dataset.viewpointCount, "2");
+assert.equal(a.dataset.viewpointOwned, "true");
+assert.equal(b.dataset.viewpointOwned, "true");
+
+// The card retains its stable logical-side name and gains the viewpoint badge as
+// an accessible description. Existing description tokens must be preserved.
+assert.equal(cardA.attributes["aria-labelledby"], "labelTextA");
+assert.equal(cardA.attributes["aria-describedby"], "threadBadgeA");
+assert.equal(cardB.attributes["aria-labelledby"], "labelTextB");
+assert.equal(cardB.attributes["aria-describedby"], "existingB threadBadgeB");
 
 // A provider represented by only one active logical agent is not relabeled as
-// a viewpoint. Its existing thread badge state remains under the dynamic health
-// renderer's control.
+// a viewpoint. Its existing thread badge/card description stays untouched.
 assert.equal(c.textContent, "");
 assert.equal(c.hidden, true);
+assert.equal(cardC.attributes["aria-describedby"], undefined);
+
+// If the same-provider grouping later disappears, the adapter must remove only
+// its own accessible description token and clear only badge state it owns.
+health = {
+  version: 1,
+  sides: ["A", "B", "C"],
+  bySide: {
+    A: { providerId: "chatgpt", providerName: "ChatGPT", threadPath: "/c/alpha", status: "READY", ready: true },
+    B: { providerId: "claude", providerName: "Claude", threadPath: "/chat/beta", status: "READY", ready: true },
+    C: { providerId: "grok", providerName: "Grok", threadPath: "/", status: "READY", ready: true }
+  }
+};
+context.__AI_BRIDGE_VIEWPOINT_BADGES_V1__.applyViewpointBadges(health);
+assert.equal(cardA.attributes["aria-describedby"], undefined);
+assert.equal(cardB.attributes["aria-describedby"], "existingB");
+assert.equal(a.hidden, true);
+assert.equal(b.hidden, true);
+assert.equal(a.dataset.viewpointOwned, undefined);
+assert.equal(b.dataset.viewpointOwned, undefined);
+assert.equal(a.attributes["aria-label"], undefined);
+assert.equal(b.attributes["aria-label"], undefined);
 
 console.log("dashboard-viewpoint-badges: ok");
