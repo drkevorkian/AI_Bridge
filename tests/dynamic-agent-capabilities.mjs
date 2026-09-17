@@ -38,7 +38,11 @@ assert.equal(caps.normalizeAgentCount(99), 3);
 assert.equal(caps.normalizeAgentCount(99, 5), 5);
 assert.deepEqual(Array.from(caps.sideIdsForCount(1)), ["A"]);
 assert.deepEqual(Array.from(caps.sideIdsForCount(5)), ["A", "B", "C", "D", "E"]);
-assert.throws(() => caps.sideIdsForCount(6), RangeError);
+assert.throws(
+  () => caps.sideIdsForCount(6),
+  error => error?.name === "RangeError" && /1 to 5/.test(String(error?.message || "")),
+  "sideIdsForCount should reject counts outside the supported provider-family limit"
+);
 
 assert.equal(caps.providerFamilyForUrl("https://chatgpt.com/")?.id, "chatgpt");
 assert.equal(caps.providerFamilyForUrl("https://chat.openai.com/c/123")?.id, "chatgpt");
