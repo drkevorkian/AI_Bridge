@@ -40,6 +40,18 @@ assert.match(css, /white-space:\s*nowrap/,
   "health labels should remain a single compact status line");
 assert.match(css, /overflow-wrap:\s*anywhere/,
   "adaptive recommendation text should remain contained on narrow layouts");
+assert.match(css, /--agent-d-accent:\s*color-mix/,
+  "AI D should derive a theme-aware accent from the existing palette");
+assert.match(css, /--agent-e-accent:\s*color-mix/,
+  "AI E should derive a theme-aware accent from the existing palette");
+assert.match(css, /\.agent-card\.agent-d\s*\{[^}]*border-left-color:\s*var\(--agent-d-accent\)/s,
+  "AI D cards should be visually distinguishable");
+assert.match(css, /\.agent-card\.agent-e\s*\{[^}]*border-left-color:\s*var\(--agent-e-accent\)/s,
+  "AI E cards should be visually distinguishable");
+assert.match(css, /\.transcript-card\.side-d\s*\{[^}]*var\(--agent-d-accent\)/s,
+  "AI D transcript entries should retain their side identity");
+assert.match(css, /\.transcript-card\.side-e\s*\{[^}]*var\(--agent-e-accent\)/s,
+  "AI E transcript entries should retain their side identity");
 
 // The legacy dashboard still defines the original A/B/C array; the adapter
 // intentionally expands that mutable array after the page has initialized.
