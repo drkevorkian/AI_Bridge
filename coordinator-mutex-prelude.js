@@ -28,6 +28,7 @@
     "AI_BRIDGE_FORCE_RELAY",
     "AI_BRIDGE_INTERJECT",
     "AI_BRIDGE_SET_TEAM_RULES",
+    "AI_BRIDGE_SET_AGENT_COUNT",
     "AI_BRIDGE_HUMAN_REOPEN",
     "AI_BRIDGE_HUMAN_SUPPRESS",
     "AI_BRIDGE_HUMAN_REPLY",
@@ -198,6 +199,7 @@
     artifactProvenanceSides: supportedArtifactSides,
     serializesTabRemovalLifecycle: Boolean(originalTabRemovedAddListener),
     serializesTabReplacementLifecycle: Boolean(originalTabReplacedAddListener),
+    serializesAgentCountMutation: serializedTypes.has("AI_BRIDGE_SET_AGENT_COUNT"),
     get active() { return active; }
   });
 })();
