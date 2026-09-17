@@ -203,6 +203,11 @@
       if (id && sent !== undefined && normalizedComparableText(message.text) === normalizedComparableText(sent)) {
         return Promise.resolve({ ok: false, ignored: true, promptEcho: true });
       }
+      // Bind every automatic completion to the exact SPA conversation that is
+      // visible in this isolated content-script world at delivery time. The
+      // worker validates this against the dispatch provenance before consuming
+      // the generation token, preventing same-tab cross-thread attribution.
+      return nativeSendMessage({ ...message, pageUrl: location.href }, ...args);
     }
     return nativeSendMessage(message, ...args);
   };
@@ -279,6 +284,7 @@
     sendIdempotency: true,
     promptEchoFilter: true,
     providerSendAcknowledgement: true,
-    manualCaptureIncludesPageUrl: true
+    manualCaptureIncludesPageUrl: true,
+    automaticResponseIncludesPageUrl: true
   });
 })();
