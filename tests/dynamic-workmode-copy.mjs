@@ -26,14 +26,26 @@ assert.match(copy, /sides\.join\(" → "\)/,
   "sequential mode timing should be generated from the live roster");
 assert.match(copy, /all \$\{count\} selected AIs/,
   "batch-mode copy should use the selected roster size rather than hard-coded three-agent wording");
-assert.doesNotMatch(copy, /all three/i,
-  "dynamic work-mode copy must not reintroduce fixed three-agent wording");
+assert.doesNotMatch(copy, /Timing: A, B, and C start simultaneously/i,
+  "generated batch help must not reintroduce fixed A/B/C timing copy");
+assert.doesNotMatch(copy, /all three still start together/i,
+  "generated batch help must not reintroduce fixed three-agent participation copy");
 assert.doesNotMatch(copy, /AI A\|B\|C(?!\|D)/,
   "Mesh targets must not stop at the legacy A-C roster");
 assert.match(copy, /help\.textContent\s*=/,
   "work-mode help should render as text only");
 assert.doesNotMatch(copy, /innerHTML|insertAdjacentHTML/,
   "dynamic help must not introduce HTML injection surfaces");
+assert.match(copy, /rewriteLegacyStatusCopy/,
+  "copy adapter should normalize legacy Start/Resume status text");
+assert.match(copy, /Starting \$\{count\}-AI session/,
+  "Start status should report the live roster size");
+assert.match(copy, /all \$\{count\} selected roles/,
+  "Resume guidance should report the live roster size");
+assert.match(copy, /statusObserver\.observe\(status/,
+  "copy adapter should react when legacy handlers update session status");
+assert.match(copy, /dynamicSessionStatusCopy:\s*true/,
+  "diagnostics should expose dynamic Start/Resume status copy");
 assert.match(copy, /__AI_BRIDGE_DYNAMIC_WORKMODE_COPY__/,
   "adapter should expose a diagnostic marker");
 assert.match(copy, /textOnlyRendering:\s*true/,
