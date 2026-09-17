@@ -56,6 +56,14 @@
     return identity;
   }
 
+  function sameIdentity(left, right) {
+    if (!left || !right) return false;
+    return left.provenanceId === right.provenanceId &&
+      left.threadKey === right.threadKey &&
+      left.providerFamily === right.providerFamily &&
+      left.boundTabId === right.boundTabId;
+  }
+
   function rememberIdentity(side, identity) {
     const safe = sanitizedIdentity(identity);
     state.viewpointIdentityBySide = {
@@ -81,6 +89,16 @@
       rows.push({ side, tabId, url: await tabUrl(tabId) });
     }
     return rows;
+  }
+
+  function validateAssignments(assignments) {
+    const verdict = caps.evaluateAgentBindings(assignments, {
+      duplicateProviderAgentsEnabled: true
+    });
+    if (!verdict.ok) {
+      throw new Error(verdict.errors[0]?.message || "Viewpoint binding policy rejected this send.");
+    }
+    return verdict;
   }
 
   function enqueueFamily(familyId, work) {
@@ -109,27 +127,39 @@
   if (typeof sendToSide === "function") {
     const baseSend = sendToSide;
     sendToSide = async function viewpointSendToSide(side, text, options) {
+      // First snapshot establishes the user's intended tab/thread and determines
+      // whether this provider family needs serialization. This is not enough by
+      // itself: a queued tab may navigate while another same-family send runs.
       const assignments = await currentAssignments();
-      const verdict = caps.evaluateAgentBindings(assignments, {
-        duplicateProviderAgentsEnabled: true
-      });
-      if (!verdict.ok) {
-        throw new Error(verdict.errors[0]?.message || "Viewpoint binding policy rejected this send.");
-      }
+      validateAssignments(assignments);
       const plan = caps.sameFamilySendPlan(assignments);
       const row = assignments.find(item => item.side === side) || null;
-      const rawIdentity = row ? caps.conversationIdentity(row) : await identityForSide(side);
-      const identity = requireDispatchIdentity(rawIdentity);
-      const remembered = rememberIdentity(side, identity);
-      const familyId = remembered.providerFamily;
+      const initialRawIdentity = row ? caps.conversationIdentity(row) : await identityForSide(side);
+      const intendedIdentity = sanitizedIdentity(requireDispatchIdentity(initialRawIdentity));
+      const familyId = intendedIdentity.providerFamily;
       const queue = plan.queues.find(item => item.familyId === familyId);
+
       const run = async () => {
+        // Re-resolve immediately before provider dispatch. If the side was
+        // rebound or its tab navigated while waiting in the family queue, fail
+        // closed instead of sending to a different thread with stale provenance.
+        const dispatchAssignments = await currentAssignments();
+        validateAssignments(dispatchAssignments);
+        const dispatchRow = dispatchAssignments.find(item => item.side === side) || null;
+        const dispatchRawIdentity = dispatchRow ? caps.conversationIdentity(dispatchRow) : await identityForSide(side);
+        const dispatchIdentity = sanitizedIdentity(requireDispatchIdentity(dispatchRawIdentity));
+        if (!sameIdentity(intendedIdentity, dispatchIdentity)) {
+          throw new Error("Viewpoint binding changed while queued; refusing dispatch to preserve conversation provenance.");
+        }
+
+        rememberIdentity(side, dispatchRawIdentity);
         const result = await baseSend(side, text, options);
         if (options?.record === false && typeof saveState === "function") {
           await saveState();
         }
         return result;
       };
+
       if (caps.serializeSameFamilySends === true && queue?.serialize) {
         return enqueueFamily(familyId, run);
       }
@@ -147,6 +177,7 @@
     failsClosedWithoutDispatchIdentityWhenEnabled: true,
     serializesSameFamilySends: true,
     validatesBindingsBeforeSend: true,
+    revalidatesIdentityAtDispatch: true,
     enablesDuplicateProviders: true
   });
 })();
