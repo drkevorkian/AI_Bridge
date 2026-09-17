@@ -23,7 +23,7 @@ assert.ok(size("worker-fetch-security-prelude.js") > 700, "worker fetch credenti
 const content = read("content.js");
 for (const marker of [
   "async function monitor()",
-  "async function captureArtifacts(node)",
+  "async function captureArtifacts(node, options = {})",
   "AI_BRIDGE_PING",
   "AI_BRIDGE_SEND",
   "AI_BRIDGE_CAPTURE_LATEST",
