@@ -91,6 +91,12 @@ const three = load({
   labelA: "ChatGPT",
   startSide: "A"
 });
+
+// Before the first probe, Adaptive Selector must not invent a READY side.
+const preProbePick = three.recommendStartSide(null, "A");
+assert.equal(preProbePick.side, null);
+assert.match(preProbePick.reason, /not been probed|no READY/i);
+
 const health = await three.probeActiveAgents({ force: true });
 assert.equal(health.agentCount, 3);
 assert.equal(JSON.stringify(Array.from(health.sides)), JSON.stringify(["A", "B", "C"]));
@@ -169,6 +175,17 @@ const busyPick = busyContext.recommendStartSide(busyHealth, "A");
 assert.equal(busyPick.side, "B");
 assert.match(busyPick.reason, /A is not READY; using B/);
 
+// When every live side is blocked, fail closed. Returning the first roster side
+// would contradict the READY-only recommendation contract and could lead a
+// future caller to dispatch into an unhealthy/busy agent.
+const noneReadyContext = load({ agentCount: 3, startSide: "A" });
+const noneReadyHealth = await noneReadyContext.probeActiveAgents({ force: true });
+assert.deepEqual(Array.from(noneReadyHealth.readySides), []);
+assert.deepEqual(Array.from(noneReadyHealth.blockedSides), ["A", "B", "C"]);
+const noneReadyPick = noneReadyContext.recommendStartSide(noneReadyHealth, "A");
+assert.equal(noneReadyPick.side, null);
+assert.match(noneReadyPick.reason, /No READY agent/);
+
 const select = await request(three, { type: "AI_BRIDGE_ADAPTIVE_SELECT", preferredSide: "A", force: true });
 assert.equal(select.ok, true);
 assert.equal(select.recommendation.side, "A");
@@ -177,6 +194,12 @@ const busySelect = await request(busyContext, { type: "AI_BRIDGE_ADAPTIVE_SELECT
 assert.equal(busySelect.ok, true);
 assert.equal(busySelect.health.bySide.A.status, "GENERATING");
 assert.equal(busySelect.recommendation.side, "B");
+
+const noneReadySelect = await request(noneReadyContext, { type: "AI_BRIDGE_ADAPTIVE_SELECT", preferredSide: "A", force: true });
+assert.equal(noneReadySelect.ok, true);
+assert.equal(noneReadySelect.health.readySides.length, 0);
+assert.equal(noneReadySelect.recommendation.side, null);
+assert.match(noneReadySelect.recommendation.reason, /No READY agent/);
 
 assert.equal(three.__AI_BRIDGE_PROVIDER_HEALTH_V1__.mutatesRouting, false);
 assert.equal(three.__AI_BRIDGE_PROVIDER_HEALTH_V1__.sendsProviderPrompts, false);
