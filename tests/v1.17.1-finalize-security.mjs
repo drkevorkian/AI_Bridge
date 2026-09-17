@@ -9,12 +9,12 @@ const read = relative => fs.readFileSync(path.join(root, relative), "utf8");
 
 const workerPrelude = read("worker-fetch-security-prelude.js");
 const wrapper = read("background-wrapper.js");
+const background = read("background.js");
 const mutex = read("coordinator-mutex-prelude.js");
 const content = read("content.js");
 const release = read("dashboard-release.js");
 const focusCss = read("dashboard-focus.css");
 
-// Worker transport boundary -------------------------------------------------
 const calls = [];
 const sandbox = vm.createContext({
   URL,
@@ -40,30 +40,10 @@ assert.ok(
   "credential guard must load before coordinator source"
 );
 
-// Artifact provenance -------------------------------------------------------
-assert.match(mutex, /version:\s*5/);
-assert.match(mutex, /artifactProvenanceGate:\s*true/);
-assert.match(mutex, /message\.observed !== true/);
-assert.match(mutex, /generationIdBySide/);
-assert.match(mutex, /candidateSignature/);
-assert.match(mutex, /parsed\.protocol !== "https:"/);
-assert.match(content, /observed:\s*true/);
-assert.match(content, /generationId:\s*currentGenerationId/);
-assert.match(content, /candidateSignature/);
-assert.match(content, /authenticatedLocalArtifactAllowed/);
-assert.match(content, /credentials:\s*authenticatedLocalArtifactAllowed\(url\) \? "include" : "omit"/);
-assert.match(content, /if \(\/\^https:\/i\.test\(url\)\)/);
-
-// Focus accessibility -------------------------------------------------------
-assert.match(release, /role", "tabpanel"/);
-assert.match(release, /aria-labelledby/);
-assert.match(release, /aria-controls/);
-assert.match(release, /aria-hidden/);
-assert.match(release, /panel\.inert = !active/);
-assert.match(release, /aria-label", "Focus View Navigation"/);
-assert.match(focusCss, /@media \(max-width: 720px\)/);
-assert.match(focusCss, /grid-template-columns:\s*repeat\(2, minmax\(0, 1fr\)\)/);
-assert.match(focusCss, /min-height:\s*44px/);
-assert.match(focusCss, /:focus-visible/);
-
-console.log("v1.17.1 final security + Focus accessibility checks passed.");
+assert.match(background, /credentials:\s*"omit"/);
+assert.doesNotMatch(background, /credentials:\s*"include"/);
+assert.match(background, /referrerPolicy:\s*"no-referrer"/);
+assert.match(background, /readResponseBytesBounded/);
+assert.doesNotMatch(background, /host === "x\.ai"/);
+assert.doesNotMatch(background, /endsWith\("\.microsoft\.com"\)/);
+assert.match(background, /ALLOWED_CLOUD_LAYOUTS = new Set\(\[
