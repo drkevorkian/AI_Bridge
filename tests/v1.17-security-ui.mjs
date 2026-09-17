@@ -8,11 +8,11 @@ const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const read = relative => fs.readFileSync(path.join(root, relative), "utf8");
 
 const manifest = JSON.parse(read("manifest.json"));
-assert.equal(manifest.version, "1.17.0");
+assert.equal(manifest.version, "1.17.1");
 assert.ok(Number(manifest.minimum_chrome_version) >= 106);
 assert.equal(
   manifest.content_security_policy?.extension_pages,
-  "script-src 'self'; object-src 'none'; base-uri 'none'; frame-ancestors 'none';"
+  "script-src 'self'; object-src 'none'; base-uri 'none'; frame-ancestors 'none'"
 );
 assert.equal(manifest.host_permissions.includes("https://x.ai/*"), false);
 assert.equal(manifest.host_permissions.includes("https://api.x.ai/*"), false);
@@ -24,7 +24,7 @@ assert.match(mutex, /hardenedTabRemovedAddListener/);
 assert.match(mutex, /enqueueCoordinatorMutation\(\(\) => listener\(tabId, removeInfo\)\)/);
 
 const manualRelay = read("manual-relay-runtime-hardening.js");
-assert.match(manualRelay, /captured\?\.generating/);
+assert.match(manualRelay, /result\.generating/);
 assert.match(manualRelay, /still generating/i);
 
 const oauth = read("oauth-runtime-hardening.js");

@@ -60,7 +60,14 @@ function extractFunction(src, name) {
   throw new Error(`${name} unclosed`);
 }
 
-const allowSandbox = { URL };
+const allowSandbox = {
+  URL,
+  ARTIFACT_EXACT_HOSTS: new Set([
+    "chatgpt.com", "chat.openai.com", "grok.com", "assets.grok.com",
+    "assets.grokusercontent.com", "claude.ai", "gemini.google.com", "copilot.microsoft.com"
+  ]),
+  ARTIFACT_HOST_SUFFIXES: Object.freeze([".oaiusercontent.com", ".googleusercontent.com", ".anthropic.com"])
+};
 vm.runInNewContext(`${extractFunction(background, "artifactFetchHostAllowed")}\nthis.artifactFetchHostAllowed = artifactFetchHostAllowed;`, allowSandbox);
 const allowed = allowSandbox.artifactFetchHostAllowed;
 
@@ -119,7 +126,7 @@ const cloudSandbox = {
   INFINITE_TURNS: -1,
   WORK_MODES: new Set(["relay", "collaborate", "compete", "parallel", "review", "mesh"]),
   ALLOWED_CLOUD_THEMES: new Set(["blizzard", "ghostwhite", "midnight", "slate", "light", "solarized", "ocean", "terminal"]),
-  ALLOWED_CLOUD_LAYOUTS: new Set(["studio", "classic"]),
+  ALLOWED_CLOUD_LAYOUTS: new Set(["studio", "classic", "focus"]),
   CLOUD_SETTINGS_VERSION: 1,
   SYNC_ITEM_MAX_CHARS: 7000,
   CLOUD_SYNC_MAX_BYTES: 90000,

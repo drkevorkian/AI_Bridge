@@ -11,11 +11,12 @@ const content = fs.readFileSync(path.join(root, "content.js"), "utf8");
 const manifest = JSON.parse(fs.readFileSync(path.join(root, "manifest.json"), "utf8"));
 
 assert.match(wrapper, /importScripts\("reconnect-runtime-hardening\.js"\)/, "service worker must load reconnect hardening");
-assert.equal(manifest.version, "1.16.4", "runtime stability release must bump the extension version");
+assert.equal(manifest.version, "1.17.1", "runtime stability release must bump the extension version");
 
 const manifestScripts = manifest.content_scripts?.[0]?.js || [];
 assert.deepEqual(manifestScripts, [
   "content-runtime-prelude.js",
+  "content-artifact-security-prelude.js",
   "content-completion-guard.js",
   "content-response-delivery-hardening.js",
   "content.js"
@@ -31,7 +32,7 @@ assert.match(content, /msg\.type\s*===\s*"AI_BRIDGE_SEND"/);
 assert.match(content, /async function monitor\(/);
 assert.match(content, /\}\)\(\);\s*$/);
 
-assert.match(source, /EXPECTED_CONTENT_VERSION\s*=\s*"1\.16\.4"/);
+assert.match(source, /EXPECTED_CONTENT_VERSION\s*=\s*"1\.17\.1"/);
 assert.match(source, /recovery:\s*"clean-reload"/);
 assert.match(source, /PING_ATTEMPTS\s*=\s*12/);
 assert.doesNotMatch(source, /chrome\.scripting\.executeScript/, "reconnect must not inject another wrapper stack into a live content world");
@@ -49,7 +50,7 @@ function buildRuntime({ sendMessage, tab = { id: 17, status: "complete", url: "h
       tabs: {
         sendMessage: async (...args) => {
           sends += 1;
-          return sendMessage ? sendMessage(sends, ...args) : { ok: true, version: "1.16.4" };
+          return sendMessage ? sendMessage(sends, ...args) : { ok: true, version: "1.17.1" };
         },
         get: async () => ({ ...tab }),
         reload: async id => { reloadCalls.push(id); }
@@ -73,7 +74,7 @@ function buildRuntime({ sendMessage, tab = { id: 17, status: "complete", url: "h
   const runtime = buildRuntime({
     sendMessage: async sends => {
       if (sends === 1) throw new Error("Receiving end does not exist");
-      return { ok: true, version: "1.16.4" };
+      return { ok: true, version: "1.17.1" };
     }
   });
   const pong = await runtime.context.ensureTabListener(17);
@@ -86,10 +87,10 @@ function buildRuntime({ sendMessage, tab = { id: 17, status: "complete", url: "h
   const runtime = buildRuntime({
     sendMessage: async sends => sends === 1
       ? { ok: true, version: "1.14.0" }
-      : { ok: true, version: "1.16.4" }
+      : { ok: true, version: "1.17.1" }
   });
   const pong = await runtime.context.ensureTabListener(17);
-  assert.equal(pong.version, "1.16.4");
+  assert.equal(pong.version, "1.17.1");
   assert.deepEqual(runtime.reloadCalls, [17], "version mismatch must discard the stale isolated world");
 }
 
@@ -102,4 +103,4 @@ function buildRuntime({ sendMessage, tab = { id: 17, status: "complete", url: "h
   assert.equal(runtime.reloadCalls.length, 0, "unsupported pages must fail closed without reload/injection");
 }
 
-console.log("v1.16.4 reconnect/content integrity regression passed");
+console.log("v1.17.1 reconnect/content integrity regression passed");

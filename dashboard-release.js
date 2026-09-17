@@ -8,8 +8,6 @@
   const FOCUS_TAB_KEY = "aiBridgeFocusTab";
   const FOCUS_TABS = new Set(["run", "team", "files", "activity"]);
 
-  // Keep visible version surfaces tied to the installed manifest so a future
-  // release cannot accidentally ship a stale hard-coded badge.
   try {
     const version = String(chrome.runtime.getManifest()?.version || "").trim();
     if (version) {
@@ -31,9 +29,6 @@
       return;
     }
 
-    // dashboard.js awaits the background response before it writes the generic
-    // setup notice. A zero-delay listener can therefore run too early. Poll for
-    // only three seconds after the explicit Link click; no idle/background loop.
     if (Date.now() < deadline) {
       setTimeout(() => refineGoogleSetupNotice(deadline), SETUP_NOTICE_POLL_MS);
     }
@@ -47,12 +42,6 @@
     });
   }
 
-  // -------------------------------------------------------------------------
-  // Focus layout: a third, independent information architecture.
-  // -------------------------------------------------------------------------
-  // dashboard.js owns all functional controls. Focus deliberately reuses those
-  // nodes instead of cloning them, so every existing ID, listener, security
-  // check, and coordinator endpoint remains single-sourced.
   try {
     if (typeof LAYOUTS !== "undefined" && LAYOUTS instanceof Set) {
       LAYOUTS.add("focus");
@@ -64,24 +53,31 @@
     focusStyles.dataset.aiBridgeFocusStyles = "true";
     document.head.appendChild(focusStyles);
 
-    const tagGroup = (selector, groups) => {
+    const focusPanels = new Map();
+    const tagGroup = (selector, groups, id) => {
       const node = document.querySelector(selector);
-      if (node) node.setAttribute("data-focus-group", groups);
+      if (!node) return null;
+      node.setAttribute("data-focus-group", groups);
+      if (id && !node.id) node.id = id;
+      for (const group of String(groups).split(/\s+/).filter(Boolean)) {
+        if (!focusPanels.has(group)) focusPanels.set(group, []);
+        focusPanels.get(group).push(node);
+      }
       return node;
     };
-    tagGroup(".runtime-card", "run");
-    tagGroup(".objective-section", "run");
-    tagGroup(".team-section", "team");
-    tagGroup(".strategy-section", "team");
-    tagGroup(".files-section", "files");
+    tagGroup(".runtime-card", "run", "focusRunRuntime");
+    tagGroup(".objective-section", "run", "focusRunObjective");
+    tagGroup(".team-section", "team", "focusTeamMembers");
+    tagGroup(".strategy-section", "team", "focusTeamStrategy");
+    tagGroup(".files-section", "files", "focusFilesSources");
     tagGroup("#vaultPanel", "files");
-    tagGroup(".workspace", "activity");
+    tagGroup(".workspace", "activity", "focusActivityWorkspace");
 
     const nav = document.createElement("nav");
     nav.id = "focusNav";
     nav.className = "focus-nav";
     nav.setAttribute("role", "tablist");
-    nav.setAttribute("aria-label", "Focus workspace");
+    nav.setAttribute("aria-label", "Focus View Navigation");
 
     const focusButtons = new Map();
     const tabSpecs = [
@@ -96,9 +92,26 @@
       return FOCUS_TABS.has(value) ? value : "run";
     }
 
+    function panelIdsForTab(tab) {
+      return (focusPanels.get(tab) || []).map(node => node.id).filter(Boolean).join(" ");
+    }
+
     function setFocusTab(raw, { persist = true, focus = false } = {}) {
       const tab = normalizeFocusTab(raw);
       document.documentElement.dataset.focusTab = tab;
+
+      for (const [group, panels] of focusPanels) {
+        const active = group === tab;
+        const labelButton = focusButtons.get(group);
+        for (const panel of panels) {
+          panel.setAttribute("role", "tabpanel");
+          if (labelButton?.id) panel.setAttribute("aria-labelledby", labelButton.id);
+          panel.tabIndex = 0;
+          panel.setAttribute("aria-hidden", active ? "false" : "true");
+          if ("inert" in panel) panel.inert = !active;
+        }
+      }
+
       for (const [value, button] of focusButtons) {
         const selected = value === tab;
         button.setAttribute("aria-selected", selected ? "true" : "false");
@@ -115,10 +128,13 @@
       const [value, label] = tabSpecs[index];
       const button = document.createElement("button");
       button.type = "button";
+      button.id = `focusTab${value[0].toUpperCase()}${value.slice(1)}`;
       button.className = "focus-tab ghost";
       button.textContent = label;
       button.setAttribute("role", "tab");
       button.setAttribute("aria-selected", "false");
+      const controlledIds = panelIdsForTab(value);
+      if (controlledIds) button.setAttribute("aria-controls", controlledIds);
       button.dataset.focusTab = value;
       button.addEventListener("click", () => setFocusTab(value, { focus: false }));
       button.addEventListener("keydown", event => {
@@ -178,6 +194,16 @@
           let remembered = "run";
           try { remembered = localStorage.getItem(FOCUS_TAB_KEY) || "run"; } catch (_) {}
           setFocusTab(remembered, { persist: false });
+        } else {
+          for (const panels of focusPanels.values()) {
+            for (const panel of panels) {
+              panel.removeAttribute("role");
+              panel.removeAttribute("aria-labelledby");
+              panel.removeAttribute("aria-hidden");
+              panel.removeAttribute("tabindex");
+              if ("inert" in panel) panel.inert = false;
+            }
+          }
         }
       };
     }
@@ -186,9 +212,6 @@
     try { initialFocusTab = localStorage.getItem(FOCUS_TAB_KEY) || "run"; } catch (_) {}
     setFocusTab(initialFocusTab, { persist: false });
 
-    // loadLayout() is asynchronous and may have started before this release
-    // layer extended LAYOUTS. Re-apply a stored Focus preference once so an
-    // upgrade cannot momentarily snap the user back to Studio.
     chrome.storage.local.get("aiBridgeLayout").then(stored => {
       if (stored?.aiBridgeLayout === "focus" && typeof applyLayout === "function") {
         applyLayout("focus");
@@ -196,9 +219,12 @@
     }).catch(() => {});
 
     window.__AI_BRIDGE_FOCUS_LAYOUT__ = Object.freeze({
-      version: 1,
+      version: 3,
       tabs: Object.freeze([...FOCUS_TABS]),
-      preservesExistingControlIds: true
+      preservesExistingControlIds: true,
+      ariaControls: true,
+      tabpanelBinding: true,
+      hiddenPanelsInert: true
     });
   } catch (error) {
     console.error("AI Bridge Focus layout failed to initialize", error);

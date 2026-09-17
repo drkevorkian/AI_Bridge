@@ -1,19 +1,49 @@
 // AI Bridge service-worker bootstrap.
 //
-// Install the mutation-serialization prelude before background.js registers its
-// listeners. This lets the coordinator's existing anonymous message listener,
-// tab-close recovery, and alarm-driven watchdog recovery share one queue without
-// rewriting the large coordinator core.
+// Install mutation serialization before background.js registers coordinator
+// listeners. Message-driven control actions, tab-close recovery, and watchdog
+// recovery must all share this one queue.
 importScripts("coordinator-mutex-prelude.js");
 if (
-  globalThis.__AI_BRIDGE_COORDINATOR_MUTEX__?.version !== 4 ||
+  globalThis.__AI_BRIDGE_COORDINATOR_MUTEX__?.version !== 5 ||
+  globalThis.__AI_BRIDGE_COORDINATOR_MUTEX__?.artifactProvenanceGate !== true ||
   typeof globalThis.enqueueCoordinatorMutation !== "function"
 ) {
   throw new Error("AI Bridge coordinator mutex failed to initialize.");
 }
 
-// Keep the existing background.js runtime intact and load established helpers.
-importScripts("background.js", "completion-runtime-hardening.js", "oauth-runtime-hardening.js", "power.js");
+// Enforce the worker's network credential boundary before any coordinator source
+// is evaluated. Even stale or accidentally reordered code cannot attach ambient
+// browser cookies/HTTP auth to an HTTP(S) fetch. Explicit Authorization headers
+// (used by the Google API client) are unaffected.
+importScripts("worker-fetch-security-prelude.js");
+if (globalThis.__AI_BRIDGE_WORKER_FETCH_SECURITY_V1__?.httpCredentials !== "omit") {
+  throw new Error("AI Bridge worker fetch credential guard failed to initialize.");
+}
+
+// Load the coordinator core by itself. background.js retains legacy helper
+// declarations for source compatibility, but privileged implementations are
+// replaced synchronously before Chrome can dispatch extension events.
+importScripts("background.js");
+
+importScripts("artifact-fetch-runtime-hardening.js");
+if (
+  globalThis.__AI_BRIDGE_ARTIFACT_FETCH_SECURITY__?.credentials !== "omit" ||
+  globalThis.__AI_BRIDGE_ARTIFACT_FETCH_SECURITY__?.finalUrlRevalidation !== true ||
+  globalThis.__AI_BRIDGE_ARTIFACT_FETCH_SECURITY__?.streamedSizeLimit !== true
+) {
+  throw new Error("AI Bridge artifact security hardening failed to initialize.");
+}
+
+// Update check and download are pinned to one immutable Git commit SHA so a
+// moving main branch cannot create a check/download time-of-check race.
+importScripts("update-runtime-hardening.js");
+if (globalThis.__AI_BRIDGE_UPDATE_HARDENING_V1__?.immutableCommitPin !== true) {
+  throw new Error("AI Bridge immutable update hardening failed to initialize.");
+}
+
+// Established helpers load only after privileged network paths are hardened.
+importScripts("completion-runtime-hardening.js", "oauth-runtime-hardening.js", "power.js");
 
 // Focus is a third dashboard layout. Extend the existing cloud-settings layout
 // allowlist without weakening the sanitizer that reconstructs synced settings.
@@ -30,14 +60,7 @@ if (globalThis.__AI_BRIDGE_RESEND_HARDENING_V1__?.stopBeforeReplacement !== true
   throw new Error("AI Bridge resend hardening failed to initialize.");
 }
 
-// Artifact relay URLs come from provider DOM and are therefore untrusted.
-importScripts("artifact-fetch-runtime-hardening.js");
-if (globalThis.__AI_BRIDGE_ARTIFACT_FETCH_SECURITY__?.credentials !== "omit") {
-  throw new Error("AI Bridge artifact security hardening failed to initialize.");
-}
-
 // Manual relay is recovery-only and may commit a provider response directly.
-// Refuse incomplete/streaming captures before that path can mutate state.
 importScripts("manual-relay-runtime-hardening.js");
 if (globalThis.__AI_BRIDGE_MANUAL_RELAY_HARDENING_V1__?.rejectsStreamingCapture !== true) {
   throw new Error("AI Bridge manual-relay hardening failed to initialize.");
