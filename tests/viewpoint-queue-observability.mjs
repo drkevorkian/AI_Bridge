@@ -134,6 +134,8 @@ assert.equal(settled.byFamily.chatgpt.depth, 0);
 assert.equal(settled.byFamily.chatgpt.totalEnqueued, 3);
 assert.equal(settled.byFamily.chatgpt.totalCompleted, 3);
 assert.equal(settled.byFamily.chatgpt.totalRejected, 0);
+assert.ok(settled.byFamily.chatgpt.lastWaitMs > 0, "serialized queue should record a nonzero wait for later sends");
+assert.ok(settled.byFamily.chatgpt.averageWaitMs > 0, "average wait should reflect serialized queueing");
 
 const stress = [];
 for (let i = 0; i < 18; i += 1) {
@@ -160,11 +162,24 @@ await waitFor(() => race.getViewpointQueueSnapshot().bySide.D?.phase === "queued
 raceTabs.D.url = "https://chatgpt.com/c/navigated";
 await first;
 await assert.rejects(queued, /changed while queued/i);
-const raceSnapshot = race.getViewpointQueueSnapshot();
+let raceSnapshot = race.getViewpointQueueSnapshot();
 assert.equal(raceSnapshot.byFamily.chatgpt.totalCompleted, 1);
 assert.equal(raceSnapshot.byFamily.chatgpt.totalRejected, 1);
 assert.equal(raceSnapshot.byFamily.chatgpt.depth, 0);
 assert.equal(race.state.viewpointIdentityBySide?.D, undefined,
   "rejected queued send must not publish stale provenance");
+
+// A rejected queued send must not poison the family queue. After the user binds
+// D to a stable replacement thread, the next send should dispatch normally and
+// telemetry should recover to idle with a second successful completion.
+raceTabs.D.url = "https://chatgpt.com/c/recovered";
+await race.sendToSide("D", "third");
+raceSnapshot = race.getViewpointQueueSnapshot();
+assert.equal(raceSnapshot.byFamily.chatgpt.totalCompleted, 2);
+assert.equal(raceSnapshot.byFamily.chatgpt.totalRejected, 1);
+assert.equal(raceSnapshot.byFamily.chatgpt.depth, 0);
+assert.equal(race.__order.at(-2), "D");
+assert.equal(race.__order.at(-1), "done:D");
+assert.equal(race.state.viewpointIdentityBySide.D.threadKey, "https://chatgpt.com/c/recovered");
 
 console.log("viewpoint-queue-observability: ok");
