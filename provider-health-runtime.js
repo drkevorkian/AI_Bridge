@@ -24,6 +24,7 @@
     "UNSUPPORTED",
     "DUPLICATE_TAB",
     "DUPLICATE_PROVIDER",
+    "DUPLICATE_THREAD",
     "UNREACHABLE",
     "READY",
     "GENERATING"
@@ -52,6 +53,17 @@
     return Number.isInteger(id) && id > 0 ? id : null;
   }
 
+  function threadPathForIdentity(identity) {
+    const key = String(identity?.threadKey || "");
+    if (!key) return null;
+    try {
+      const parsed = new URL(key);
+      return parsed.pathname || "/";
+    } catch (_) {
+      return null;
+    }
+  }
+
   function emptyReport(side, current, extras) {
     return {
       side,
@@ -60,6 +72,8 @@
       status: "UNASSIGNED",
       providerId: null,
       providerName: null,
+      threadKey: null,
+      threadPath: null,
       reachable: false,
       ready: false,
       checkedAt: Date.now(),
@@ -89,6 +103,7 @@
   function classifyDuplicates(drafts) {
     const byTab = new Map();
     const byFamily = new Map();
+    const byThread = new Map();
     for (const row of drafts) {
       if (row.tabId) {
         const list = byTab.get(row.tabId) || [];
@@ -100,8 +115,14 @@
         list.push(row.side);
         byFamily.set(row.providerId, list);
       }
+      if (row.providerId && row.threadKey) {
+        const key = `${row.providerId}::${row.threadKey}`;
+        const list = byThread.get(key) || [];
+        list.push(row.side);
+        byThread.set(key, list);
+      }
     }
-    return { byTab, byFamily };
+    return { byTab, byFamily, byThread };
   }
 
   async function probeSide(side, current) {
@@ -126,6 +147,12 @@
       });
     }
 
+    const identity = typeof caps.conversationIdentity === "function"
+      ? caps.conversationIdentity({ side, tabId, url: tab.url || "" })
+      : null;
+    const threadKey = identity?.threadKey || null;
+    const threadPath = threadPathForIdentity(identity);
+
     const reachable = await pingTab(tabId);
     if (!reachable) {
       return emptyReport(side, current, {
@@ -133,6 +160,8 @@
         status: "UNREACHABLE",
         providerId: family.id,
         providerName: family.name,
+        threadKey,
+        threadPath,
         reason: "The provider page did not answer the Bridge ping."
       });
     }
@@ -144,6 +173,8 @@
       status: "READY",
       providerId: family.id,
       providerName: family.name,
+      threadKey,
+      threadPath,
       reachable: true,
       ready: true,
       checkedAt: Date.now(),
@@ -152,7 +183,7 @@
   }
 
   function applyDuplicatePolicy(rows) {
-    const { byTab, byFamily } = classifyDuplicates(rows);
+    const { byTab, byFamily, byThread } = classifyDuplicates(rows);
     return rows.map(row => {
       if (row.tabId && (byTab.get(row.tabId) || []).length > 1) {
         return {
@@ -173,6 +204,19 @@
           status: "DUPLICATE_PROVIDER",
           ready: false,
           reason: "Duplicate-provider agents are disabled until multi-tab viewpoint mode is reviewed."
+        };
+      }
+      if (
+        caps.duplicateProviderAgentsEnabled === true &&
+        row.providerId &&
+        row.threadKey &&
+        (byThread.get(`${row.providerId}::${row.threadKey}`) || []).length > 1
+      ) {
+        return {
+          ...row,
+          status: "DUPLICATE_THREAD",
+          ready: false,
+          reason: "Same-provider viewpoint agents must use distinct conversation threads."
         };
       }
       return row;
@@ -271,6 +315,8 @@
     version: 1,
     statuses: STATUSES,
     uniqueTabBinding: true,
+    includesSanitizedThreadIdentity: true,
+    detectsDuplicateThreads: true,
     mutatesRouting: false,
     sendsProviderPrompts: false,
     probeActiveAgents,
