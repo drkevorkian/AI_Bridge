@@ -37,6 +37,24 @@
     );
   }
 
+  async function readPersistedBridgeState() {
+    if (!chrome?.storage?.local?.get) return { present: false, value: undefined };
+    const pack = await chrome.storage.local.get("bridgeState");
+    return {
+      present: Object.prototype.hasOwnProperty.call(pack || {}, "bridgeState"),
+      value: pack?.bridgeState
+    };
+  }
+
+  async function restorePersistedBridgeState(snapshot) {
+    if (!chrome?.storage?.local) return;
+    if (snapshot?.present) {
+      await chrome.storage.local.set({ bridgeState: snapshot.value });
+      return;
+    }
+    if (chrome.storage.local.remove) await chrome.storage.local.remove("bridgeState");
+  }
+
   function blockedSummary(snapshot) {
     const sides = Array.isArray(snapshot?.sides) ? snapshot.sides : [];
     return sides
@@ -69,11 +87,21 @@
   };
 
   resetSelectedChats = async function healthGatedResetSelectedChats(msg, sides, options = {}) {
-    const result = await baseResetSelectedChats.apply(this, arguments);
-    if (isFreshStartBoundary() && options?.allowActive === true) {
-      await assertFreshStartProvidersReady();
+    const freshStartReset = isFreshStartBoundary() && options?.allowActive === true;
+    const persistedBeforeStart = freshStartReset ? await readPersistedBridgeState() : null;
+    try {
+      const result = await baseResetSelectedChats.apply(this, arguments);
+      if (freshStartReset) await assertFreshStartProvidersReady();
+      return result;
+    } catch (err) {
+      // resetSelectedChats() persists the temporary fresh-session state before
+      // this post-reset health gate runs. If readiness rejects START, the base
+      // dispatcher restores the previous in-memory state; restore the persisted
+      // snapshot here as well so a later worker restart cannot resurrect the
+      // rejected half-created session.
+      if (freshStartReset) await restorePersistedBridgeState(persistedBeforeStart);
+      throw err;
     }
-    return result;
   };
 
   globalThis.assertFreshStartProvidersReady = assertFreshStartProvidersReady;
@@ -81,6 +109,7 @@
     version: 1,
     backendStartRequiresReadyProviders: true,
     probesAfterFreshChatReset: true,
+    restoresPersistedStateOnRejectedFreshStart: true,
     doesNotSendProviderPrompts: true,
     assertFreshStartProvidersReady
   });
