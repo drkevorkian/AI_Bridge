@@ -65,6 +65,61 @@
     return Boolean(providerFamilyForUrl(rawUrl));
   }
 
+  // Stable conversation identity for one bound tab.
+  // Query/hash are dropped so tokens and ephemeral UI state never become IDs.
+  // Two tabs of the same provider are independent viewpoints only when their
+  // path-level thread keys differ.
+  function conversationIdentity(assignment) {
+    const side = String(assignment?.side || "").toUpperCase();
+    const tabId = Number(assignment?.tabId);
+    const family = providerFamilyForUrl(assignment?.url || "");
+    if (!family || !Number.isInteger(tabId) || tabId <= 0) return null;
+    let parsed;
+    try {
+      parsed = new URL(String(assignment.url));
+    } catch (_) {
+      return null;
+    }
+    const path = parsed.pathname.replace(/\/+$/, "") || "/";
+    const threadKey = `${parsed.protocol}//${parsed.hostname.toLowerCase()}${path}`;
+    return Object.freeze({
+      side,
+      tabId,
+      familyId: family.id,
+      host: parsed.hostname.toLowerCase(),
+      threadKey,
+      provenanceId: `${family.id}:tab:${tabId}:${threadKey}`
+    });
+  }
+
+  // Future same-provider sends must be serialized per family even though each
+  // agent already owns a private tab. Shared cookies/quotas are the risk.
+  function sameFamilySendPlan(assignments) {
+    const identities = (Array.isArray(assignments) ? assignments : [])
+      .map(conversationIdentity)
+      .filter(Boolean);
+    const byFamily = new Map();
+    for (const identity of identities) {
+      const list = byFamily.get(identity.familyId) || [];
+      list.push(identity);
+      byFamily.set(identity.familyId, list);
+    }
+    const queues = [];
+    for (const [familyId, owners] of byFamily.entries()) {
+      queues.push(Object.freeze({
+        familyId,
+        serialize: owners.length > 1,
+        sides: Object.freeze(owners.map(item => item.side)),
+        tabIds: Object.freeze(owners.map(item => item.tabId))
+      }));
+    }
+    return Object.freeze({
+      serializePerTab: true,
+      serializeDuplicatedFamilies: true,
+      queues: Object.freeze(queues)
+    });
+  }
+
   // Binding security evaluator.
   // unique tab IDs are a hard invariant. Same-provider / multi-tab viewpoint
   // mode may later allow two logical agents to share a provider *family*
@@ -118,6 +173,26 @@
           });
         }
       }
+    } else {
+      const byThread = new Map();
+      for (const row of rows) {
+        const identity = conversationIdentity(row);
+        if (!identity) continue;
+        const key = `${identity.familyId}::${identity.threadKey}`;
+        const owners = byThread.get(key) || [];
+        owners.push(identity.side);
+        byThread.set(key, owners);
+      }
+      for (const [key, owners] of byThread.entries()) {
+        if (owners.length > 1) {
+          errors.push({
+            code: "DUPLICATE_THREAD",
+            sides: Object.freeze(owners.slice()),
+            threadKey: key,
+            message: `Same-provider viewpoint mode requires distinct conversation threads (${owners.join(", ")} share ${key}).`
+          });
+        }
+      }
     }
 
     return Object.freeze({
@@ -139,9 +214,13 @@
     sideIdsForCount,
     providerFamilyForUrl,
     isSupportedProviderUrl,
+    conversationIdentity,
+    sameFamilySendPlan,
     evaluateAgentBindings,
     uniqueTabBinding: true,
     uniqueTabBindingNeverRelaxed: true,
+    distinctThreadRequiredWhenSameFamily: true,
+    serializeSameFamilySends: true,
     duplicateProviderAgentsEnabled: false
   });
 })();
