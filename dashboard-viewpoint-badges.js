@@ -53,16 +53,58 @@
     return out;
   }
 
+  function cardForSide(side) {
+    const normalized = String(side || "").toLowerCase();
+    return normalized ? document.querySelector(`.agent-card.agent-${normalized}`) : null;
+  }
+
+  function addDescriptionToken(card, token) {
+    if (!card || !token) return;
+    const tokens = new Set(String(card.getAttribute("aria-describedby") || "").split(/\s+/).filter(Boolean));
+    tokens.add(token);
+    card.setAttribute("aria-describedby", [...tokens].join(" "));
+  }
+
+  function removeDescriptionToken(card, token) {
+    if (!card || !token) return;
+    const tokens = String(card.getAttribute("aria-describedby") || "")
+      .split(/\s+/)
+      .filter(value => value && value !== token);
+    if (tokens.length) card.setAttribute("aria-describedby", tokens.join(" "));
+    else card.removeAttribute("aria-describedby");
+  }
+
+  function clearViewpointBadge(side) {
+    const badge = byId(`threadBadge${side}`);
+    if (!badge) return;
+    const card = cardForSide(side);
+    removeDescriptionToken(card, badge.id);
+
+    if (badge.dataset.viewpointOwned === "true") {
+      badge.textContent = "";
+      badge.title = "";
+      badge.hidden = true;
+      badge.removeAttribute("aria-label");
+      delete badge.dataset.viewpointOwned;
+      delete badge.dataset.viewpointIndex;
+      delete badge.dataset.viewpointCount;
+    }
+  }
+
   function applyViewpointBadges(health) {
     const rows = viewpointRows(health);
     for (const side of Array.isArray(health?.sides) ? health.sides : []) {
-      const badge = byId(`threadBadge${side}`);
+      const normalizedSide = String(side);
+      const badge = byId(`threadBadge${normalizedSide}`);
       if (!badge) continue;
 
-      const viewpoint = rows.get(String(side));
-      if (!viewpoint) continue;
+      const viewpoint = rows.get(normalizedSide);
+      if (!viewpoint) {
+        clearViewpointBadge(normalizedSide);
+        continue;
+      }
 
-      const row = health?.bySide?.[side] || null;
+      const row = health?.bySide?.[normalizedSide] || null;
       const thread = formatThreadPath(row?.threadPath);
       const providerName = String(row?.providerName || "Provider");
       const label = `Viewpoint #${viewpoint.index}`;
@@ -75,9 +117,16 @@
       badge.textContent = visibleText;
       badge.title = accessibleText;
       badge.setAttribute("aria-label", accessibleText);
+      badge.dataset.viewpointOwned = "true";
       badge.dataset.viewpointIndex = String(viewpoint.index);
       badge.dataset.viewpointCount = String(viewpoint.count);
       badge.hidden = false;
+
+      // Keep the card's primary accessible name tied to its stable AI-side title
+      // via aria-labelledby. Add the sanitized viewpoint badge only as a
+      // description so entering the card announces provider/viewpoint context
+      // without replacing or duplicating the logical-slot identity.
+      addDescriptionToken(cardForSide(normalizedSide), badge.id);
     }
     return rows;
   }
@@ -129,6 +178,7 @@
     usesRedactedProviderHealth: true,
     viewpointIndexFromRosterOrder: true,
     usesTextContentOnly: true,
+    cardDescribedBySanitizedViewpoint: true,
     independentTimer: false,
     applyViewpointBadges,
     refreshViewpointBadges
