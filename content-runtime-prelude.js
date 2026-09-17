@@ -233,6 +233,17 @@
         return listener(message, sender, versionedResponse);
       }
 
+      if (message?.type === "AI_BRIDGE_GENERATION_STATUS") {
+        const statusResponse = value => {
+          if (value && typeof value === "object") {
+            sendResponse({ ...value, pageUrl: location.href });
+          } else {
+            sendResponse(value);
+          }
+        };
+        return listener(message, sender, statusResponse);
+      }
+
       if (message?.type === "AI_BRIDGE_CAPTURE_LATEST") {
         const capturedResponse = value => {
           if (value && typeof value === "object") {
@@ -285,6 +296,7 @@
     promptEchoFilter: true,
     providerSendAcknowledgement: true,
     manualCaptureIncludesPageUrl: true,
-    automaticResponseIncludesPageUrl: true
+    automaticResponseIncludesPageUrl: true,
+    generationStatusIncludesPageUrl: true
   });
 })();

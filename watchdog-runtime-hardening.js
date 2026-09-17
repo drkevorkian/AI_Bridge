@@ -6,6 +6,64 @@
   globalThis[FLAG] = true;
 
   const originalQueryGenerationStatus = queryGenerationStatus;
+  const caps = globalThis.__AI_BRIDGE_AGENT_CAPABILITIES__ || null;
+
+  function watchdogConversationMatches(side, status) {
+    if (!caps || caps.version !== 1 || typeof caps.conversationIdentity !== "function") return false;
+    const normalizedSide = String(side || "").toUpperCase();
+    const tabId = Number(typeof tabForSide === "function" ? tabForSide(normalizedSide) : state?.[`tab${normalizedSide}`]);
+    const expected = state?.viewpointIdentityBySide?.[normalizedSide] || null;
+    const observed = caps.conversationIdentity({
+      side: normalizedSide,
+      tabId,
+      url: String(status?.pageUrl || "")
+    });
+    if (!expected || !observed) return false;
+    return String(expected.provenanceId || "") === String(observed.provenanceId || "") &&
+      String(expected.threadKey || "") === String(observed.threadKey || "") &&
+      String(expected.providerFamily || "") === String(observed.familyId || "") &&
+      Number(expected.boundTabId) === Number(observed.tabId);
+  }
+
+  async function pauseForConversationAuthorityLoss(side, generationId) {
+    const normalizedSide = String(side || "").toUpperCase();
+    const expectedGeneration = String(generationId || "");
+    if (!normalizedSide || String(state.generationIdBySide?.[normalizedSide] || "") !== expectedGeneration) {
+      return { stale: true };
+    }
+
+    state.generationIdBySide = { ...(state.generationIdBySide || {}) };
+    state.generationIdBySide[normalizedSide] = null;
+
+    if (state.viewpointIdentityBySide && typeof state.viewpointIdentityBySide === "object") {
+      const identities = { ...state.viewpointIdentityBySide };
+      delete identities[normalizedSide];
+      state.viewpointIdentityBySide = identities;
+    }
+
+    if (typeof isBatchWorkMode === "function" && isBatchWorkMode() && Array.isArray(state.phasePendingSides) && state.phasePendingSides.includes(normalizedSide)) {
+      state.phaseSentSides = Array.isArray(state.phaseSentSides)
+        ? state.phaseSentSides.filter(item => item !== normalizedSide)
+        : [];
+      if (state.lastResponseBySide && typeof state.lastResponseBySide === "object") {
+        delete state.lastResponseBySide[normalizedSide];
+      }
+    }
+
+    if (String(state.checkpointRequestId || "") === expectedGeneration) {
+      state.checkpointPending = false;
+      state.checkpointRequestId = null;
+      state.postCheckpointResume = null;
+    }
+
+    try {
+      if (typeof completeRoundTimer === "function") completeRoundTimer(normalizedSide);
+    } catch (_) {}
+
+    const reason = `AI ${normalizedSide} moved to a different provider conversation while its turn was active. The old turn was revoked. Resume or use Manual Relay after confirming the intended thread.`;
+    await pauseBridge(reason);
+    return { conversationMismatch: true, paused: true, revokedGeneration: true };
+  }
 
   function expectedWatchdogSides() {
     if (!state?.sessionActive || !state?.running || state?.awaitingHuman) return [];
@@ -81,10 +139,22 @@
       const results = [];
 
       for (const side of sides) {
+        const status = statusBySide[side];
+
+        // A provider SPA can keep the same content script alive while moving to
+        // another conversation. Such a page may still look actively generating,
+        // but Generation Security v5 will reject its eventual response. Detect
+        // that authority loss immediately instead of waiting for the stuck timer.
+        if (!watchdogConversationMatches(side, status)) {
+          const revoked = await pauseForConversationAuthorityLoss(side, generationSnapshot[side]);
+          results.push({ side, ...revoked });
+          if (revoked?.paused) break;
+          continue;
+        }
+
         const startedAt = Number(state.roundStartedAtBySide?.[side]);
         if (!Number.isFinite(startedAt) || startedAt <= 0) continue;
 
-        const status = statusBySide[side];
         const lastChangeAt = Number(status?.lastChangeAt) || 0;
         state.lastProgressAtBySide = { A: null, B: null, C: null, ...(state.lastProgressAtBySide || {}) };
         if (lastChangeAt > Number(state.lastProgressAtBySide[side] || 0)) {
@@ -133,10 +203,13 @@
   };
 
   globalThis.__AI_BRIDGE_WATCHDOG_SECURITY__ = Object.freeze({
-    version: 2,
+    version: 3,
     expectedSides: expectedWatchdogSides,
     pendingSendCountsAsModelProgress: false,
     serializedWithCoordinator: true,
-    mutatesActiveSides: false
+    mutatesActiveSides: false,
+    generationStatusCarriesPageIdentity: true,
+    revokesMismatchedConversationBeforeTimeout: true,
+    neverAutoTrustsNavigatedConversation: true
   });
 })();

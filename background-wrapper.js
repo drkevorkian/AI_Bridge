@@ -200,9 +200,13 @@ importScripts("human-input-runtime-hardening.js");
 
 importScripts("watchdog-runtime-hardening.js");
 if (
+  globalThis.__AI_BRIDGE_WATCHDOG_SECURITY__?.version !== 3 ||
   globalThis.__AI_BRIDGE_WATCHDOG_SECURITY__?.pendingSendCountsAsModelProgress !== false ||
   globalThis.__AI_BRIDGE_WATCHDOG_SECURITY__?.serializedWithCoordinator !== true ||
-  globalThis.__AI_BRIDGE_WATCHDOG_SECURITY__?.mutatesActiveSides !== false
+  globalThis.__AI_BRIDGE_WATCHDOG_SECURITY__?.mutatesActiveSides !== false ||
+  globalThis.__AI_BRIDGE_WATCHDOG_SECURITY__?.generationStatusCarriesPageIdentity !== true ||
+  globalThis.__AI_BRIDGE_WATCHDOG_SECURITY__?.revokesMismatchedConversationBeforeTimeout !== true ||
+  globalThis.__AI_BRIDGE_WATCHDOG_SECURITY__?.neverAutoTrustsNavigatedConversation !== true
 ) {
   throw new Error("AI Bridge watchdog hardening failed to initialize.");
 }
