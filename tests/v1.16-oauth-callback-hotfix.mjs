@@ -8,11 +8,14 @@ const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const wrapper = fs.readFileSync(path.join(root, "background-wrapper.js"), "utf8");
 const hardening = fs.readFileSync(path.join(root, "oauth-runtime-hardening.js"), "utf8");
 
-assert.match(
-  wrapper,
-  /importScripts\("background\.js",\s*"completion-runtime-hardening\.js",\s*"oauth-runtime-hardening\.js",\s*"power\.js"\)/,
-  "OAuth hardening must load with the coordinator core helpers"
-);
+const backgroundIndex = wrapper.indexOf('importScripts("background.js")');
+const artifactIndex = wrapper.indexOf('importScripts("artifact-fetch-runtime-hardening.js")');
+const updateIndex = wrapper.indexOf('importScripts("update-runtime-hardening.js")');
+const helperIndex = wrapper.indexOf('importScripts("completion-runtime-hardening.js", "oauth-runtime-hardening.js", "power.js")');
+assert.ok(backgroundIndex >= 0, "coordinator source must load through the wrapper");
+assert.ok(artifactIndex > backgroundIndex, "artifact hardening must replace privileged source helpers immediately after background.js");
+assert.ok(updateIndex > artifactIndex, "immutable updater hardening must load after artifact hardening");
+assert.ok(helperIndex > updateIndex, "OAuth/power helpers must load only after privileged network paths are hardened");
 assert.match(hardening, /clearPendingOauthState/);
 assert.match(hardening, /createdAt > Date\.now\(\)/);
 assert.match(hardening, /googleImplicitFlowDisabled:\s*true/);

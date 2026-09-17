@@ -8,11 +8,12 @@ const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const hardening = fs.readFileSync(path.join(root, "human-input-runtime-hardening.js"), "utf8");
 const wrapper = fs.readFileSync(path.join(root, "background-wrapper.js"), "utf8");
 
-assert.match(
-  wrapper,
-  /importScripts\("background\.js",\s*"completion-runtime-hardening\.js",\s*"oauth-runtime-hardening\.js",\s*"power\.js"\)/,
-  "established service-worker bootstrap chain must remain intact"
-);
+const backgroundIndex = wrapper.indexOf('importScripts("background.js")');
+const helperIndex = wrapper.indexOf('importScripts("completion-runtime-hardening.js", "oauth-runtime-hardening.js", "power.js")');
+const humanInputIndex = wrapper.indexOf('importScripts("human-input-runtime-hardening.js")');
+assert.ok(backgroundIndex >= 0, "background.js must load through the service-worker wrapper");
+assert.ok(helperIndex > backgroundIndex, "established helper chain must load after the hardened coordinator source");
+assert.ok(humanInputIndex > helperIndex, "human-input control-plane hardening must load after coordinator helpers");
 assert.match(
   wrapper,
   /importScripts\("human-input-runtime-hardening\.js"\)/,

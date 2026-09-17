@@ -9,12 +9,12 @@ const read = relative => fs.readFileSync(path.join(root, relative), "utf8");
 
 const workerPrelude = read("worker-fetch-security-prelude.js");
 const wrapper = read("background-wrapper.js");
+const background = read("background.js");
 const mutex = read("coordinator-mutex-prelude.js");
 const content = read("content.js");
 const release = read("dashboard-release.js");
 const focusCss = read("dashboard-focus.css");
 
-// Worker transport boundary -------------------------------------------------
 const calls = [];
 const sandbox = vm.createContext({
   URL,
@@ -40,7 +40,16 @@ assert.ok(
   "credential guard must load before coordinator source"
 );
 
-// Artifact provenance -------------------------------------------------------
+assert.match(background, /credentials:\s*"omit"/);
+assert.doesNotMatch(background, /credentials:\s*"include"/);
+assert.match(background, /referrerPolicy:\s*"no-referrer"/);
+assert.match(background, /readResponseBytesBounded/);
+assert.doesNotMatch(background, /host === "x\.ai"/);
+assert.doesNotMatch(background, /endsWith\("\.microsoft\.com"\)/);
+assert.match(background, /ALLOWED_CLOUD_LAYOUTS = new Set\(\["studio", "classic", "focus"\]\)/);
+assert.doesNotMatch(background, /response_type:\s*"token"/);
+assert.match(background, /msg\.observed !== true/);
+
 assert.match(mutex, /version:\s*5/);
 assert.match(mutex, /artifactProvenanceGate:\s*true/);
 assert.match(mutex, /message\.observed !== true/);
@@ -54,7 +63,6 @@ assert.match(content, /authenticatedLocalArtifactAllowed/);
 assert.match(content, /credentials:\s*authenticatedLocalArtifactAllowed\(url\) \? "include" : "omit"/);
 assert.ok(content.includes('if (/^https:/i.test(url))'), "worker fallback must be HTTPS-only");
 
-// Focus accessibility -------------------------------------------------------
 assert.match(release, /role", "tabpanel"/);
 assert.match(release, /aria-labelledby/);
 assert.match(release, /aria-controls/);
