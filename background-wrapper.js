@@ -35,6 +35,18 @@ if (globalThis.__AI_BRIDGE_WORKER_FETCH_SECURITY_V1__?.httpCredentials !== "omit
   throw new Error("AI Bridge worker fetch credential guard failed to initialize.");
 }
 
+importScripts("artifact-request-authority-prelude.js");
+if (
+  globalThis.__AI_BRIDGE_ARTIFACT_REQUEST_AUTHORITY_V1__?.version !== 1 ||
+  globalThis.__AI_BRIDGE_ARTIFACT_REQUEST_AUTHORITY_V1__?.automaticRequiresArmedGeneration !== true ||
+  globalThis.__AI_BRIDGE_ARTIFACT_REQUEST_AUTHORITY_V1__?.automaticRequiresDispatchConversation !== true ||
+  globalThis.__AI_BRIDGE_ARTIFACT_REQUEST_AUTHORITY_V1__?.manualCaptureAllowsProvenanceRefresh !== true ||
+  globalThis.__AI_BRIDGE_ARTIFACT_REQUEST_AUTHORITY_V1__?.pageIdentityRemainsWorkerPrivate !== true ||
+  typeof globalThis.aiBridgeAuthorizeArtifactRequest !== "function"
+) {
+  throw new Error("AI Bridge artifact request authority guard failed to initialize.");
+}
+
 importScripts("background.js");
 
 importScripts("coordinator-dynamic-agents.js");
