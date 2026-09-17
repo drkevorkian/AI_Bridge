@@ -8,6 +8,7 @@
   let activeCount = DEFAULT_COUNT;
   let lastHealth = null;
   let healthTimer = null;
+  let healthRefreshEpoch = 0;
 
   const byId = id => document.getElementById(id);
 
@@ -442,19 +443,28 @@
   }
 
   async function refreshHealth(force = false) {
-    const response = await chrome.runtime.sendMessage({ type: "AI_BRIDGE_PROVIDER_HEALTH", force });
-    if (!response?.ok) throw new Error(response?.error || "Provider health check failed.");
-    applyHealth(response.health);
+    // Polls, tab-lifecycle refreshes, and explicit user-triggered checks may
+    // overlap. The newest started refresh owns the UI commit. Older requests are
+    // allowed to finish, but must never repaint lastHealth/badges/recommendation
+    // after a newer refresh has begun.
+    const refreshEpoch = ++healthRefreshEpoch;
     const adaptive = await chrome.runtime.sendMessage({
       type: "AI_BRIDGE_ADAPTIVE_SELECT",
-      force: false,
+      force,
       preferredSide: byId("startSide")?.value || "A"
     });
+    if (!adaptive?.ok) throw new Error(adaptive?.error || "Provider health check failed.");
+    if (refreshEpoch !== healthRefreshEpoch) return null;
+
+    // AI_BRIDGE_ADAPTIVE_SELECT returns the exact health snapshot used to derive
+    // its recommendation. Commit both together so the dashboard cannot display
+    // health from one probe and a recommendation from a later probe.
+    applyHealth(adaptive.health);
     const recommendation = byId("adaptiveRecommendation");
-    if (recommendation && adaptive?.ok) {
+    if (recommendation) {
       recommendation.textContent = formatAdaptiveRecommendation(adaptive);
     }
-    return response.health;
+    return adaptive.health;
   }
 
   function installStartGuard() {
@@ -512,6 +522,8 @@
       duplicateProviderAgentsEnabled: true,
       threadBadges: true,
       duplicateThreadStartBlock: true,
+      atomicHealthRecommendation: true,
+      latestRefreshWins: true,
       renderRoster,
       refreshHealth
     });
