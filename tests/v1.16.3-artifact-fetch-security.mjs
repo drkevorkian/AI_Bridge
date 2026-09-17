@@ -22,6 +22,8 @@ assert.match(
 const permissions = new Set(manifest.host_permissions || []);
 assert.equal(permissions.has("https://*.microsoft.com/*"), false, "broad Microsoft wildcard must stay removed");
 assert.equal(permissions.has("https://*.x.ai/*"), false, "broad x.ai wildcard must stay removed");
+assert.equal(permissions.has("https://x.ai/*"), false, "x.ai origin is not required by the relay and must stay removed");
+assert.equal(permissions.has("https://api.x.ai/*"), false, "api.x.ai origin is not required by the relay and must stay removed");
 assert.equal(permissions.has("https://copilot.microsoft.com/*"), true, "supported Copilot origin must remain available");
 assert.equal(permissions.has("https://assets.grok.com/*"), true, "Grok asset origin must remain available");
 assert.equal(permissions.has("https://assets.grokusercontent.com/*"), true, "Grok generated-artifact CDN must remain available");
@@ -62,8 +64,8 @@ assert.equal(context.artifactFetchHostAllowed("https://chatgpt.com/file"), true)
 assert.equal(context.artifactFetchHostAllowed("https://files.oaiusercontent.com/file"), true);
 assert.equal(context.artifactFetchHostAllowed("https://assets.grok.com/file"), true);
 assert.equal(context.artifactFetchHostAllowed("https://assets.grokusercontent.com/file"), true);
-assert.equal(context.artifactFetchHostAllowed("https://x.ai/file"), true);
-assert.equal(context.artifactFetchHostAllowed("https://api.x.ai/file"), true);
+assert.equal(context.artifactFetchHostAllowed("https://x.ai/file"), false, "unused x.ai origin must be rejected");
+assert.equal(context.artifactFetchHostAllowed("https://api.x.ai/file"), false, "unused api.x.ai origin must be rejected");
 assert.equal(context.artifactFetchHostAllowed("https://evil.x.ai/file"), false, "x.ai sibling subdomains must not inherit permission");
 assert.equal(context.artifactFetchHostAllowed("https://login.microsoft.com/file"), false, "unrelated Microsoft sibling must be rejected");
 assert.equal(context.artifactFetchHostAllowed("https://copilot.microsoft.com:8443/file"), false, "non-standard HTTPS ports must be rejected");
@@ -113,7 +115,38 @@ await assert.rejects(
 );
 assert.equal(calls.length, callsBeforeRejectedInput, "rejected origins must never reach fetch() at all");
 
+// Content-Length is optional and attacker-controlled. Verify the runtime aborts
+// while streaming instead of allocating an unbounded response first.
+const oversizedChunk = new Uint8Array(12 * 1024 * 1024 + 1);
+let reads = 0;
+let cancelled = false;
+nextResponse = {
+  ok: true,
+  status: 200,
+  url: "https://files.oaiusercontent.com/huge.bin",
+  headers: headers({ "content-type": "application/octet-stream" }),
+  body: {
+    getReader() {
+      return {
+        async read() {
+          reads += 1;
+          if (reads === 1) return { value: oversizedChunk, done: false };
+          return { value: undefined, done: true };
+        },
+        async cancel() { cancelled = true; },
+        releaseLock() {}
+      };
+    }
+  }
+};
+await assert.rejects(
+  () => context.fetchArtifactInBackground("https://files.oaiusercontent.com/huge.bin", "huge.bin", ""),
+  /per-file relay limit/i
+);
+assert.equal(cancelled, true, "oversized streaming response must be cancelled immediately");
+
 assert.equal(context.__AI_BRIDGE_ARTIFACT_FETCH_SECURITY__?.credentials, "omit");
 assert.equal(context.__AI_BRIDGE_ARTIFACT_FETCH_SECURITY__?.finalUrlRevalidation, true);
+assert.equal(context.__AI_BRIDGE_ARTIFACT_FETCH_SECURITY__?.streamedSizeLimit, true);
 
-console.log("v1.16.3 artifact fetch security regression checks passed.");
+console.log("v1.17 artifact fetch security regression checks passed.");

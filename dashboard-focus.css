@@ -1,8 +1,9 @@
-/* AI Bridge Focus layout
+/* AI Bridge Focus layout ---------------------------------------------------
  *
- * Focus is a third workspace, not a reskin of Studio or Classic. Existing
- * control IDs stay in the DOM. Visibility is toggled with data-focus-group
- * and html[data-focus-tab], so dashboard.js does not rename or clone nodes.
+ * Focus is intentionally not a reskin of Studio. It turns the dashboard into
+ * a single-workspace, tabbed interface while reusing the established controls
+ * and IDs. The controller therefore remains shared and battle-tested, but the
+ * information architecture is independent from Studio and Classic.
  */
 
 .focus-nav {
@@ -102,7 +103,9 @@ html[data-layout="focus"] .team-section .agent-card {
 html[data-layout="focus"] .workspace {
   width: min(calc(100% - 32px), 1320px) !important;
   max-width: 1320px !important;
-  height: calc(100vh - 220px) !important;
+  min-width: 0 !important;
+  height: calc(100vh - 170px) !important;
+  min-height: 520px;
   margin: 16px auto !important;
   border: 1px solid var(--border, rgba(127, 127, 127, .24));
   border-radius: 18px;
@@ -114,15 +117,23 @@ html[data-layout="focus"] .studio-tools-toggle {
   display: none !important;
 }
 
-html[data-layout="focus"][data-focus-tab="session"] [data-focus-group]:not([data-focus-group~="session"]),
+/* Only one Focus workspace is exposed at a time. Elements are tagged by the
+ * Focus runtime rather than duplicated, preserving every existing DOM ID. */
 html[data-layout="focus"][data-focus-tab="run"] [data-focus-group]:not([data-focus-group~="run"]),
+html[data-layout="focus"][data-focus-tab="team"] [data-focus-group]:not([data-focus-group~="team"]),
 html[data-layout="focus"][data-focus-tab="files"] [data-focus-group]:not([data-focus-group~="files"]),
-html[data-layout="focus"][data-focus-tab="transcript"] [data-focus-group]:not([data-focus-group~="transcript"]) {
+html[data-layout="focus"][data-focus-tab="activity"] [data-focus-group]:not([data-focus-group~="activity"]) {
   display: none !important;
 }
 
-html[data-layout="focus"] .runtime-card[data-focus-group="session run"] {
+html[data-layout="focus"] .runtime-card[data-focus-group="run"] {
   margin-top: 16px;
+}
+
+html[data-layout="focus"] .objective-section textarea,
+html[data-layout="focus"] .strategy-section textarea,
+html[data-layout="focus"] .files-section textarea {
+  max-width: 100%;
 }
 
 html[data-layout="focus"] .layout-switch {
@@ -131,7 +142,6 @@ html[data-layout="focus"] .layout-switch {
 
 html[data-layout="focus"] .layout-chip,
 html[data-layout="focus"] .view-tab,
-html[data-layout="focus"] .focus-tab,
 html[data-layout="focus"] button,
 html[data-layout="focus"] select,
 html[data-layout="focus"] input:not([type="checkbox"]):not([type="radio"]) {

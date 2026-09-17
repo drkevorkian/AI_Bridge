@@ -1,9 +1,13 @@
 (() => {
   "use strict";
 
-  // v1.16.x OAuth hardening lives beside the core coordinator so the security
-  // invariants stay easy to audit without inflating background.js further.
-  // The core runtime still owns the actual OAuth, Drive, and cloud-sync logic.
+  // OAuth security boundary.
+  //
+  // Google OAuth for Chrome extensions belongs on chrome.identity.getAuthToken
+  // with a Chrome-Extension OAuth client declared in manifest.oauth2. The old
+  // unpacked-build fallback used launchWebAuthFlow(response_type=token), which
+  // placed an access token in the redirect URL fragment. Keep Drive optional
+  // and fail closed instead of retaining that implicit-flow credential path.
 
   if (typeof launchGoogleWebAuth !== "function" ||
       typeof clearPendingOauthState !== "function" ||
@@ -11,6 +15,9 @@
     console.warn("AI Bridge OAuth hardening could not attach to background runtime");
     return;
   }
+
+  const LEGACY_WEB_OAUTH_DISABLED_MESSAGE =
+    "Google Drive OAuth is disabled in this unpacked build because the legacy Web-client implicit flow exposed access tokens in the redirect URL. Configure a Chrome-Extension OAuth client in manifest.oauth2 for packaged builds, or use Chrome Sync Push/Pull without Google Drive.";
 
   const baseConsumePendingOauthState = consumePendingOauthState;
   consumePendingOauthState = async function hardenedConsumePendingOauthState() {
@@ -26,65 +33,78 @@
     return record;
   };
 
-  const baseLaunchGoogleWebAuth = launchGoogleWebAuth;
-  launchGoogleWebAuth = async function hardenedLaunchGoogleWebAuth(options) {
-    try {
-      return await baseLaunchGoogleWebAuth(options);
-    } catch (err) {
-      // Idempotent. background.js already clears on URL rejection and
-      // launchWebAuthFlow rejection; this additionally covers callback parser,
-      // state, client-id, and TTL validation failures.
-      await clearPendingOauthState();
-      throw err;
-    }
+  // The implicit Google Web flow is intentionally unreachable in v1.17.0.
+  // Leave the core implementation present for migration archaeology, but make
+  // the loaded service-worker binding fail closed before launchWebAuthFlow.
+  launchGoogleWebAuth = async function disabledLegacyGoogleWebAuth() {
+    await clearPendingOauthState();
+    throw new Error(LEGACY_WEB_OAUTH_DISABLED_MESSAGE);
   };
 
-  // A cached user-client token is bound to the OAuth client that issued it.
-  // Replacing one non-empty client ID with another must invalidate that token
-  // and the local linked flag. Reusing the old token with a new client ID is
-  // both confusing and an avoidable cross-configuration trust bug.
-  if (typeof saveUserOauthClientId === "function" &&
-      typeof readUserOauthClientId === "function" &&
-      typeof clearSessionGoogleToken === "function") {
-    const baseSaveUserOauthClientId = saveUserOauthClientId;
-    saveUserOauthClientId = async function hardenedSaveUserOauthClientId(raw) {
-      const previousId = await readUserOauthClientId();
-      const result = await baseSaveUserOauthClientId(raw);
-      const nextId = await readUserOauthClientId();
-
-      if (previousId && nextId && previousId !== nextId) {
-        await clearSessionGoogleToken();
-        await clearPendingOauthState();
-        try {
-          await chrome.storage.local.set({ [GOOGLE_LINKED_KEY]: false });
-        } catch (_) {}
-        return { ...result, googleLinked: false, relinkRequired: true };
-      }
-
-      return result;
+  // A packaged build with manifest.oauth2 continues to use Chrome Identity's
+  // cached token path. An unpacked build without that configuration is simply
+  // "not configured"; it must not fall through to a user-pasted Web client.
+  if (typeof googleOauthReady === "function" && typeof googleOauthPackaged === "function") {
+    googleOauthReady = async function hardenedGoogleOauthReady() {
+      return Boolean(googleOauthPackaged());
     };
   }
 
-  // Missing OAuth configuration is an installation/deployment state, not a
-  // runtime crash. For an unpacked build this usually means no user-supplied
-  // Web OAuth client ID has been saved yet; a packaged build may instead use a
-  // publisher-provided Chrome-extension OAuth client. Preserve fail-closed
-  // behavior without logging the expected setup state as a background error.
+  if (typeof getGoogleAccessTokenUnlocked === "function" && typeof googleOauthPackaged === "function") {
+    const baseGetGoogleAccessTokenUnlocked = getGoogleAccessTokenUnlocked;
+    getGoogleAccessTokenUnlocked = async function hardenedGetGoogleAccessTokenUnlocked(options = {}) {
+      if (!googleOauthPackaged()) {
+        await clearPendingOauthState();
+        throw new Error(LEGACY_WEB_OAUTH_DISABLED_MESSAGE);
+      }
+      return baseGetGoogleAccessTokenUnlocked(options);
+    };
+  }
+
+  // User-supplied Web client IDs are no longer an executable credential path.
+  // Clear any previously stored value and session token if the old Settings UI
+  // sends a save request. Chrome Sync remains available independently.
+  if (typeof saveUserOauthClientId === "function" &&
+      typeof clearSessionGoogleToken === "function") {
+    const baseSaveUserOauthClientId = saveUserOauthClientId;
+    saveUserOauthClientId = async function hardenedSaveUserOauthClientId() {
+      const result = await baseSaveUserOauthClientId("");
+      await clearSessionGoogleToken();
+      await clearPendingOauthState();
+      try {
+        await chrome.storage.local.set({ [GOOGLE_LINKED_KEY]: false });
+      } catch (_) {}
+      return {
+        ...result,
+        saved: false,
+        googleLinked: false,
+        legacyWebClientDisabled: true
+      };
+    };
+  }
+
   if (typeof connectGoogleAccount === "function" &&
-      typeof googleOauthReady === "function") {
+      typeof googleOauthPackaged === "function") {
     const baseConnectGoogleAccount = connectGoogleAccount;
     connectGoogleAccount = async function hardenedConnectGoogleAccount() {
-      if (!(await googleOauthReady())) {
+      if (!googleOauthPackaged()) {
         return {
           googleLinked: false,
           googleConfigured: false,
           setupRequired: true,
-          setupKind: "oauth-client",
-          setupMessage: "Google Drive login is optional. In Settings, configure a Web OAuth client ID for this unpacked extension, or use Chrome Sync without Google Drive.",
+          setupKind: "chrome-extension-oauth-client",
+          setupMessage: LEGACY_WEB_OAUTH_DISABLED_MESSAGE,
+          legacyWebClientDisabled: true,
           driveScope: typeof DRIVE_APP_DATA_SCOPE === "string" ? DRIVE_APP_DATA_SCOPE : ""
         };
       }
       return baseConnectGoogleAccount();
     };
   }
+
+  globalThis.__AI_BRIDGE_OAUTH_SECURITY__ = Object.freeze({
+    version: 3,
+    googleImplicitFlowDisabled: true,
+    packagedGoogleAuthUsesChromeIdentity: true
+  });
 })();
