@@ -13,60 +13,62 @@ const health = fs.readFileSync(path.join(root, "provider-health-runtime.js"), "u
 assert.match(wrapper, /uniqueTabBindingNeverRelaxed !== true/);
 assert.match(wrapper, /distinctThreadRequiredWhenSameFamily !== true/);
 assert.match(wrapper, /serializeSameFamilySends !== true/);
+assert.match(wrapper, /duplicateProviderAgentsEnabled !== true/);
 assert.match(coordinator, /evaluateAgentBindings/);
 assert.match(health, /DUPLICATE_TAB/);
-assert.doesNotMatch(source, /duplicateProviderAgentsEnabled:\s*true/);
+assert.match(health, /DUPLICATE_THREAD/);
 
 const context = vm.createContext({ URL, console });
 context.globalThis = context;
 vm.runInContext(source, context, { filename: "agent-capabilities.js" });
 const caps = context.__AI_BRIDGE_AGENT_CAPABILITIES__;
 
-assert.equal(caps.duplicateProviderAgentsEnabled, false);
+assert.equal(caps.duplicateProviderAgentsEnabled, true);
 assert.equal(caps.uniqueTabBinding, true);
 assert.equal(caps.uniqueTabBindingNeverRelaxed, true);
 assert.equal(caps.distinctThreadRequiredWhenSameFamily, true);
 assert.equal(caps.serializeSameFamilySends, true);
 
+const productionOptions = { duplicateProviderAgentsEnabled: caps.duplicateProviderAgentsEnabled };
+
 const uniqueFamilies = caps.evaluateAgentBindings([
   { side: "A", tabId: 11, url: "https://chatgpt.com/" },
   { side: "B", tabId: 22, url: "https://grok.com/" },
   { side: "C", tabId: 33, url: "https://claude.ai/" }
-]);
+], productionOptions);
 assert.equal(uniqueFamilies.ok, true);
 
 const sharedTab = caps.evaluateAgentBindings([
   { side: "A", tabId: 11, url: "https://chatgpt.com/c/one" },
-  { side: "D", tabId: 11, url: "https://chatgpt.com/c/one" }
-]);
+  { side: "D", tabId: 11, url: "https://chatgpt.com/c/two" }
+], productionOptions);
 assert.equal(sharedTab.ok, false);
 assert.equal(sharedTab.errors.some(error => error.code === "DUPLICATE_TAB"), true);
 
-const sharedFamilyCurrent = caps.evaluateAgentBindings([
+const sharedFamilyProduction = caps.evaluateAgentBindings([
   { side: "A", tabId: 11, url: "https://chatgpt.com/c/one" },
   { side: "D", tabId: 44, url: "https://chatgpt.com/c/two" }
-]);
-assert.equal(sharedFamilyCurrent.ok, false, "current policy must reject two ChatGPT tabs");
-assert.equal(sharedFamilyCurrent.errors.some(error => error.code === "DUPLICATE_PROVIDER"), true);
+], productionOptions);
+assert.equal(sharedFamilyProduction.ok, true, "production viewpoint mode must allow distinct ChatGPT tabs and threads");
+assert.equal(sharedFamilyProduction.allowDuplicateFamilies, true);
 
-const viewpoint = caps.evaluateAgentBindings([
+const explicitlyDisabled = caps.evaluateAgentBindings([
   { side: "A", tabId: 11, url: "https://chatgpt.com/c/one" },
-  { side: "D", tabId: 44, url: "https://chatgpt.com/c/two" },
-  { side: "B", tabId: 22, url: "https://grok.com/" }
-], { duplicateProviderAgentsEnabled: true });
-assert.equal(viewpoint.ok, true, "future viewpoint mode may share a provider family across distinct tabs");
-assert.equal(viewpoint.allowDuplicateFamilies, true);
+  { side: "D", tabId: 44, url: "https://chatgpt.com/c/two" }
+], { duplicateProviderAgentsEnabled: false });
+assert.equal(explicitlyDisabled.ok, false, "the evaluator must retain the fail-closed policy option");
+assert.equal(explicitlyDisabled.errors.some(error => error.code === "DUPLICATE_PROVIDER"), true);
 
-const viewpointSameTab = caps.evaluateAgentBindings([
-  { side: "A", tabId: 11, url: "https://chatgpt.com/c/one" },
-  { side: "D", tabId: 11, url: "https://chatgpt.com/c/two" }
-], { duplicateProviderAgentsEnabled: true });
-assert.equal(viewpointSameTab.ok, false, "viewpoint mode must never put two agents on one tab");
-assert.equal(viewpointSameTab.errors.some(error => error.code === "DUPLICATE_TAB"), true);
+const sameThread = caps.evaluateAgentBindings([
+  { side: "A", tabId: 11, url: "https://chatgpt.com/c/one?x=1" },
+  { side: "D", tabId: 44, url: "https://chatgpt.com/c/one#y" }
+], productionOptions);
+assert.equal(sameThread.ok, false, "same ChatGPT thread in two tabs is not two viewpoints");
+assert.equal(sameThread.errors.some(error => error.code === "DUPLICATE_THREAD"), true);
 
 const spoof = caps.evaluateAgentBindings([
   { side: "A", tabId: 11, url: "https://chatgpt.com.evil.example/" }
-]);
+], productionOptions);
 assert.equal(spoof.ok, false);
 assert.equal(spoof.errors.some(error => error.code === "UNSUPPORTED"), true);
 
@@ -84,13 +86,6 @@ assert.equal(first.familyId, "chatgpt");
 assert.equal(first.threadKey, "https://chatgpt.com/c/one");
 assert.notEqual(first.threadKey, second.threadKey);
 assert.notEqual(first.provenanceId, second.provenanceId);
-
-const sameThread = caps.evaluateAgentBindings([
-  { side: "A", tabId: 11, url: "https://chatgpt.com/c/one?x=1" },
-  { side: "D", tabId: 44, url: "https://chatgpt.com/c/one#y" }
-], { duplicateProviderAgentsEnabled: true });
-assert.equal(sameThread.ok, false, "same ChatGPT thread in two tabs is not two viewpoints");
-assert.equal(sameThread.errors.some(error => error.code === "DUPLICATE_THREAD"), true);
 
 const plan = caps.sameFamilySendPlan([
   { side: "A", tabId: 11, url: "https://chatgpt.com/c/one" },
