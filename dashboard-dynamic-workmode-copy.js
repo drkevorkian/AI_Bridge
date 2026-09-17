@@ -75,6 +75,26 @@
     }
   }
 
+  function rewriteLegacyStatusCopy() {
+    const status = byId("status");
+    if (!status) return;
+    const sides = liveSides();
+    const count = sides.length;
+    const text = String(status.textContent || "");
+
+    if (text === "Starting three-AI session…") {
+      status.textContent = `Starting ${count}-AI session…`;
+      return;
+    }
+
+    const legacyResume = "To resume, bind all three roles to open AI tabs.";
+    if (text.includes(legacyResume)) {
+      const binding = count === 1 ? "the selected role" : `all ${count} selected roles`;
+      const tabs = count === 1 ? "tab" : "tabs";
+      status.textContent = text.replace(legacyResume, `To resume, bind ${binding} to open AI ${tabs}.`);
+    }
+  }
+
   function refreshDynamicWorkModeCopy() {
     const sides = liveSides();
     const mode = String(byId("workMode")?.value || "relay");
@@ -87,6 +107,7 @@
         ? "All selected AIs start simultaneously; this selection still defines the Main AI for queued human interjections."
         : "Choose the first speaker and Main AI for queued human interjections.";
     }
+    rewriteLegacyStatusCopy();
   }
 
   function install() {
@@ -106,14 +127,21 @@
       observer.observe(team, { attributes: true, attributeFilter: ["data-agent-count"] });
     }
 
+    const status = byId("status");
+    if (status && typeof MutationObserver === "function") {
+      const statusObserver = new MutationObserver(rewriteLegacyStatusCopy);
+      statusObserver.observe(status, { childList: true, characterData: true, subtree: true });
+    }
+
     refreshDynamicWorkModeCopy();
   }
 
   install();
 
   window.__AI_BRIDGE_DYNAMIC_WORKMODE_COPY__ = Object.freeze({
-    version: 1,
+    version: 2,
     liveRosterCopy: true,
+    dynamicSessionStatusCopy: true,
     textOnlyRendering: true,
     refresh: refreshDynamicWorkModeCopy
   });
