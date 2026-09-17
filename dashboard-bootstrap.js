@@ -63,15 +63,22 @@
     // Load dynamic roster wiring only after dashboard.js and dashboard-release.js
     // have registered their legacy A/B/C handlers. The roster adapter is followed
     // by packaged compatibility/read-only adapters that remove fixed-three UI
-    // assumptions, keep work-mode copy aligned to the live A-E roster, and expose
-    // viewpoint activation diagnostics. Routing authority remains in the
-    // centralized background binding evaluator.
+    // assumptions, add side-specific accessible names, keep work-mode copy aligned
+    // to the live A-E roster, and expose viewpoint activation diagnostics. Routing
+    // authority remains in the centralized background binding evaluator.
     if (!document.querySelector("script[data-ai-bridge-dynamic-agents]")) {
       const script = document.createElement("script");
       script.src = chrome.runtime.getURL("dashboard-dynamic-agents.js");
       script.async = false;
       script.dataset.aiBridgeDynamicAgents = "true";
       script.addEventListener("load", () => {
+        if (!document.querySelector("script[data-ai-bridge-dynamic-accessibility]")) {
+          const accessibility = document.createElement("script");
+          accessibility.src = chrome.runtime.getURL("dashboard-dynamic-accessibility.js");
+          accessibility.async = false;
+          accessibility.dataset.aiBridgeDynamicAccessibility = "true";
+          document.body.appendChild(accessibility);
+        }
         if (!document.querySelector("script[data-ai-bridge-dynamic-validation]")) {
           const validation = document.createElement("script");
           validation.src = chrome.runtime.getURL("dashboard-dynamic-validation.js");
@@ -99,10 +106,11 @@
   }, { once: true });
 
   window.__AI_BRIDGE_DASHBOARD_BOOTSTRAP__ = Object.freeze({
-    version: 7,
+    version: 8,
     providerScopedTabQuery: true,
     legacyWebOauthDisabled: true,
     dynamicAgentAdapter: true,
+    dynamicAccessibilityAdapter: true,
     dynamicTabValidationAdapter: true,
     dynamicWorkModeCopyAdapter: true,
     viewpointActivationAdapter: true,
