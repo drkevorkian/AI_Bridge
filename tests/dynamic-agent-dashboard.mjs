@@ -60,7 +60,8 @@ assert.doesNotMatch(dynamic, /adaptive\.recommendation\?\.side\s*\|\|\s*"A"/,
 assert.match(dynamic, /recommendation\.textContent = formatAdaptiveRecommendation\(adaptive\)/,
   "dashboard recommendation rendering must go through the null-safe formatter");
 
-assert.match(css, /data-status="READY"/);
+assert.match(css, /\.dynamic-health-badge\s*\{/,
+  "dynamic provider health badges must remain present in the dashboard stylesheet");
 assert.match(css, /prefers-reduced-motion/);
 assert.match(css, /text-overflow:\s*ellipsis/,
   "long health labels should not stretch or break agent cards");
