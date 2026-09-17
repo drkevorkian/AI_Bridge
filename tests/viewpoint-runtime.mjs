@@ -13,6 +13,7 @@ assert.ok(wrapper.includes('importScripts("viewpoint-runtime.js")'));
 assert.match(runtimeSrc, /enablesDuplicateProviders:\s*false/);
 assert.match(runtimeSrc, /stampsBeforeCommitSave:\s*true/);
 assert.match(runtimeSrc, /capturesIdentityBeforeDispatch:\s*true/);
+assert.match(runtimeSrc, /failsClosedWithoutDispatchIdentityWhenEnabled:\s*true/);
 assert.doesNotMatch(runtimeSrc, /duplicateProviderAgentsEnabled\s*=\s*true/);
 
 function load(tabs) {
@@ -80,7 +81,12 @@ const ctx = load({
 });
 
 assert.equal(ctx.__AI_BRIDGE_VIEWPOINT_RUNTIME_V1__.enablesDuplicateProviders, false);
+assert.equal(ctx.__AI_BRIDGE_VIEWPOINT_RUNTIME_V1__.failsClosedWithoutDispatchIdentityWhenEnabled, true);
 assert.equal(ctx.__AI_BRIDGE_AGENT_CAPABILITIES__.duplicateProviderAgentsEnabled, false);
+assert.doesNotThrow(() => ctx.requireViewpointDispatchIdentity(null, false),
+  "current unique-provider mode must not gain a new identity lookup failure dependency");
+assert.throws(() => ctx.requireViewpointDispatchIdentity(null, true), /trusted conversation identity/i,
+  "future viewpoint enablement must fail closed when dispatch identity cannot be proven");
 
 // Capture identity when the prompt is dispatched, then simulate navigation
 // before the response arrives. Provenance must remain tied to the receiving
