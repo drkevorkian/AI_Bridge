@@ -43,7 +43,8 @@
 
   function availableSupportedTabCount() {
     try {
-      return tabsById instanceof Map ? tabsById.size : 0;
+      const count = Number(tabsById?.size);
+      return Number.isInteger(count) && count >= 0 ? count : 0;
     } catch (_) {
       return 0;
     }
