@@ -32,7 +32,7 @@
     return next;
   }
 
-  let armingAttached = false;
+  let armingHelperAttached = false;
   if (persistenceAvailable) {
     globalThis.persistArmedGenerationBeforeProviderSend = async function persistArmedGenerationBeforeProviderSend(side, generationId) {
       const normalizedSide = String(side || "").toUpperCase();
@@ -53,7 +53,34 @@
       }
       return true;
     };
-    armingAttached = true;
+    armingHelperAttached = true;
+  }
+
+  let providerBoundaryAttached = false;
+  if (
+    armingHelperAttached &&
+    typeof chrome !== "undefined" &&
+    chrome?.tabs &&
+    typeof chrome.tabs.sendMessage === "function" &&
+    typeof sideForTab === "function"
+  ) {
+    const baseTabSendMessage = chrome.tabs.sendMessage.bind(chrome.tabs);
+
+    // The legacy coordinator assigns generationIdBySide immediately before its
+    // AI_BRIDGE_SEND call. Intercept only that provider-send message type so the
+    // freshly armed capability is durable before the prompt can leave the worker.
+    // PING/status/capture/artifact traffic is intentionally untouched.
+    chrome.tabs.sendMessage = async function generationHardenedTabSendMessage(tabId, message, ...rest) {
+      if (message?.type === "AI_BRIDGE_SEND" && message?.generationId) {
+        const side = sideForTab(Number(tabId));
+        if (!side) {
+          throw new Error("Provider dispatch generation has no currently bound logical side.");
+        }
+        await globalThis.persistArmedGenerationBeforeProviderSend(side, message.generationId);
+      }
+      return baseTabSendMessage(tabId, message, ...rest);
+    };
+    providerBoundaryAttached = true;
   }
 
   let consumptionAttached = false;
@@ -124,13 +151,14 @@
   }
 
   // Unit tests may intentionally load only the matcher. Production bootstrap
-  // requires every response/dispatch capability below, so a missing coordinator
-  // or persistence hook still fails closed in the real service worker.
+  // requires every response/dispatch capability below, so a missing coordinator,
+  // provider-boundary, or persistence hook still fails closed in the real worker.
   globalThis.__AI_BRIDGE_GENERATION_SECURITY__ = Object.freeze({
     version: 4,
     failClosedWhenUnarmed: true,
-    durablyArmsGenerationBeforeProviderSend: armingAttached,
-    rechecksArmedGenerationAfterPersistence: armingAttached,
+    durablyArmsGenerationBeforeProviderSend: providerBoundaryAttached,
+    providerSendBoundaryGuarded: providerBoundaryAttached,
+    rechecksArmedGenerationAfterPersistence: armingHelperAttached,
     durablyClearsFailedDispatchGeneration: failedDispatchRollbackAttached,
     rechecksGenerationAtSerializedCommit: consumptionAttached,
     consumesAcceptedGenerationBeforeCommit: consumptionAttached,
