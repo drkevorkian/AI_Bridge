@@ -40,6 +40,9 @@
   const originalTabRemovedAddListener = chrome.tabs?.onRemoved?.addListener
     ? chrome.tabs.onRemoved.addListener.bind(chrome.tabs.onRemoved)
     : null;
+  const originalTabReplacedAddListener = chrome.tabs?.onReplaced?.addListener
+    ? chrome.tabs.onReplaced.addListener.bind(chrome.tabs.onReplaced)
+    : null;
 
   function enqueueCoordinatorMutation(task) {
     if (typeof task !== "function") {
@@ -173,6 +176,17 @@
     };
   }
 
+  if (originalTabReplacedAddListener) {
+    chrome.tabs.onReplaced.addListener = function hardenedTabReplacedAddListener(listener) {
+      if (typeof listener !== "function") return originalTabReplacedAddListener(listener);
+      return originalTabReplacedAddListener((addedTabId, removedTabId) => {
+        enqueueCoordinatorMutation(() => listener(addedTabId, removedTabId)).catch(error => {
+          console.error("AI Bridge tab-replacement mutation failed", error);
+        });
+      });
+    };
+  }
+
   globalThis.enqueueCoordinatorMutation = enqueueCoordinatorMutation;
 
   globalThis.__AI_BRIDGE_COORDINATOR_MUTEX__ = Object.freeze({
@@ -182,6 +196,8 @@
     artifactProvenanceGate: true,
     artifactProvenanceSupportsDynamicSides: supportedArtifactSides.includes("D") && supportedArtifactSides.includes("E"),
     artifactProvenanceSides: supportedArtifactSides,
+    serializesTabRemovalLifecycle: Boolean(originalTabRemovedAddListener),
+    serializesTabReplacementLifecycle: Boolean(originalTabReplacedAddListener),
     get active() { return active; }
   });
 })();
