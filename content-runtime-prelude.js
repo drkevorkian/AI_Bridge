@@ -1,7 +1,7 @@
 (() => {
   "use strict";
 
-  const RUNTIME_VERSION = "1.17.1";
+  const RUNTIME_VERSION = String(chrome?.runtime?.getManifest?.().version || "1.17.1");
   const FLAG = "__AI_BRIDGE_CONTENT_RUNTIME_PRELUDE__";
   if (window[FLAG]?.version === RUNTIME_VERSION) return;
 
