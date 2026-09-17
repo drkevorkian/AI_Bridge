@@ -12,6 +12,8 @@ const watchdogSource = fs.readFileSync(path.join(root, "watchdog-runtime-hardeni
 assert.match(mutexSource, /globalThis\.enqueueCoordinatorMutation\s*=\s*enqueueCoordinatorMutation/);
 assert.match(mutexSource, /AI_BRIDGE_SET_TEAM_RULES/);
 assert.match(mutexSource, /hardenedTabRemovedAddListener/);
+assert.match(mutexSource, /artifactProvenanceGate:\s*true/);
+assert.match(mutexSource, /validateArtifactFetchRequest/);
 assert.match(watchdogSource, /serializedWithCoordinator:\s*true/);
 assert.doesNotMatch(watchdogSource, /state\.activeSides\s*=\s*expected/);
 assert.doesNotMatch(watchdogSource, /configuredActiveSides/);
@@ -46,6 +48,9 @@ const state = {
   awaitingHuman: false,
   workMode: "relay",
   currentSide: "A",
+  tabA: 101,
+  tabB: 102,
+  tabC: 103,
   phasePendingSides: [],
   activeSides: ["A", "B", "C"],
   generationIdBySide: { A: "gen-a", B: null, C: null },
@@ -63,6 +68,7 @@ const context = vm.createContext({
   Set,
   TypeError,
   Date,
+  URL,
   chrome,
   state,
   SIDES: ["A", "B", "C"],
@@ -92,10 +98,9 @@ context.globalThis = context;
 
 vm.runInContext(mutexSource, context, { filename: "coordinator-mutex-prelude.js" });
 assert.equal(typeof context.enqueueCoordinatorMutation, "function");
-assert.equal(context.__AI_BRIDGE_COORDINATOR_MUTEX__.version, 4);
+assert.equal(context.__AI_BRIDGE_COORDINATOR_MUTEX__.version, 5);
+assert.equal(context.__AI_BRIDGE_COORDINATOR_MUTEX__.artifactProvenanceGate, true);
 
-// Register a representative response listener after the prelude so it is
-// serialized through the exact same queue as watchdog recovery.
 chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
   if (message?.type !== "AI_BRIDGE_RESPONSE") return false;
   responseObservedSides = [...state.activeSides];
@@ -116,8 +121,6 @@ assert.equal(listeners.length, 1);
 
 let responseValue = null;
 listeners[0]({ type: "AI_BRIDGE_RESPONSE" }, {}, value => { responseValue = value; });
-
-// The response is queued behind the active watchdog recovery mutation.
 await new Promise(resolve => setTimeout(resolve, 0));
 assert.deepEqual(events, ["watchdog-start:A"]);
 assert.equal(responseValue, null);
@@ -132,8 +135,6 @@ assert.deepEqual(responseObservedSides, ["A", "B", "C"], "response must observe 
 assert.deepEqual(responseValue, { ok: true });
 assert.deepEqual(state.activeSides, ["A", "B", "C"]);
 
-// Generation revalidation: if the turn changes while the status probe is in
-// flight, watchdog recovery must be discarded rather than touching the new turn.
 let resolveProbe;
 context.queryGenerationStatus = () => new Promise(resolve => { resolveProbe = resolve; });
 state.generationIdBySide.A = "gen-old";
@@ -146,4 +147,41 @@ assert.equal(staleResult.checked, true);
 assert.equal(Array.isArray(staleResult.results), true);
 assert.equal(staleResult.results.length, 0);
 
-console.log("v1.17 watchdog mutex regression: ok");
+// Privileged artifact fallback must fail before the core listener when the
+// content script did not attest that the URL was observed in response DOM.
+let fetchCoreCalls = 0;
+chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
+  if (message?.type !== "AI_BRIDGE_FETCH_ARTIFACT") return false;
+  fetchCoreCalls += 1;
+  sendResponse({ ok: true });
+  return false;
+});
+const artifactListener = listeners[listeners.length - 1];
+let artifactReply = null;
+artifactListener({
+  type: "AI_BRIDGE_FETCH_ARTIFACT",
+  url: "https://files.oaiusercontent.com/file.bin",
+  name: "file.bin",
+  generationId: "A-1234567890-abcd",
+  candidateSignature: "https://files.oaiusercontent.com/file.bin|file.bin",
+  observed: false
+}, { tab: { id: 101 } }, value => { artifactReply = value; });
+assert.equal(fetchCoreCalls, 0);
+assert.equal(artifactReply?.ok, false);
+assert.equal(artifactReply?.rejectedBy, "artifact-provenance-gate");
+
+// A current, bound, observed candidate reaches the core listener.
+state.generationIdBySide.A = "A-1234567890-abcd";
+artifactReply = null;
+artifactListener({
+  type: "AI_BRIDGE_FETCH_ARTIFACT",
+  url: "https://files.oaiusercontent.com/file.bin",
+  name: "file.bin",
+  generationId: "A-1234567890-abcd",
+  candidateSignature: "https://files.oaiusercontent.com/file.bin|file.bin",
+  observed: true
+}, { tab: { id: 101 } }, value => { artifactReply = value; });
+assert.equal(fetchCoreCalls, 1);
+assert.deepEqual(artifactReply, { ok: true });
+
+console.log("v1.17 watchdog mutex + artifact provenance regression: ok");
