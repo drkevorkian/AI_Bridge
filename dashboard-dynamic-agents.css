@@ -59,7 +59,13 @@
   font-weight: 800;
   letter-spacing: 0.03em;
   line-height: 1.2;
-  opacity: 0.88;
+  /*
+   * Keep health text fully opaque in every status. Some themes (notably
+   * Solarized) are only modestly above the WCAG normal-text threshold before
+   * blending, so fractional opacity can reduce a readable status label below
+   * 4.5:1. State distinction remains explicit in the text itself.
+   */
+  opacity: 1;
 }
 
 .dynamic-health-badge .status-label {
@@ -69,10 +75,6 @@
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-}
-
-.dynamic-health-badge[data-status="READY"] {
-  opacity: 1;
 }
 
 .dynamic-health-badge[data-status="GENERATING"] .status-label::after {
