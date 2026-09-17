@@ -67,16 +67,29 @@
     const baseTabSendMessage = chrome.tabs.sendMessage.bind(chrome.tabs);
 
     // The legacy coordinator assigns generationIdBySide immediately before its
-    // AI_BRIDGE_SEND call. Intercept only that provider-send message type so the
-    // freshly armed capability is durable before the prompt can leave the worker.
-    // PING/status/capture/artifact traffic is intentionally untouched.
+    // AI_BRIDGE_SEND call. Intercept only coordinator-owned sends: the message's
+    // generation must currently be armed in exactly one logical side. Synthetic
+    // transport-level AI_BRIDGE_SEND exercises that never arm coordinator state
+    // pass through unchanged, while real Bridge dispatches must also target the
+    // currently bound tab for that armed side.
     chrome.tabs.sendMessage = async function generationHardenedTabSendMessage(tabId, message, ...rest) {
       if (message?.type === "AI_BRIDGE_SEND" && message?.generationId) {
-        const side = sideForTab(Number(tabId));
-        if (!side) {
-          throw new Error("Provider dispatch generation has no currently bound logical side.");
+        const incomingGenerationId = String(message.generationId || "");
+        const armedSides = Object.entries(state?.generationIdBySide || {})
+          .filter(([, value]) => String(value || "") === incomingGenerationId)
+          .map(([side]) => String(side || "").toUpperCase());
+
+        if (armedSides.length > 1) {
+          throw new Error("Provider dispatch generation is armed for multiple logical sides.");
         }
-        await globalThis.persistArmedGenerationBeforeProviderSend(side, message.generationId);
+
+        if (armedSides.length === 1) {
+          const side = armedSides[0];
+          if (sideForTab(Number(tabId)) !== side) {
+            throw new Error(`Provider dispatch generation for AI ${side} does not target its current bound tab.`);
+          }
+          await globalThis.persistArmedGenerationBeforeProviderSend(side, incomingGenerationId);
+        }
       }
       return baseTabSendMessage(tabId, message, ...rest);
     };
