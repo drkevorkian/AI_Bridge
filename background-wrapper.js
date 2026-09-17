@@ -78,6 +78,16 @@ if (
   throw new Error("AI Bridge provider health monitor failed to initialize.");
 }
 
+importScripts("start-provider-health-hardening.js");
+if (
+  globalThis.__AI_BRIDGE_START_PROVIDER_HEALTH_GATE_V1__?.version !== 1 ||
+  globalThis.__AI_BRIDGE_START_PROVIDER_HEALTH_GATE_V1__?.backendStartRequiresReadyProviders !== true ||
+  globalThis.__AI_BRIDGE_START_PROVIDER_HEALTH_GATE_V1__?.probesAfterFreshChatReset !== true ||
+  globalThis.__AI_BRIDGE_START_PROVIDER_HEALTH_GATE_V1__?.doesNotSendProviderPrompts !== true
+) {
+  throw new Error("AI Bridge backend start Provider Health gate failed to initialize.");
+}
+
 importScripts("viewpoint-runtime.js");
 if (
   globalThis.__AI_BRIDGE_VIEWPOINT_RUNTIME_V1__?.version !== 1 ||
