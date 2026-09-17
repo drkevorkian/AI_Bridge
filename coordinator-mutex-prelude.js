@@ -29,6 +29,9 @@
     "AI_BRIDGE_INTERJECT",
     "AI_BRIDGE_SET_TEAM_RULES",
     "AI_BRIDGE_SET_AGENT_COUNT",
+    "AI_BRIDGE_NEW_CHATS",
+    "AI_BRIDGE_CLEAR_ARTIFACTS",
+    "AI_BRIDGE_CLOUD_PULL",
     "AI_BRIDGE_HUMAN_REOPEN",
     "AI_BRIDGE_HUMAN_SUPPRESS",
     "AI_BRIDGE_HUMAN_REPLY",
@@ -200,6 +203,10 @@
     serializesTabRemovalLifecycle: Boolean(originalTabRemovedAddListener),
     serializesTabReplacementLifecycle: Boolean(originalTabReplacedAddListener),
     serializesAgentCountMutation: serializedTypes.has("AI_BRIDGE_SET_AGENT_COUNT"),
+    serializesIdleStateMutations:
+      serializedTypes.has("AI_BRIDGE_NEW_CHATS") &&
+      serializedTypes.has("AI_BRIDGE_CLEAR_ARTIFACTS") &&
+      serializedTypes.has("AI_BRIDGE_CLOUD_PULL"),
     get active() { return active; }
   });
 })();
