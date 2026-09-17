@@ -54,6 +54,9 @@ const state = {
   phasePendingSides: [],
   activeSides: ["A", "B", "C"],
   generationIdBySide: { A: "gen-a", B: null, C: null },
+  viewpointIdentityBySide: {
+    A: { provenanceId: "chatgpt:tab:101:https://chatgpt.com/c/a", threadKey: "https://chatgpt.com/c/a", providerFamily: "chatgpt", boundTabId: 101 }
+  },
   roundStartedAtBySide: { A: 1, B: null, C: null },
   lastProgressAtBySide: { A: null, B: null, C: null },
   checkpointPending: false,
@@ -72,12 +75,32 @@ const context = vm.createContext({
   chrome,
   state,
   SIDES: ["A", "B", "C"],
+  __AI_BRIDGE_AGENT_CAPABILITIES__: {
+    version: 1,
+    supportedAgentSides: ["A", "B", "C", "D", "E"],
+    conversationIdentity({ side, tabId, url }) {
+      try {
+        const parsed = new URL(String(url || ""));
+        if (parsed.protocol !== "https:" || parsed.hostname !== "chatgpt.com") return null;
+        const pathname = parsed.pathname.replace(/\/+$/, "") || "/";
+        const threadKey = `${parsed.protocol}//${parsed.hostname}${pathname}`;
+        return { side, tabId, familyId: "chatgpt", threadKey, provenanceId: `chatgpt:tab:${tabId}:${threadKey}` };
+      } catch (_) { return null; }
+    }
+  },
+  tabForSide: side => state[`tab${side}`],
   isBatchWorkMode: () => false,
   clampStuckTimeoutMinutes: () => 5,
   shouldDeclareStuck: () => true,
   generationMatches: (expected, incoming) => Boolean(expected && incoming && expected === incoming),
   saveState: async () => {},
   skipStalledCheckpoint: async () => ({ skipped: true }),
+  completeRoundTimer: () => {},
+  pauseBridge: async reason => {
+    state.running = false;
+    state.paused = true;
+    state.pauseReason = reason;
+  },
   recoverStuckSide: async side => {
     events.push(`watchdog-start:${side}`);
     recoveryStartedResolve();
@@ -90,7 +113,8 @@ const context = vm.createContext({
     side,
     generating: false,
     pendingSend: false,
-    lastChangeAt: 0
+    lastChangeAt: 0,
+    pageUrl: "https://chatgpt.com/c/a"
   }),
   runWatchdogTick: async () => ({ checked: false })
 });
@@ -110,7 +134,9 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
 });
 
 vm.runInContext(watchdogSource, context, { filename: "watchdog-runtime-hardening.js" });
+assert.equal(context.__AI_BRIDGE_WATCHDOG_SECURITY__.version, 3);
 assert.equal(context.__AI_BRIDGE_WATCHDOG_SECURITY__.serializedWithCoordinator, true);
+assert.equal(context.__AI_BRIDGE_WATCHDOG_SECURITY__.revokesMismatchedConversationBeforeTimeout, true);
 assert.equal(context.__AI_BRIDGE_WATCHDOG_SECURITY__.mutatesActiveSides, false);
 
 const tickPromise = context.runWatchdogTick(10_000_000);
@@ -141,7 +167,7 @@ state.generationIdBySide.A = "gen-old";
 const staleTick = context.runWatchdogTick(20_000_000);
 await new Promise(resolve => setTimeout(resolve, 0));
 state.generationIdBySide.A = "gen-new";
-resolveProbe({ ok: true, generating: false, pendingSend: false, lastChangeAt: 0 });
+resolveProbe({ ok: true, generating: false, pendingSend: false, lastChangeAt: 0, pageUrl: "https://chatgpt.com/c/a" });
 const staleResult = await staleTick;
 assert.equal(staleResult.checked, true);
 assert.equal(Array.isArray(staleResult.results), true);
