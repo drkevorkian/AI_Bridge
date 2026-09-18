@@ -7,6 +7,7 @@ import { fileURLToPath } from "node:url";
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const wrapper = fs.readFileSync(path.join(root, "background-wrapper.js"), "utf8");
 const capsSrc = fs.readFileSync(path.join(root, "agent-capabilities.js"), "utf8");
+const rosterSrc = fs.readFileSync(path.join(root, "roster-state-adapter.js"), "utf8");
 const runtimeSrc = fs.readFileSync(path.join(root, "viewpoint-runtime.js"), "utf8");
 
 assert.ok(wrapper.includes('importScripts("viewpoint-runtime.js")'));
@@ -21,11 +22,14 @@ assert.match(wrapper, /revalidatesIdentityAtDispatch\s*!==\s*true/);
 function load(tabs) {
   const order = [];
   const savedSnapshots = [];
+  const state = { transcript: [], nextSeq: 1 };
+  for (const [side, row] of Object.entries(tabs)) state[`tab${side}`] = row?.id || null;
+
   const context = vm.createContext({
     URL, console, Object, Array, Number, String, Boolean, Set, Map, Promise, Error,
     setTimeout,
     SIDES: Object.keys(tabs),
-    state: { transcript: [], nextSeq: 1 },
+    state,
     tabForSide(side) {
       return tabs[side]?.id || 0;
     },
@@ -66,6 +70,7 @@ function load(tabs) {
   });
   context.globalThis = context;
   vm.runInContext(capsSrc, context, { filename: "agent-capabilities.js" });
+  vm.runInContext(rosterSrc, context, { filename: "roster-state-adapter.js" });
   context.__AI_BRIDGE_DYNAMIC_AGENTS_V1__ = Object.freeze({
     version: 1,
     liveSides: () => Object.keys(tabs)

@@ -6,6 +6,7 @@ import { fileURLToPath } from "node:url";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const capsSrc = fs.readFileSync(path.join(root, "agent-capabilities.js"), "utf8");
+const rosterSrc = fs.readFileSync(path.join(root, "roster-state-adapter.js"), "utf8");
 const runtimeSrc = fs.readFileSync(path.join(root, "viewpoint-runtime.js"), "utf8");
 const wrapperSrc = fs.readFileSync(path.join(root, "background-wrapper.js"), "utf8");
 
@@ -42,7 +43,7 @@ const context = vm.createContext({
   URL, console, Object, Array, Number, String, Boolean, Set, Map, Promise, Error, Date,
   setTimeout, clearTimeout,
   SIDES: Object.keys(tabs),
-  state: { transcript: [], nextSeq: 1 },
+  state: { transcript: [], nextSeq: 1, tabA: 101, tabD: 404, tabB: 202 },
   tabForSide(side) { return tabs[side]?.id || 0; },
   chrome: {
     tabs: {
@@ -74,6 +75,7 @@ const context = vm.createContext({
 });
 context.globalThis = context;
 vm.runInContext(capsSrc, context, { filename: "agent-capabilities.js" });
+vm.runInContext(rosterSrc, context, { filename: "roster-state-adapter.js" });
 context.__AI_BRIDGE_DYNAMIC_AGENTS_V1__ = Object.freeze({ version: 1, liveSides: () => Object.keys(tabs) });
 vm.runInContext(runtimeSrc, context, { filename: "viewpoint-runtime.js" });
 
