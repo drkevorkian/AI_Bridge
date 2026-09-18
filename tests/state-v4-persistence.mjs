@@ -31,6 +31,7 @@ assert.equal(api.legacyProjectionIsEphemeral, true);
 assert.equal(api.persistsLegacyRosterFields, false);
 assert.equal(api.canonicalizesAgentReferences, true);
 assert.equal(api.canonicalizesExecutionMaps, true);
+assert.equal(api.runtimeAgentReferencesDecoupledFromLegacyAliases, true);
 assert.equal(api.noStorageSideEffects, true);
 
 const v3 = {

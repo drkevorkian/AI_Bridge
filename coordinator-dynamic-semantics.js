@@ -107,20 +107,31 @@
     };
   }
 
-  // The legacy Direct Mesh parser explicitly matches only [A-C] even though its
-  // label-based path already consults the live SIDES array. Intercept only the
-  // explicit side token so AI D/E work without replacing custom-label routing.
+  // Explicit Mesh routing resolves against the live roster instead of a fixed
+  // A-E regex. A-E aliases remain valid while future canonical runtime keys
+  // such as agent-6 can participate without changing this parser again.
   if (typeof resolveCommandTarget === "function") {
     const baseResolveCommandTarget = resolveCommandTarget;
     resolveCommandTarget = function dynamicResolveCommandTarget(raw, fromSide = null) {
       const token = typeof normalizeTargetToken === "function"
         ? normalizeTargetToken(raw)
         : String(raw || "").trim().toLowerCase();
-      const match = token.match(/(?:^|\b)ai\s*[-:]?\s*([a-e])(?:\b|$)/i) || token.match(/^([a-e])$/i);
-      if (match) {
-        const side = String(match[1]).toUpperCase();
-        const sides = liveSides();
-        if (!sides.includes(side) || side === fromSide) return null;
+      const sides = liveSides();
+      for (const side of sides) {
+        const normalizedSide = String(side).toLowerCase();
+        const canonicalOrdinal = typeof caps.ordinalForRuntimeAgentKey === "function"
+          ? caps.ordinalForRuntimeAgentKey(String(side))
+          : (caps.ordinalForLegacySide(String(side)) ?? caps.ordinalForAgentId(String(side)));
+        const canonicalId = canonicalOrdinal == null ? null : caps.agentIdForOrdinal(canonicalOrdinal);
+        const explicitTokens = new Set([
+          normalizedSide,
+          `ai ${normalizedSide}`,
+          `ai-${normalizedSide}`,
+          `ai:${normalizedSide}`,
+          canonicalId ? canonicalId.toLowerCase() : ""
+        ].filter(Boolean));
+        if (!explicitTokens.has(token)) continue;
+        if (side === fromSide) return null;
         return side;
       }
       return baseResolveCommandTarget(raw, fromSide);
@@ -197,6 +208,7 @@
     version: 2,
     liveRosterPrompts: true,
     liveRosterMeshTargets: true,
+    meshTargetsUseLiveRuntimeKeys: true,
     derivedTurnMinimums: true,
     cloudJobsThroughE: true,
     cloudSchemaVersion: 2,

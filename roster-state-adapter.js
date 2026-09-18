@@ -33,10 +33,37 @@
     return bridgeState;
   }
 
+  function runtimeKeyForOrdinal(ordinal) {
+    if (typeof caps.runtimeAgentKeyForOrdinal === "function") {
+      return caps.runtimeAgentKeyForOrdinal(ordinal);
+    }
+    return caps.legacySideForOrdinal(ordinal) || caps.agentIdForOrdinal(ordinal);
+  }
+
+  function ordinalForAgentRef(rawRef) {
+    if (typeof rawRef !== "string") return null;
+    if (typeof caps.ordinalForRuntimeAgentKey === "function") {
+      return caps.ordinalForRuntimeAgentKey(rawRef);
+    }
+    const legacyOrdinal = caps.ordinalForLegacySide(rawRef);
+    if (legacyOrdinal !== null) return legacyOrdinal;
+    if (typeof caps.ordinalForAgentId === "function") return caps.ordinalForAgentId(rawRef);
+    const match = /^agent-([1-9][0-9]*)$/.exec(rawRef);
+    if (!match) return null;
+    const ordinal = Number(match[1]);
+    return Number.isSafeInteger(ordinal) && ordinal >= 1 ? ordinal : null;
+  }
+
+  function normalizeAgentRef(rawRef) {
+    const ordinal = ordinalForAgentRef(String(rawRef || ""));
+    if (ordinal === null) throw new RangeError("Unknown logical-agent reference.");
+    return runtimeKeyForOrdinal(ordinal);
+  }
+
   function normalizeSide(rawSide) {
-    const side = String(rawSide || "").toUpperCase();
-    if (!SIDE_SET.has(side)) throw new RangeError("Unknown logical-agent side.");
-    return side;
+    const ref = normalizeAgentRef(rawSide);
+    if (!SIDE_SET.has(ref)) throw new RangeError("Unknown logical-agent side.");
+    return ref;
   }
 
   function normalizeTabId(raw) {
@@ -60,16 +87,15 @@
       Array.isArray(state?.roster?.agents);
   }
 
-  function rosterAgentBySide(state, side) {
+  function rosterAgentByRef(state, rawRef) {
     if (!isRosterV2State(state)) return null;
-    const ordinal = caps.ordinalForLegacySide(side);
+    const ordinal = ordinalForAgentRef(String(rawRef || ""));
     if (ordinal === null) return null;
     const id = caps.agentIdForOrdinal(ordinal);
     return state.roster.agents.find(agent =>
       agent &&
       String(agent.id || "") === id &&
-      Number(agent.ordinal) === ordinal &&
-      String(agent.legacySide || "") === side
+      Number(agent.ordinal) === ordinal
     ) || null;
   }
 
@@ -77,12 +103,12 @@
     const normalized = agents.map((agent, index) => {
       const ordinal = index + 1;
       const side = caps.legacySideForOrdinal(ordinal);
-      if (!side) throw new RangeError("Current compatibility runtime cannot represent this roster ordinal.");
+      const runtimeKey = runtimeKeyForOrdinal(ordinal);
       return Object.freeze({
         id: caps.agentIdForOrdinal(ordinal),
         ordinal,
         legacySide: side,
-        label: normalizeLabel(agent?.label, side),
+        label: normalizeLabel(agent?.label, runtimeKey),
         job: normalizeJob(agent?.job),
         tabId: normalizeTabId(agent?.tabId)
       });
@@ -107,7 +133,7 @@
 
   function syncLegacyProjection(state) {
     for (const side of ALL_SIDES) {
-      const agent = rosterAgentBySide(state, side);
+      const agent = rosterAgentByRef(state, side);
       state[`tab${side}`] = agent?.tabId ?? null;
       state[`label${side}`] = agent?.label ?? `AI ${side}`;
       state[`job${side}`] = agent?.job ?? "";
@@ -115,36 +141,42 @@
     return state;
   }
 
-  function readAgent(bridgeState, rawSide) {
+  function readAgent(bridgeState, rawRef) {
     const state = requireState(bridgeState);
-    const side = normalizeSide(rawSide);
-    const rosterAgent = rosterAgentBySide(state, side);
+    const runtimeKey = normalizeAgentRef(rawRef);
+    const ordinal = ordinalForAgentRef(runtimeKey);
+    const rosterAgent = rosterAgentByRef(state, runtimeKey);
     if (rosterAgent) {
       return Object.freeze({
-        side,
+        side: runtimeKey,
         id: rosterAgent.id,
         ordinal: rosterAgent.ordinal,
         tabId: normalizeTabId(rosterAgent.tabId),
-        label: normalizeLabel(rosterAgent.label, side),
+        label: normalizeLabel(rosterAgent.label, runtimeKey),
         job: normalizeJob(rosterAgent.job)
       });
     }
 
+    const legacySide = caps.legacySideForOrdinal(ordinal);
+    if (!legacySide) {
+      throw new RangeError("Canonical F+ agent is inactive in the current roster.");
+    }
     return Object.freeze({
-      side,
-      tabId: normalizeTabId(state[`tab${side}`]),
-      label: String(state[`label${side}`] ?? `AI ${side}`),
-      job: String(state[`job${side}`] ?? "")
+      side: legacySide,
+      tabId: normalizeTabId(state[`tab${legacySide}`]),
+      label: String(state[`label${legacySide}`] ?? `AI ${legacySide}`),
+      job: String(state[`job${legacySide}`] ?? "")
     });
   }
 
-  function writeAgent(bridgeState, rawSide, patch) {
+  function writeAgent(bridgeState, rawRef, patch) {
     const state = requireState(bridgeState);
-    const side = normalizeSide(rawSide);
+    const runtimeKey = normalizeAgentRef(rawRef);
+    const ordinal = ordinalForAgentRef(runtimeKey);
+    const side = caps.legacySideForOrdinal(ordinal);
     const input = patch && typeof patch === "object" && !Array.isArray(patch) ? patch : {};
 
     if (isRosterV2State(state)) {
-      const ordinal = caps.ordinalForLegacySide(side);
       const index = ordinal === null ? -1 : ordinal - 1;
       if (index < 0 || index >= state.roster.agents.length) {
         throw new RangeError("Cannot write an inactive logical agent in the V4 roster.");
@@ -154,7 +186,7 @@
       const next = {
         ...current,
         ...(Object.prototype.hasOwnProperty.call(input, "tabId") ? { tabId: normalizeTabId(input.tabId) } : {}),
-        ...(Object.prototype.hasOwnProperty.call(input, "label") ? { label: normalizeLabel(input.label, side) } : {}),
+        ...(Object.prototype.hasOwnProperty.call(input, "label") ? { label: normalizeLabel(input.label, runtimeKey) } : {}),
         ...(Object.prototype.hasOwnProperty.call(input, "job") ? { job: normalizeJob(input.job) } : {})
       };
       if (
@@ -163,16 +195,16 @@
         input.tabId !== "" &&
         next.tabId === null
       ) {
-        throw new TypeError(`AI ${side} tabId must be a positive integer or null.`);
+        throw new TypeError(`AI ${runtimeKey} tabId must be a positive integer or null.`);
       }
 
       const agents = state.roster.agents.map((agent, i) => i === index ? next : agent);
       replaceRosterAgents(state, agents);
-      return readAgent(state, side);
+      return readAgent(state, runtimeKey);
     }
 
-    // State V3 compatibility path. This exists only for the one-way migration
-    // window and never creates a second persisted V4 roster.
+    // State V3 compatibility path only has A-E fields.
+    if (!side) throw new RangeError("Canonical F+ agents require State V4 roster authority.");
     if (Object.prototype.hasOwnProperty.call(input, "tabId")) {
       const tabId = normalizeTabId(input.tabId);
       if (input.tabId != null && input.tabId !== "" && tabId === null) {
@@ -187,7 +219,7 @@
       state[`job${side}`] = normalizeJob(input.job);
     }
 
-    return readAgent(state, side);
+    return readAgent(state, runtimeKey);
   }
 
   function activeSides(bridgeState, rawCount) {
@@ -197,7 +229,9 @@
       rawCount == null ? authoritativeCount : rawCount,
       caps.defaultAgentCount
     );
-    return Object.freeze(Array.from(caps.sideIdsForCount(count)));
+    return Object.freeze(
+      Array.from({ length: count }, (_, index) => runtimeKeyForOrdinal(index + 1))
+    );
   }
 
   function snapshot(bridgeState, rawCount) {
@@ -231,14 +265,15 @@
     const agents = [];
     for (let ordinal = 1; ordinal <= count; ordinal += 1) {
       const side = caps.legacySideForOrdinal(ordinal);
+      const runtimeKey = runtimeKeyForOrdinal(ordinal);
       const existing = state.roster.agents[ordinal - 1];
       agents.push(existing || {
         id: caps.agentIdForOrdinal(ordinal),
         ordinal,
         legacySide: side,
-        label: state[`label${side}`] ?? `AI ${side}`,
-        job: state[`job${side}`] ?? "",
-        tabId: state[`tab${side}`] ?? null
+        label: side ? (state[`label${side}`] ?? `AI ${side}`) : `AI ${runtimeKey}`,
+        job: side ? (state[`job${side}`] ?? "") : "",
+        tabId: side ? (state[`tab${side}`] ?? null) : null
       });
     }
     replaceRosterAgents(state, agents);
@@ -285,9 +320,11 @@
     runtimeWritesRosterV2: true,
     persistsSecondRosterRepresentation: false,
     validatesSideKeys: true,
+    runtimeAgentReferences: true,
     writeFieldAllowlist: Object.freeze(["tabId", "label", "job"]),
     allSides: ALL_SIDES,
     normalizeSide,
+    normalizeAgentRef,
     readAgent,
     writeAgent,
     activeSides,

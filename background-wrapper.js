@@ -45,6 +45,7 @@ if (
   globalThis.__AI_BRIDGE_STATE_V4_PERSISTENCE_V1__?.persistsLegacyRosterFields !== false ||
   globalThis.__AI_BRIDGE_STATE_V4_PERSISTENCE_V1__?.canonicalizesAgentReferences !== true ||
   globalThis.__AI_BRIDGE_STATE_V4_PERSISTENCE_V1__?.canonicalizesExecutionMaps !== true ||
+  globalThis.__AI_BRIDGE_STATE_V4_PERSISTENCE_V1__?.runtimeAgentReferencesDecoupledFromLegacyAliases !== true ||
   globalThis.__AI_BRIDGE_STATE_V4_PERSISTENCE_V1__?.noStorageSideEffects !== true
 ) {
   throw new Error("AI Bridge State V4 persistence contract failed to initialize.");
@@ -58,6 +59,7 @@ if (
   globalThis.__AI_BRIDGE_ROSTER_STATE_ADAPTER_V1__?.runtimeWritesRosterV2 !== true ||
   globalThis.__AI_BRIDGE_ROSTER_STATE_ADAPTER_V1__?.persistsSecondRosterRepresentation !== false ||
   globalThis.__AI_BRIDGE_ROSTER_STATE_ADAPTER_V1__?.validatesSideKeys !== true ||
+  globalThis.__AI_BRIDGE_ROSTER_STATE_ADAPTER_V1__?.runtimeAgentReferences !== true ||
   typeof globalThis.AgentRosterStateAdapter !== "function"
 ) {
   throw new Error("AI Bridge roster-state adapter failed to initialize.");

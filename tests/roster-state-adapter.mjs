@@ -35,6 +35,7 @@ assert.equal(api.legacyProjectionEphemeral, true);
 assert.equal(api.runtimeWritesRosterV2, true);
 assert.equal(api.persistsSecondRosterRepresentation, false);
 assert.equal(api.validatesSideKeys, true);
+assert.equal(api.runtimeAgentReferences, true);
 assert.deepEqual(Array.from(api.writeFieldAllowlist), ["tabId", "label", "job"]);
 
 const state = {
@@ -76,8 +77,9 @@ assert.equal(Object.prototype.polluted, undefined);
 assert.equal(state.constructor, Object.prototype.constructor);
 assert.equal(Object.prototype.hasOwnProperty.call(state, "prototype"), false);
 
-assert.throws(() => adapter.set("Z", { tabId: 1 }), /Unknown logical-agent side/);
-assert.throws(() => adapter.set("__proto__", { tabId: 1 }), /Unknown logical-agent side/);
+assert.throws(() => adapter.set("Z", { tabId: 1 }), /Unknown logical-agent reference|Unknown logical-agent side/);
+assert.throws(() => adapter.set("__proto__", { tabId: 1 }), /Unknown logical-agent reference|Unknown logical-agent side/);
+assert.throws(() => adapter.get("agent-6"), /inactive|current roster/i);
 assert.throws(() => adapter.set("A", { tabId: -1 }), /positive integer or null/);
 
 const snapshot = adapter.snapshot();
@@ -125,6 +127,7 @@ assert.equal(v4.roster.nextOrdinal, 6);
 assert.deepEqual(Array.from(v4Adapter.sides()), ["A", "B", "C", "D", "E"]);
 assert.equal(v4.roster.agents[3].id, "agent-4");
 assert.equal(v4.roster.agents[4].legacySide, "E");
+assert.equal(v4Adapter.get("agent-5").side, "E");
 
 v4Adapter.setCount(2);
 assert.equal(v4.roster.agents.length, 2);
