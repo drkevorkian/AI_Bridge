@@ -1418,13 +1418,34 @@ async function tabExists(tabId) {
   }
 }
 
+const STARTUP_BINDING_TIMEOUT_MS = 3000;
+const STARTUP_AUX_TIMEOUT_MS = 4000;
+
+function startupTimeout(promise, label, timeoutMs = STARTUP_AUX_TIMEOUT_MS) {
+  let timer = null;
+  const timeout = new Promise((_, reject) => {
+    timer = setTimeout(() => reject(new Error(`${label} timed out during service-worker startup.`)), timeoutMs);
+  });
+  return Promise.race([Promise.resolve(promise), timeout]).finally(() => {
+    if (timer !== null) clearTimeout(timer);
+  });
+}
+
 async function validateSavedBindings() {
   if (!state.sessionActive) return;
 
   const missing = [];
   for (const side of SIDES) {
     const tabId = tabForSide(side);
-    if (!(await tabExists(tabId))) missing.push(side);
+    let exists = false;
+    try {
+      exists = await startupTimeout(tabExists(tabId), `Validate AI ${side} tab`, STARTUP_BINDING_TIMEOUT_MS);
+    } catch (_) {
+      // Fail closed. A stalled Chrome tab lookup must never keep stateReady
+      // pending forever or preserve an unverified binding.
+      exists = false;
+    }
+    if (!exists) missing.push(side);
   }
 
   if (missing.length) {
@@ -1432,7 +1453,61 @@ async function validateSavedBindings() {
     state.paused = true;
     state.pauseReason = `Reconnect AI ${missing.join(", AI ")} and press Resume.`;
     for (const side of missing) writeRosterAgentForSide(side, { tabId: null });
-    await saveState();
+    try {
+      await startupTimeout(saveState(), "Persist invalidated startup bindings");
+    } catch (err) {
+      appendLog({
+        time: Date.now(),
+        type: "storage",
+        text: `Startup binding invalidation is active in memory, but persistence did not complete: ${String(err?.message || err).slice(0, 240)}`
+      });
+    }
+  }
+}
+
+async function finishLoadedStateStartup(loadFailure) {
+  try {
+    // State hydration and binding validation have already completed before this
+    // task starts. Everything below is auxiliary startup work and must never
+    // hold AI_BRIDGE_GET_STATE hostage.
+    if (!loadFailure && state.sessionActive && state.running) {
+      try {
+        await startupTimeout(
+          Promise.all(SIDES.map(side => ensureTabListener(tabForSide(side)))),
+          "Reconnect provider tab listeners"
+        );
+      } catch (err) {
+        state.running = false;
+        state.paused = true;
+        state.pauseReason = `Automatic reconnect failed: ${err.message}. Rebind the provider tabs and press Resume.`;
+        try { await startupTimeout(saveState(), "Persist reconnect failure"); } catch (_) {}
+      }
+    }
+
+    if (!loadFailure && state.awaitingHuman && state.pendingHuman) {
+      await startupTimeout(
+        showHumanAttention(state.pendingHuman.requestingSide, state.pendingHuman.prompt),
+        "Restore human-attention UI"
+      );
+    } else {
+      await startupTimeout(clearAttention(), "Clear human-attention UI");
+    }
+
+    if (!loadFailure && state.sessionActive && state.running && !state.awaitingHuman) {
+      await startupTimeout(ensureWatchdogAlarm(), "Restore watchdog alarm");
+    } else {
+      await startupTimeout(clearWatchdogAlarm(), "Clear watchdog alarm");
+    }
+
+    try { await startupTimeout(ensureUpdateAlarm(), "Restore update alarm"); } catch (_) {}
+  } catch (err) {
+    // Auxiliary startup failure must remain visible but may not make dashboard
+    // state retrieval wait forever.
+    state.running = false;
+    state.paused = true;
+    state.pauseReason = `Background startup follow-up failed: ${String(err?.message || err).slice(0, 240)}`;
+    appendLog({ time: Date.now(), type: "startup", text: state.pauseReason });
+    try { await startupTimeout(saveState(), "Persist startup follow-up failure"); } catch (_) {}
   }
 }
 
@@ -1593,33 +1668,16 @@ async function loadState() {
     state.sourceDeliveredBySide = { A: false, B: false, C: false };
   }
 
+  // Binding validation remains part of readiness because routing authority must
+  // be checked before callers can act on restored state. Each Chrome tab lookup
+  // is bounded and fails closed, so this step cannot hang forever.
   if (!loadFailure) await validateSavedBindings();
 
-  // Manifest V3 service workers are disposable. Reconnect the currently live
-  // provider tabs so a saved running session can resume without opening the UI.
-  if (!loadFailure && state.sessionActive && state.running) {
-    try {
-      await Promise.all(SIDES.map(side => ensureTabListener(tabForSide(side))));
-    } catch (err) {
-      state.running = false;
-      state.paused = true;
-      state.pauseReason = `Automatic reconnect failed: ${err.message}. Rebind the provider tabs and press Resume.`;
-      await saveState();
-    }
-  }
-
-  if (!loadFailure && state.awaitingHuman && state.pendingHuman) {
-    await showHumanAttention(state.pendingHuman.requestingSide, state.pendingHuman.prompt);
-  } else {
-    await clearAttention();
-  }
-
-  if (!loadFailure && state.sessionActive && state.running && !state.awaitingHuman) {
-    await ensureWatchdogAlarm();
-  } else {
-    await clearWatchdogAlarm();
-  }
-  try { await ensureUpdateAlarm(); } catch (_) {}
+  // Do not make dashboard state retrieval wait on listener reconnects,
+  // attention windows, or alarms. Those are auxiliary MV3 startup tasks.
+  queueMicrotask(() => {
+    finishLoadedStateStartup(loadFailure).catch(() => {});
+  });
 }
 
 function rosterAgentForSide(side) {
