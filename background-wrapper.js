@@ -46,6 +46,9 @@ if (
   globalThis.__AI_BRIDGE_STATE_V4_PERSISTENCE_V1__?.canonicalizesAgentReferences !== true ||
   globalThis.__AI_BRIDGE_STATE_V4_PERSISTENCE_V1__?.canonicalizesExecutionMaps !== true ||
   globalThis.__AI_BRIDGE_STATE_V4_PERSISTENCE_V1__?.runtimeAgentReferencesDecoupledFromLegacyAliases !== true ||
+  globalThis.__AI_BRIDGE_STATE_V4_PERSISTENCE_V1__?.importsLegacyRuntimeRefsInV4 !== true ||
+  globalThis.__AI_BRIDGE_STATE_V4_PERSISTENCE_V1__?.recoversStaleRuntimeRefsInV4 !== true ||
+  globalThis.__AI_BRIDGE_STATE_V4_PERSISTENCE_V1__?.canonicalRosterRemainsStrictDuringRecovery !== true ||
   globalThis.__AI_BRIDGE_STATE_V4_PERSISTENCE_V1__?.noStorageSideEffects !== true
 ) {
   throw new Error("AI Bridge State V4 persistence contract failed to initialize.");
