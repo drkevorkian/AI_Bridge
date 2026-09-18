@@ -7,6 +7,7 @@ import { fileURLToPath } from "node:url";
 const here = path.dirname(fileURLToPath(import.meta.url));
 const root = path.resolve(here, "..");
 const mutexSource = fs.readFileSync(path.join(root, "coordinator-mutex-prelude.js"), "utf8");
+const executionSource = fs.readFileSync(path.join(root, "execution-key-adapter.js"), "utf8");
 const watchdogSource = fs.readFileSync(path.join(root, "watchdog-runtime-hardening.js"), "utf8");
 
 assert.match(mutexSource, /globalThis\.enqueueCoordinatorMutation\s*=\s*enqueueCoordinatorMutation/);
@@ -78,6 +79,19 @@ const context = vm.createContext({
   __AI_BRIDGE_AGENT_CAPABILITIES__: {
     version: 1,
     supportedAgentSides: ["A", "B", "C", "D", "E"],
+    ordinalForAgentId(id) {
+      const match = /^agent-([1-9][0-9]*)$/.exec(String(id || ""));
+      return match ? Number(match[1]) : null;
+    },
+    ordinalForLegacySide(side) {
+      const value = String(side || "").toUpperCase();
+      return /^[A-E]$/.test(value) ? value.charCodeAt(0) - 64 : null;
+    },
+    legacySideForOrdinal(ordinal) {
+      const n = Number(ordinal);
+      return Number.isInteger(n) && n >= 1 && n <= 5 ? String.fromCharCode(64 + n) : null;
+    },
+    agentIdForOrdinal(ordinal) { return `agent-${Number(ordinal)}`; },
     conversationIdentity({ side, tabId, url }) {
       try {
         const parsed = new URL(String(url || ""));
@@ -133,11 +147,13 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
   return true;
 });
 
+vm.runInContext(executionSource, context, { filename: "execution-key-adapter.js" });
 vm.runInContext(watchdogSource, context, { filename: "watchdog-runtime-hardening.js" });
 assert.equal(context.__AI_BRIDGE_WATCHDOG_SECURITY__.version, 3);
 assert.equal(context.__AI_BRIDGE_WATCHDOG_SECURITY__.serializedWithCoordinator, true);
 assert.equal(context.__AI_BRIDGE_WATCHDOG_SECURITY__.revokesMismatchedConversationBeforeTimeout, true);
 assert.equal(context.__AI_BRIDGE_WATCHDOG_SECURITY__.mutatesActiveSides, false);
+assert.equal(context.__AI_BRIDGE_WATCHDOG_SECURITY__.canonicalExecutionMapAccess, true);
 
 const tickPromise = context.runWatchdogTick(10_000_000);
 await recoveryStarted;
