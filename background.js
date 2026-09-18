@@ -3790,9 +3790,12 @@ async function applyIdleCloudSettings(settings) {
   if (state.sessionActive) {
     throw new Error("Stop the active Bridge session before pulling cloud settings into this profile.");
   }
-  writeRosterAgentForSide("A", { job: settings.jobA });
-  writeRosterAgentForSide("B", { job: settings.jobB });
-  writeRosterAgentForSide("C", { job: settings.jobC });
+  const baseCloudJobSides = Number(state?.stateVersion) === 4 && Array.isArray(state?.roster?.agents)
+    ? state.roster.agents.map(agent => String(agent?.legacySide || "")).filter(side => ["A", "B", "C"].includes(side))
+    : ["A", "B", "C"];
+  for (const side of baseCloudJobSides) {
+    writeRosterAgentForSide(side, { job: settings[`job${side}`] });
+  }
   state.teamRules = settings.teamRules;
   state.workMode = settings.workMode;
   state.startSide = settings.startSide;
