@@ -118,7 +118,16 @@ assert.deepEqual([...participants], []);
 // Production generation matching is intentionally supplied by the post-core
 // hardening layer. Empty expected IDs must fail closed so leftover DOM output
 // during START/RESUME cannot advance a session.
-const generationSandbox = { globalThis: null, String, Boolean };
+const generationSandbox = {
+  globalThis: null,
+  String,
+  Boolean,
+  __AI_BRIDGE_EXECUTION_KEY_ADAPTER_V1__: {
+    version: 1,
+    read() { return undefined; },
+    write(_state, _mapName, _agentRef, value) { return value; }
+  }
+};
 generationSandbox.globalThis = generationSandbox;
 vm.createContext(generationSandbox);
 vm.runInContext('function generationMatches(expectedId, incomingId) { const expected = String(expectedId || ""); if (!expected) return true; return String(incomingId || "") === expected; }', generationSandbox);
