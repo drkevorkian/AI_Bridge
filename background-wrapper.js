@@ -1,11 +1,14 @@
 // AI Bridge service-worker bootstrap.
 //
 // Load the shared logical-agent/provider capability contract before the
-// coordinator. The migration initially keeps the existing A/B/C routing intact,
-// but every later dynamic-agent layer consumes this one audited provider limit.
+// coordinator. Logical-agent capacity is intentionally independent from the
+// number of supported provider families; same-provider viewpoints make those
+// separate concepts. The current v1.17.1 runtime/UI ceiling remains five.
 importScripts("agent-capabilities.js");
 if (
   globalThis.__AI_BRIDGE_AGENT_CAPABILITIES__?.version !== 1 ||
+  globalThis.__AI_BRIDGE_AGENT_CAPABILITIES__?.providerFamilyCount !== 5 ||
+  globalThis.__AI_BRIDGE_AGENT_CAPABILITIES__?.maxLogicalAgents !== 5 ||
   globalThis.__AI_BRIDGE_AGENT_CAPABILITIES__?.maxUniqueProviderAgents !== 5 ||
   globalThis.__AI_BRIDGE_AGENT_CAPABILITIES__?.uniqueTabBindingNeverRelaxed !== true ||
   globalThis.__AI_BRIDGE_AGENT_CAPABILITIES__?.distinctThreadRequiredWhenSameFamily !== true ||
