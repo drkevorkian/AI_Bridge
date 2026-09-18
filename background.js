@@ -2681,10 +2681,12 @@ async function bindTabsFromMessage(msg) {
   await Promise.all(tabIds.map(ensureTabListener));
 
   for (const side of SIDES) {
-    const previousTab = Number(state[`tab${side}`]);
+    const previousTab = Number(tabForSide(side));
     const nextTab = Number(msg[`tab${side}`]);
-    state[`tab${side}`] = nextTab;
-    if (msg[`label${side}`]) state[`label${side}`] = String(msg[`label${side}`]);
+    writeRosterAgentForSide(side, {
+      tabId: nextTab,
+      ...(msg[`label${side}`] ? { label: String(msg[`label${side}`]) } : {})
+    });
     if (isBatchWorkMode() && state.phasePendingSides.includes(side) && previousTab !== nextTab) {
       state.phaseSentSides = state.phaseSentSides.filter(item => item !== side);
       delete state.lastResponseBySide[side];

@@ -66,6 +66,12 @@ const savedBindingBody = functionBody(background, "validateSavedBindings");
 assert.match(savedBindingBody, /writeRosterAgentForSide\(side, \{ tabId: null \}\)/);
 assert.doesNotMatch(savedBindingBody, /state\[`tab\$\{side\}`\]\s*=/);
 
+const baseRebinderBody = functionBody(background, "bindTabsFromMessage");
+assert.match(baseRebinderBody, /const previousTab = Number\(tabForSide\(side\)\)/);
+assert.match(baseRebinderBody, /writeRosterAgentForSide\(side, \{/);
+assert.doesNotMatch(baseRebinderBody, /state\[`tab\$\{side\}`\]\s*=/);
+assert.doesNotMatch(baseRebinderBody, /state\[`label\$\{side\}`\]\s*=/);
+
 assert.match(
   semantics,
   /rosterState\.writeAgent\(state, side, \{[\s\S]*?job:/,
