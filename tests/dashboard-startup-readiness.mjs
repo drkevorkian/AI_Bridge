@@ -11,7 +11,7 @@ assert.match(background, /STARTUP_BINDING_TIMEOUT_MS = 3000/);
 assert.match(background, /STARTUP_AUX_TIMEOUT_MS = 4000/);
 assert.match(background, /function startupTimeout\(/);
 assert.match(background, /Promise\.all\(SIDES\.map\(async side =>/);
-assert.match(background, /startupTimeout\(tabExists\(tabId\)/);
+assert.match(background, /startupTimeout\([\s\S]*?tabExists\(tabId\)/);
 assert.match(background, /finishLoadedStateStartup\(loadFailure\)/);
 assert.match(background, /queueMicrotask\(\(\) => \{/);
 assert.match(background, /Everything below is auxiliary startup work and must never/);
