@@ -218,7 +218,7 @@ assert.throws(
     schemaVersion: 2,
     roster: { version: 2, nextOrdinal: 2, agents: [{ id: "agent-1", ordinal: 1, label: "A", job: "", nested: { accessToken: "hidden" } }] }
   }),
-  /credential fields/i,
+  /credential (?:material|fields)/i,
   "nested credential-like keys must fail closed"
 );
 assert.equal(cloudSandbox.sanitizeCloudSettings({ theme: "not-a-theme", workMode: "explode" }).theme, "blizzard");
