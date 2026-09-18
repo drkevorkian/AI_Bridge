@@ -9,6 +9,7 @@ const html = fs.readFileSync(path.join(root, "dashboard.html"), "utf8");
 const css = fs.readFileSync(path.join(root, "dashboard.css"), "utf8");
 const dashboardJs = fs.readFileSync(path.join(root, "dashboard.js"), "utf8");
 const background = fs.readFileSync(path.join(root, "background.js"), "utf8");
+const rosterPrelude = fs.readFileSync(path.join(root, "dashboard-roster-prelude.js"), "utf8");
 const capsSrc = fs.readFileSync(path.join(root, "agent-capabilities.js"), "utf8");
 const cloudV2Src = fs.readFileSync(path.join(root, "cloud-settings-v2.js"), "utf8");
 const readme = fs.readFileSync(path.join(root, "README.md"), "utf8");
@@ -31,7 +32,7 @@ function extractFunction(src, name) {
 
 const requiredIds = [
   "start", "pause", "resume", "stop",
-  "tabA", "tabB", "tabC", "jobA", "jobB", "jobC",
+  "agentRosterHost",
   "prompt", "teamRules", "interjectText", "sendInterject",
   "themeSelect", "layoutSelect", "layoutStudioBtn", "layoutClassicBtn",
   "toolsToggle",
@@ -41,6 +42,11 @@ const requiredIds = [
 for (const id of requiredIds) {
   assert.match(html, new RegExp(`id="${id}"`), `missing required control id ${id}`);
 }
+for (const generated of ["tabA", "tabB", "tabC", "jobA", "jobB", "jobC"]) {
+  assert.doesNotMatch(html, new RegExp(`id="${generated}"`));
+}
+assert.match(rosterPrelude, /tab" \+ side/);
+assert.match(rosterPrelude, /job" \+ side/);
 
 const ids = [...html.matchAll(/id="([^"]+)"/g)].map(m => m[1]);
 assert.equal(ids.length, new Set(ids).size, `duplicate ids: ${ids.filter((id, i) => ids.indexOf(id) !== i)}`);
