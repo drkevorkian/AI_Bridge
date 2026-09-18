@@ -113,7 +113,7 @@ assert.equal(JSON.stringify(roundTrip), JSON.stringify(migrated),
 assert.throws(
   () => api.hydratePersistedState({
     ...migrated,
-    generationIdBySide: { "__proto__": "bad" }
+    generationIdBySide: { ["__proto__"]: "bad" }
   }),
   /forbidden key|malformed canonical agent ID/i
 );
