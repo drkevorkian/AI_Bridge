@@ -1587,8 +1587,9 @@ function rosterAgentForSide(side) {
   };
 }
 
-function writeRosterAgentForSide(side, patch = {}) {
+function writeRosterAgentForSide(side, patch) {
   const normalizedSide = String(side || "").toUpperCase();
+  patch = patch && typeof patch === "object" && !Array.isArray(patch) ? patch : {};
   const roster = globalThis.__AI_BRIDGE_ROSTER_STATE_ADAPTER_V1__;
   if (roster?.version === 1 && typeof roster.writeAgent === "function") {
     return roster.writeAgent(state, normalizedSide, patch);
