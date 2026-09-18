@@ -46,7 +46,20 @@ const caps = {
   supportedAgentSides: ["A", "B", "C", "D", "E"],
   defaultAgentCount: 3,
   maxUniqueProviderAgents: 5,
+  maxLogicalAgents: 5,
   duplicateProviderAgentsEnabled: true,
+  agentIdForOrdinal(ordinal) {
+    const n = Number(ordinal);
+    return Number.isInteger(n) && n >= 1 ? `agent-${n}` : null;
+  },
+  ordinalForLegacySide(side) {
+    const value = String(side || "").toUpperCase();
+    return /^[A-E]$/.test(value) ? value.charCodeAt(0) - 64 : null;
+  },
+  legacySideForOrdinal(ordinal) {
+    const n = Number(ordinal);
+    return Number.isInteger(n) && n >= 1 && n <= 5 ? String.fromCharCode(64 + n) : null;
+  },
   normalizeAgentCount(value, fallback) {
     const n = Number(value);
     return Number.isInteger(n) && n >= 1 && n <= 5 ? n : fallback;
