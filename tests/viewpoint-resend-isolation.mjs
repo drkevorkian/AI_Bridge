@@ -8,6 +8,7 @@ const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const background = fs.readFileSync(path.join(root, "background.js"), "utf8");
 const capsSrc = fs.readFileSync(path.join(root, "agent-capabilities.js"), "utf8");
 const rosterSrc = fs.readFileSync(path.join(root, "roster-state-adapter.js"), "utf8");
+const executionSrc = fs.readFileSync(path.join(root, "execution-key-adapter.js"), "utf8");
 const viewpointSrc = fs.readFileSync(path.join(root, "viewpoint-runtime.js"), "utf8");
 const resendSrc = fs.readFileSync(path.join(root, "resend-runtime-hardening.js"), "utf8");
 const generationSrc = fs.readFileSync(path.join(root, "coordinator-generation-hardening.js"), "utf8");
@@ -115,6 +116,7 @@ const context = vm.createContext({
 context.globalThis = context;
 
 vm.runInContext(capsSrc, context, { filename: "agent-capabilities.js" });
+vm.runInContext(executionSrc, context, { filename: "execution-key-adapter.js" });
 vm.runInContext(rosterSrc, context, { filename: "roster-state-adapter.js" });
 context.__AI_BRIDGE_DYNAMIC_AGENTS_V1__ = Object.freeze({
   version: 1,
