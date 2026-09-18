@@ -32,6 +32,7 @@ assert.equal(api.persistsLegacyRosterFields, false);
 assert.equal(api.canonicalizesAgentReferences, true);
 assert.equal(api.canonicalizesExecutionMaps, true);
 assert.equal(api.runtimeAgentReferencesDecoupledFromLegacyAliases, true);
+assert.equal(api.importsLegacyRuntimeRefsInV4, true);
 assert.equal(api.noStorageSideEffects, true);
 
 const v3 = {
@@ -110,6 +111,36 @@ assert.equal(hydrated.jobD, "Security");
 const roundTrip = api.serializeRuntimeState(hydrated);
 assert.equal(JSON.stringify(roundTrip), JSON.stringify(migrated),
   "V4 serialize/hydrate must be deterministic and idempotent");
+
+// Transitional V4 builds could persist legacy A-E runtime refs inside an
+// otherwise canonical V4 snapshot. Hydration must import those refs without
+// weakening the canonical write format.
+const hybridV4 = {
+  ...migrated,
+  currentSide: "D",
+  startSide: "A",
+  mainSide: "B",
+  activeSides: ["A", "B", "C", "D", "E"],
+  phasePendingSides: ["D", "E"],
+  generationIdBySide: { A: "gen-a", D: "gen-d" },
+  lastResponseBySide: { D: "response-d" }
+};
+const hybridHydrated = api.hydratePersistedState(hybridV4);
+assert.equal(hybridHydrated.currentSide, "D");
+assert.equal(hybridHydrated.startSide, "A");
+assert.equal(hybridHydrated.mainSide, "B");
+assert.deepEqual(Array.from(hybridHydrated.phasePendingSides), ["D", "E"]);
+assert.equal(hybridHydrated.generationIdBySide.A, "gen-a");
+assert.equal(hybridHydrated.generationIdBySide.D, "gen-d");
+const repairedHybrid = api.serializeRuntimeState(hybridHydrated);
+assert.equal(repairedHybrid.currentSide, "agent-4");
+assert.equal(repairedHybrid.startSide, "agent-1");
+assert.equal(repairedHybrid.mainSide, "agent-2");
+assert.deepEqual(Array.from(repairedHybrid.phasePendingSides), ["agent-4", "agent-5"]);
+assert.equal(repairedHybrid.generationIdBySide["agent-1"], "gen-a");
+assert.equal(repairedHybrid.generationIdBySide["agent-4"], "gen-d");
+assert.equal(Object.prototype.hasOwnProperty.call(repairedHybrid.generationIdBySide, "A"), false);
+assert.equal(Object.prototype.hasOwnProperty.call(repairedHybrid.generationIdBySide, "D"), false);
 
 assert.throws(
   () => api.hydratePersistedState({
