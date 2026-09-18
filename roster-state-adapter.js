@@ -149,7 +149,6 @@
     if (rosterAgent) {
       return Object.freeze({
         side: runtimeKey,
-        runtimeKey,
         id: rosterAgent.id,
         ordinal: rosterAgent.ordinal,
         tabId: normalizeTabId(rosterAgent.tabId),
@@ -164,7 +163,6 @@
     }
     return Object.freeze({
       side: legacySide,
-      runtimeKey: legacySide,
       tabId: normalizeTabId(state[`tab${legacySide}`]),
       label: String(state[`label${legacySide}`] ?? `AI ${legacySide}`),
       job: String(state[`job${legacySide}`] ?? "")
