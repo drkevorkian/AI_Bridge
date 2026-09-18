@@ -11,11 +11,25 @@
     typeof caps.ordinalForAgentId !== "function" ||
     typeof caps.ordinalForLegacySide !== "function" ||
     typeof caps.legacySideForOrdinal !== "function" ||
-    typeof caps.agentIdForOrdinal !== "function" ||
-    typeof caps.runtimeAgentKeyForOrdinal !== "function" ||
-    typeof caps.ordinalForRuntimeAgentKey !== "function"
+    typeof caps.agentIdForOrdinal !== "function"
   ) {
     throw new Error("Execution-key adapter requires the logical-agent capability contract.");
+  }
+
+  function runtimeKeyForOrdinal(ordinal) {
+    if (typeof caps.runtimeAgentKeyForOrdinal === "function") {
+      return runtimeKeyForOrdinal(ordinal);
+    }
+    return caps.legacySideForOrdinal(ordinal) || caps.agentIdForOrdinal(ordinal);
+  }
+
+  function ordinalForRuntimeKey(rawKey) {
+    if (typeof caps.ordinalForRuntimeAgentKey === "function") {
+      return ordinalForRuntimeKey(rawKey);
+    }
+    const legacyOrdinal = caps.ordinalForLegacySide(rawKey);
+    if (legacyOrdinal !== null) return legacyOrdinal;
+    return caps.ordinalForAgentId(rawKey);
   }
 
   const ALLOWED_MAPS = Object.freeze(new Set([
@@ -50,17 +64,17 @@
 
     const canonicalOrdinal = caps.ordinalForAgentId(rawRef);
     if (canonicalOrdinal !== null) {
-      return caps.runtimeAgentKeyForOrdinal(canonicalOrdinal);
+      return runtimeKeyForOrdinal(canonicalOrdinal);
     }
 
     const legacyOrdinal = caps.ordinalForLegacySide(rawRef);
-    if (legacyOrdinal !== null) return caps.runtimeAgentKeyForOrdinal(legacyOrdinal);
+    if (legacyOrdinal !== null) return runtimeKeyForOrdinal(legacyOrdinal);
 
     throw new RangeError("Unknown logical-agent reference.");
   }
 
   function canonicalAgentIdForExecutionKey(rawKey) {
-    const ordinal = caps.ordinalForRuntimeAgentKey(rawKey);
+    const ordinal = ordinalForRuntimeKey(rawKey);
     if (ordinal === null) throw new RangeError("Unknown execution-state key.");
     return caps.agentIdForOrdinal(ordinal);
   }
