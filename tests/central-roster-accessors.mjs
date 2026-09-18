@@ -25,6 +25,7 @@ function functionBody(source, name) {
 }
 
 const rosterBody = functionBody(background, "rosterAgentForSide");
+const writeRosterBody = functionBody(background, "writeRosterAgentForSide");
 const tabBody = functionBody(background, "tabForSide");
 const labelBody = functionBody(background, "labelForSide");
 const jobBody = functionBody(background, "jobForSide");
@@ -44,12 +45,26 @@ assert.match(
   /state\[`tab\$\{side\}`\]/,
   "bootstrap compatibility fallback must retain legacy tab reads before adapter load"
 );
+assert.match(
+  writeRosterBody,
+  /roster\.writeAgent\(state, normalizedSide, patch\)/,
+  "central background roster mutation helper must delegate to adapter writeAgent after bootstrap"
+);
+assert.match(
+  writeRosterBody,
+  /\^\[A-E\]\$/,
+  "pre-adapter mutation fallback must fail closed to the v1.17.1 logical-side set"
+);
 assert.match(tabBody, /rosterAgentForSide\(side\)\.tabId/);
 assert.match(labelBody, /rosterAgentForSide\(side\)\.label/);
 assert.match(jobBody, /rosterAgentForSide\(side\)\.job/);
 assert.doesNotMatch(tabBody, /state\[`tab\$\{side\}`\]/);
 assert.doesNotMatch(labelBody, /state\[`label\$\{side\}`\]/);
 assert.doesNotMatch(jobBody, /state\[`job\$\{side\}`\]/);
+
+const savedBindingBody = functionBody(background, "validateSavedBindings");
+assert.match(savedBindingBody, /writeRosterAgentForSide\(side, \{ tabId: null \}\)/);
+assert.doesNotMatch(savedBindingBody, /state\[`tab\$\{side\}`\]\s*=/);
 
 assert.match(
   semantics,
