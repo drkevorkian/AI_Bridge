@@ -98,7 +98,7 @@
     // Sequential modes use cycleParticipants to track completion of a team
     // cycle, so preserve it for every mode. Batch-only phase lists remain empty
     // outside batch modes, matching background.js's intentional reset behavior.
-    current.cycleParticipants = sanitizeSideList(persisted.cycleParticipants, sides);
+    current.cycleParticipants = sanitizeSideList(runtimePersisted.cycleParticipants, sides);
 
     if (BATCH_MODES.has(String(current.workMode || runtimePersisted.workMode || "").toLowerCase())) {
       for (const field of ROUTING_LIST_FIELDS.slice(1)) {
