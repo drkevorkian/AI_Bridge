@@ -5,6 +5,8 @@ import vm from "node:vm";
 import { fileURLToPath } from "node:url";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
+const capsSrc = fs.readFileSync(path.join(root, "agent-capabilities.js"), "utf8");
+const rosterSrc = fs.readFileSync(path.join(root, "roster-state-adapter.js"), "utf8");
 const source = fs.readFileSync(path.join(root, "coordinator-dynamic-agents.js"), "utf8");
 const wrapper = fs.readFileSync(path.join(root, "background-wrapper.js"), "utf8");
 
@@ -93,6 +95,7 @@ const sandbox = {
 };
 sandbox.globalThis = sandbox;
 vm.createContext(sandbox);
+vm.runInContext(rosterSrc, sandbox, { filename: "roster-state-adapter.js" });
 vm.runInContext(source, sandbox, { filename: "coordinator-dynamic-agents.js" });
 await Promise.resolve();
 
