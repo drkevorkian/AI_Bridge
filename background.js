@@ -1,5 +1,5 @@
 const SIDES = ["A", "B", "C"];
-const STATE_VERSION = 4;
+const STATE_VERSION = 3;
 const CONTENT_VERSION = "1.14.0";
 const WORK_MODES = new Set(["relay", "collaborate", "compete", "parallel", "review", "mesh"]);
 const INFINITE_TURNS = -1;
@@ -104,19 +104,6 @@ let state = { ...DEFAULT_STATE };
 let history = { ...DEFAULT_HISTORY, jobs: [], commands: [], rules: [] };
 let artifactStore = {};
 let responseCommitQueue = Promise.resolve();
-
-const EARLY_STARTUP_TIMEOUT_MS = 5000;
-
-function earlyStartupTimeout(promise, label, timeoutMs = EARLY_STARTUP_TIMEOUT_MS) {
-  let timer = null;
-  const timeout = new Promise((_, reject) => {
-    timer = setTimeout(() => reject(new Error(`${label} timed out during service-worker startup.`)), timeoutMs);
-  });
-  return Promise.race([Promise.resolve(promise), timeout]).finally(() => {
-    if (timer !== null) clearTimeout(timer);
-  });
-}
-
 let stateReady = loadState();
 
 async function lockStorageToExtensionPages() {
@@ -126,20 +113,14 @@ async function lockStorageToExtensionPages() {
   const trusted = { accessLevel: "TRUSTED_CONTEXTS" };
   try {
     if (chrome.storage?.local?.setAccessLevel) {
-      await earlyStartupTimeout(
-        chrome.storage.local.setAccessLevel(trusted),
-        "Lock chrome.storage.local access"
-      );
+      await chrome.storage.local.setAccessLevel(trusted);
     }
   } catch (err) {
     console.warn("AI Bridge could not lock chrome.storage.local", err);
   }
   try {
     if (chrome.storage?.sync?.setAccessLevel) {
-      await earlyStartupTimeout(
-        chrome.storage.sync.setAccessLevel(trusted),
-        "Lock chrome.storage.sync access"
-      );
+      await chrome.storage.sync.setAccessLevel(trusted);
     }
   } catch (err) {
     console.warn("AI Bridge could not lock chrome.storage.sync", err);
@@ -1256,27 +1237,8 @@ function canFallbackToText(artifacts) {
   return Array.isArray(artifacts) && artifacts.length > 0 && artifacts.every(file => String(file.previewText || "").trim());
 }
 
-function stateV4Persistence() {
-  const persistence = globalThis.__AI_BRIDGE_STATE_V4_PERSISTENCE_V1__;
-  if (
-    !persistence ||
-    persistence.version !== 1 ||
-    persistence.targetStateVersion !== STATE_VERSION ||
-    typeof persistence.serializeRuntimeState !== "function" ||
-    typeof persistence.hydratePersistedState !== "function" ||
-    typeof persistence.migrateV3State !== "function"
-  ) {
-    throw new Error("State V4 persistence boundary is unavailable.");
-  }
-  return persistence;
-}
-
 async function saveState() {
-  // State V4 persistence is a strict boundary: the live runtime may expose
-  // ephemeral A-E compatibility mirrors, but storage receives only the V2
-  // roster plus canonical agent references/maps.
-  const persisted = stateV4Persistence().serializeRuntimeState(state);
-  await chrome.storage.local.set({ bridgeState: persisted });
+  await chrome.storage.local.set({ bridgeState: state });
 }
 
 async function saveHistory() {
@@ -1437,100 +1399,21 @@ async function tabExists(tabId) {
   }
 }
 
-const STARTUP_BINDING_TIMEOUT_MS = 3000;
-const STARTUP_AUX_TIMEOUT_MS = 4000;
-
-function startupTimeout(promise, label, timeoutMs = STARTUP_AUX_TIMEOUT_MS) {
-  let timer = null;
-  const timeout = new Promise((_, reject) => {
-    timer = setTimeout(() => reject(new Error(`${label} timed out during service-worker startup.`)), timeoutMs);
-  });
-  return Promise.race([Promise.resolve(promise), timeout]).finally(() => {
-    if (timer !== null) clearTimeout(timer);
-  });
-}
-
 async function validateSavedBindings() {
   if (!state.sessionActive) return;
 
-  const checks = await Promise.all(SIDES.map(async side => {
+  const missing = [];
+  for (const side of SIDES) {
     const tabId = tabForSide(side);
-    try {
-      const exists = await startupTimeout(
-        tabExists(tabId),
-        `Validate AI ${side} tab`,
-        STARTUP_BINDING_TIMEOUT_MS
-      );
-      return exists ? null : side;
-    } catch (_) {
-      // Fail closed. A stalled Chrome tab lookup must never keep stateReady
-      // pending forever or preserve an unverified binding.
-      return side;
-    }
-  }));
-  const missing = checks.filter(Boolean);
+    if (!(await tabExists(tabId))) missing.push(side);
+  }
 
   if (missing.length) {
     state.running = false;
     state.paused = true;
     state.pauseReason = `Reconnect AI ${missing.join(", AI ")} and press Resume.`;
     for (const side of missing) writeRosterAgentForSide(side, { tabId: null });
-
-    // The in-memory authority is already revoked. Persistence is best-effort
-    // background work and must not delay dashboard state readiness.
-    startupTimeout(saveState(), "Persist invalidated startup bindings").catch(err => {
-      appendLog({
-        time: Date.now(),
-        type: "storage",
-        text: `Startup binding invalidation is active in memory, but persistence did not complete: ${String(err?.message || err).slice(0, 240)}`
-      });
-    });
-  }
-}
-
-async function finishLoadedStateStartup(loadFailure) {
-  try {
-    // State hydration and binding validation have already completed before this
-    // task starts. Everything below is auxiliary startup work and must never
-    // hold AI_BRIDGE_GET_STATE hostage.
-    if (!loadFailure && state.sessionActive && state.running) {
-      try {
-        await startupTimeout(
-          Promise.all(SIDES.map(side => ensureTabListener(tabForSide(side)))),
-          "Reconnect provider tab listeners"
-        );
-      } catch (err) {
-        state.running = false;
-        state.paused = true;
-        state.pauseReason = `Automatic reconnect failed: ${err.message}. Rebind the provider tabs and press Resume.`;
-        try { await startupTimeout(saveState(), "Persist reconnect failure"); } catch (_) {}
-      }
-    }
-
-    if (!loadFailure && state.awaitingHuman && state.pendingHuman) {
-      await startupTimeout(
-        showHumanAttention(state.pendingHuman.requestingSide, state.pendingHuman.prompt),
-        "Restore human-attention UI"
-      );
-    } else {
-      await startupTimeout(clearAttention(), "Clear human-attention UI");
-    }
-
-    if (!loadFailure && state.sessionActive && state.running && !state.awaitingHuman) {
-      await startupTimeout(ensureWatchdogAlarm(), "Restore watchdog alarm");
-    } else {
-      await startupTimeout(clearWatchdogAlarm(), "Clear watchdog alarm");
-    }
-
-    try { await startupTimeout(ensureUpdateAlarm(), "Restore update alarm"); } catch (_) {}
-  } catch (err) {
-    // Auxiliary startup failure must remain visible but may not make dashboard
-    // state retrieval wait forever.
-    state.running = false;
-    state.paused = true;
-    state.pauseReason = `Background startup follow-up failed: ${String(err?.message || err).slice(0, 240)}`;
-    appendLog({ time: Date.now(), type: "startup", text: state.pauseReason });
-    try { await startupTimeout(saveState(), "Persist startup follow-up failure"); } catch (_) {}
+    await saveState();
   }
 }
 
@@ -1559,165 +1442,132 @@ async function loadState() {
   // Lock storage before the first read so a compromised provider page cannot
   // enumerate transcripts, Vault bytes, or synced settings via chrome.storage.
   await lockStorageToExtensionPages();
-
-  let bridgeState;
-  let bridgeHistory;
-  let bridgeArtifacts;
-  let initialStorageFailure = null;
-  try {
-    ({ bridgeState, bridgeHistory, bridgeArtifacts } = await earlyStartupTimeout(
-      chrome.storage.local.get(["bridgeState", "bridgeHistory", "bridgeArtifacts"]),
-      "Read AI Bridge local storage"
-    ));
-  } catch (error) {
-    initialStorageFailure = error;
-    bridgeState = undefined;
-    bridgeHistory = undefined;
-    bridgeArtifacts = undefined;
-  }
-
+  const { bridgeState, bridgeHistory, bridgeArtifacts } = await chrome.storage.local.get(["bridgeState", "bridgeHistory", "bridgeArtifacts"]);
   history = normalizeHistory(bridgeHistory);
   artifactStore = bridgeArtifacts && typeof bridgeArtifacts === "object" ? bridgeArtifacts : {};
 
-  const persistence = stateV4Persistence();
-  let hydrated = null;
-  let loadFailure = initialStorageFailure;
-
-  try {
-    if (initialStorageFailure) throw initialStorageFailure;
-    if (Number(bridgeState?.stateVersion) === STATE_VERSION) {
-      hydrated = persistence.hydratePersistedState(bridgeState);
-    } else if (Number(bridgeState?.stateVersion) === persistence.sourceStateVersion) {
-      // Atomic one-way migration: construct and validate the complete V4
-      // snapshot first, persist it once, and only then replace live state.
-      // If validation or storage fails, the original V3 key is left untouched.
-      const migrated = persistence.migrateV3State(bridgeState);
-      await chrome.storage.local.set({ bridgeState: migrated });
-      hydrated = persistence.hydratePersistedState(migrated);
-    } else if (!bridgeState || Number(bridgeState?.stateVersion || 0) < persistence.sourceStateVersion) {
-      // Very old/no state: preserve the historical low-risk preferences, then
-      // immediately establish the V4 format as the only persisted authority.
-      const fresh = cloneDefaultState();
-      if (bridgeState) {
-        fresh.maxTurns = Number(bridgeState.maxTurns) || fresh.maxTurns;
-        fresh.delayMs = Number(bridgeState.delayMs) || fresh.delayMs;
-      }
-      const persisted = persistence.serializeRuntimeState(fresh);
-      await chrome.storage.local.set({ bridgeState: persisted });
-      hydrated = persistence.hydratePersistedState(persisted);
-    } else {
-      throw new Error(
-        `Stored stateVersion ${String(bridgeState?.stateVersion)} is newer than this build supports; refusing to overwrite it.`
-      );
+  if (bridgeState?.stateVersion === STATE_VERSION) {
+    state = {
+      ...cloneDefaultState(),
+      ...bridgeState,
+      sourceFiles: Array.isArray(bridgeState.sourceFiles) ? bridgeState.sourceFiles : [],
+      sourceDeliveredBySide: {
+        A: false,
+        B: false,
+        C: false,
+        ...(bridgeState.sourceDeliveredBySide || {})
+      },
+      relayArtifacts: Array.isArray(bridgeState.relayArtifacts) ? bridgeState.relayArtifacts : [],
+      activeArtifactIds: Array.isArray(bridgeState.activeArtifactIds)
+        ? bridgeState.activeArtifactIds
+        : (bridgeState.sessionActive && Array.isArray(bridgeState.relayArtifacts) ? bridgeState.relayArtifacts.map(item => item?.id).filter(Boolean) : []),
+      lastSentArtifactIdsBySide: { A: [], B: [], C: [], ...(bridgeState.lastSentArtifactIdsBySide || {}) },
+      lastResponseBySide: bridgeState.lastResponseBySide || {},
+      lastSentBySide: bridgeState.lastSentBySide || {},
+      lastDeliveredSeqBySide: {
+        A: 0,
+        B: 0,
+        C: 0,
+        ...(bridgeState.lastDeliveredSeqBySide || {})
+      },
+      roundStartedAtBySide: { A: null, B: null, C: null, ...(bridgeState.roundStartedAtBySide || {}) },
+      roundNumberBySide: { A: 0, B: 0, C: 0, ...(bridgeState.roundNumberBySide || {}) },
+      lastRoundDurationMsBySide: { A: null, B: null, C: null, ...(bridgeState.lastRoundDurationMsBySide || {}) },
+      lastRoundCompletedAtBySide: { A: null, B: null, C: null, ...(bridgeState.lastRoundCompletedAtBySide || {}) },
+      totalWorkMsBySide: { A: 0, B: 0, C: 0, ...(bridgeState.totalWorkMsBySide || {}) },
+      generationIdBySide: { A: null, B: null, C: null, ...(bridgeState.generationIdBySide || {}) },
+      recoveryAttemptBySide: { A: 0, B: 0, C: 0, ...(bridgeState.recoveryAttemptBySide || {}) },
+      lastProgressAtBySide: { A: null, B: null, C: null, ...(bridgeState.lastProgressAtBySide || {}) },
+      cycleParticipants: Array.isArray(bridgeState.cycleParticipants) ? bridgeState.cycleParticipants.filter(side => SIDES.includes(side)) : [],
+      phasePendingSides: Array.isArray(bridgeState.phasePendingSides) ? bridgeState.phasePendingSides.filter(side => SIDES.includes(side)) : [],
+      phaseSentSides: Array.isArray(bridgeState.phaseSentSides) ? bridgeState.phaseSentSides.filter(side => SIDES.includes(side)) : [],
+      phaseCompletedSides: Array.isArray(bridgeState.phaseCompletedSides) ? bridgeState.phaseCompletedSides.filter(side => SIDES.includes(side)) : [],
+      primaryResponseSeqBySide: { A: null, B: null, C: null, ...(bridgeState.primaryResponseSeqBySide || {}) },
+      reviewResponseSeqBySide: { A: null, B: null, C: null, ...(bridgeState.reviewResponseSeqBySide || {}) },
+      pendingHumanQueue: Array.isArray(bridgeState.pendingHumanQueue) ? bridgeState.pendingHumanQueue : [],
+      pendingMainInterjections: Array.isArray(bridgeState.pendingMainInterjections) ? bridgeState.pendingMainInterjections : [],
+      suppressedHumanRequests: migrateSuppressedHumanRequests(bridgeState),
+      transcript: Array.isArray(bridgeState.transcript) ? bridgeState.transcript : [],
+      log: Array.isArray(bridgeState.log) ? bridgeState.log : []
+    };
+    state.workMode = normalizeWorkMode(state.workMode);
+    state.mainSide = SIDES.includes(state.mainSide) ? state.mainSide : (SIDES.includes(state.startSide) ? state.startSide : "A");
+    if (!isBatchWorkMode(state.workMode)) {
+      state.workPhase = state.workMode === "collaborate" ? "collaborate" : (state.workMode === "mesh" ? "mesh" : "relay");
+      state.phasePendingSides = [];
+      state.phaseSentSides = [];
+      state.phaseCompletedSides = [];
+    } else if (!['primary', 'review'].includes(state.workPhase)) {
+      state.workPhase = 'primary';
     }
-  } catch (error) {
-    loadFailure = error;
-    // Fail closed without writing. Build a safe in-memory V4 shell so the
-    // dashboard remains usable and can report the recoverable error, while the
-    // original persisted snapshot remains exactly as it was.
-    const safe = cloneDefaultState();
-    const safePersisted = persistence.serializeRuntimeState(safe);
-    hydrated = persistence.hydratePersistedState(safePersisted);
-  }
-
-  state = {
-    ...cloneDefaultState(),
-    ...hydrated,
-    sourceFiles: Array.isArray(hydrated?.sourceFiles) ? hydrated.sourceFiles : [],
-    sourceDeliveredBySide: {
-      A: false,
-      B: false,
-      C: false,
-      ...(hydrated?.sourceDeliveredBySide || {})
-    },
-    relayArtifacts: Array.isArray(hydrated?.relayArtifacts) ? hydrated.relayArtifacts : [],
-    activeArtifactIds: Array.isArray(hydrated?.activeArtifactIds)
-      ? hydrated.activeArtifactIds
-      : (hydrated?.sessionActive && Array.isArray(hydrated?.relayArtifacts)
-        ? hydrated.relayArtifacts.map(item => item?.id).filter(Boolean)
-        : []),
-    lastSentArtifactIdsBySide: { A: [], B: [], C: [], ...(hydrated?.lastSentArtifactIdsBySide || {}) },
-    lastResponseBySide: hydrated?.lastResponseBySide || {},
-    lastSentBySide: hydrated?.lastSentBySide || {},
-    lastDeliveredSeqBySide: { A: 0, B: 0, C: 0, ...(hydrated?.lastDeliveredSeqBySide || {}) },
-    roundStartedAtBySide: { A: null, B: null, C: null, ...(hydrated?.roundStartedAtBySide || {}) },
-    roundNumberBySide: { A: 0, B: 0, C: 0, ...(hydrated?.roundNumberBySide || {}) },
-    lastRoundDurationMsBySide: { A: null, B: null, C: null, ...(hydrated?.lastRoundDurationMsBySide || {}) },
-    lastRoundCompletedAtBySide: { A: null, B: null, C: null, ...(hydrated?.lastRoundCompletedAtBySide || {}) },
-    totalWorkMsBySide: { A: 0, B: 0, C: 0, ...(hydrated?.totalWorkMsBySide || {}) },
-    generationIdBySide: { A: null, B: null, C: null, ...(hydrated?.generationIdBySide || {}) },
-    recoveryAttemptBySide: { A: 0, B: 0, C: 0, ...(hydrated?.recoveryAttemptBySide || {}) },
-    lastProgressAtBySide: { A: null, B: null, C: null, ...(hydrated?.lastProgressAtBySide || {}) },
-    cycleParticipants: Array.isArray(hydrated?.cycleParticipants) ? hydrated.cycleParticipants.filter(side => SIDES.includes(side)) : [],
-    phasePendingSides: Array.isArray(hydrated?.phasePendingSides) ? hydrated.phasePendingSides.filter(side => SIDES.includes(side)) : [],
-    phaseSentSides: Array.isArray(hydrated?.phaseSentSides) ? hydrated.phaseSentSides.filter(side => SIDES.includes(side)) : [],
-    phaseCompletedSides: Array.isArray(hydrated?.phaseCompletedSides) ? hydrated.phaseCompletedSides.filter(side => SIDES.includes(side)) : [],
-    primaryResponseSeqBySide: { A: null, B: null, C: null, ...(hydrated?.primaryResponseSeqBySide || {}) },
-    reviewResponseSeqBySide: { A: null, B: null, C: null, ...(hydrated?.reviewResponseSeqBySide || {}) },
-    pendingHumanQueue: Array.isArray(hydrated?.pendingHumanQueue) ? hydrated.pendingHumanQueue : [],
-    pendingMainInterjections: Array.isArray(hydrated?.pendingMainInterjections) ? hydrated.pendingMainInterjections : [],
-    suppressedHumanRequests: migrateSuppressedHumanRequests(hydrated),
-    transcript: Array.isArray(hydrated?.transcript) ? hydrated.transcript : [],
-    log: Array.isArray(hydrated?.log) ? hydrated.log : []
-  };
-
-  if (loadFailure) {
-    state.sessionActive = false;
-    state.running = false;
-    state.paused = true;
-    state.pauseReason = `Stored AI Bridge state could not be safely loaded: ${String(loadFailure?.message || loadFailure).slice(0, 300)} Stored data was left unchanged.`;
-    appendLog({ time: Date.now(), type: "storage", text: state.pauseReason });
-  }
-
-  state.workMode = normalizeWorkMode(state.workMode);
-  state.mainSide = SIDES.includes(state.mainSide) ? state.mainSide : (SIDES.includes(state.startSide) ? state.startSide : "A");
-  if (!isBatchWorkMode(state.workMode)) {
-    state.workPhase = state.workMode === "collaborate" ? "collaborate" : (state.workMode === "mesh" ? "mesh" : "relay");
-    state.phasePendingSides = [];
-    state.phaseSentSides = [];
-    state.phaseCompletedSides = [];
-  } else if (!["primary", "review"].includes(state.workPhase)) {
-    state.workPhase = "primary";
-  }
-
-  // bridgeArtifacts is the durable source of truth. Rebuild the visible Vault
-  // index from it so files survive service-worker/browser restarts and new sessions.
-  state.relayArtifacts = artifactSummariesFromStore();
-  state.activeArtifactIds = (state.activeArtifactIds || []).filter(id => Boolean(artifactStore[id]));
-  try {
-    state.maxTurns = normalizeMaxTurns(state.maxTurns);
-  } catch (_) {
-    state.maxTurns = INFINITE_TURNS;
-  }
-  const migratedTimer = migrateTimerState(state);
-  state.activeSides = migratedTimer.activeSides;
-  state.maxCycles = migratedTimer.maxCycles;
-  state.cycleCount = migratedTimer.cycleCount;
-  state.checkpointEveryNCycles = clampCheckpointEvery(state.checkpointEveryNCycles);
-  state.stuckTimeoutMinutes = clampStuckTimeoutMinutes(state.stuckTimeoutMinutes);
-  if (state.recoveryCheckpoint && typeof state.recoveryCheckpoint === "object") {
-    const text = String(state.recoveryCheckpoint.text || "").slice(0, MAX_CHECKPOINT_CHARS);
-    state.recoveryCheckpoint = text ? { ...state.recoveryCheckpoint, text } : null;
+    // bridgeArtifacts is the durable source of truth. Rebuild the visible Vault
+    // index from it so files survive service-worker/browser restarts and new sessions.
+    state.relayArtifacts = artifactSummariesFromStore();
+    state.activeArtifactIds = (state.activeArtifactIds || []).filter(id => Boolean(artifactStore[id]));
+    try {
+      state.maxTurns = normalizeMaxTurns(state.maxTurns);
+    } catch (_) {
+      state.maxTurns = INFINITE_TURNS;
+    }
+    const migrated = migrateTimerState(state);
+    state.activeSides = migrated.activeSides;
+    state.maxCycles = migrated.maxCycles;
+    state.cycleCount = migrated.cycleCount;
+    state.checkpointEveryNCycles = clampCheckpointEvery(state.checkpointEveryNCycles);
+    state.stuckTimeoutMinutes = clampStuckTimeoutMinutes(state.stuckTimeoutMinutes);
+    if (state.recoveryCheckpoint && typeof state.recoveryCheckpoint === "object") {
+      const text = String(state.recoveryCheckpoint.text || "").slice(0, MAX_CHECKPOINT_CHARS);
+      state.recoveryCheckpoint = text ? { ...state.recoveryCheckpoint, text } : null;
+    } else {
+      state.recoveryCheckpoint = null;
+    }
+    try {
+      state.sourceFiles = normalizeSourceFiles(state.sourceFiles);
+    } catch (_) {
+      state.sourceFiles = [];
+      state.sourceDeliveredBySide = { A: false, B: false, C: false };
+    }
   } else {
-    state.recoveryCheckpoint = null;
-  }
-  try {
-    state.sourceFiles = normalizeSourceFiles(state.sourceFiles);
-  } catch (_) {
-    state.sourceFiles = [];
-    state.sourceDeliveredBySide = { A: false, B: false, C: false };
+    // Older builds may not have the current three-agent/dashboard state shape.
+    // Preserve a few useful settings, but start with a clean v1.5 session.
+    state = cloneDefaultState();
+    if (bridgeState) {
+      state.maxTurns = Number(bridgeState.maxTurns) || state.maxTurns;
+      state.delayMs = Number(bridgeState.delayMs) || state.delayMs;
+    }
+    state.relayArtifacts = artifactSummariesFromStore();
+    state.activeArtifactIds = [];
+    await saveState();
   }
 
-  // Binding validation remains part of readiness because routing authority must
-  // be checked before callers can act on restored state. Each Chrome tab lookup
-  // is bounded and fails closed, so this step cannot hang forever.
-  if (!loadFailure) await validateSavedBindings();
+  await validateSavedBindings();
 
-  // Do not make dashboard state retrieval wait on listener reconnects,
-  // attention windows, or alarms. Those are auxiliary MV3 startup tasks.
-  queueMicrotask(() => {
-    finishLoadedStateStartup(loadFailure).catch(() => {});
-  });
+  // Manifest V3 service workers are disposable. When Chrome wakes this worker
+  // back up, proactively reconnect all three page listeners so a saved running
+  // session can continue without the popup having to be opened first.
+  if (state.sessionActive && state.running) {
+    try {
+      await Promise.all(SIDES.map(side => ensureTabListener(tabForSide(side))));
+    } catch (err) {
+      state.running = false;
+      state.paused = true;
+      state.pauseReason = `Automatic reconnect failed: ${err.message}. Rebind the three tabs and press Resume.`;
+      await saveState();
+    }
+  }
+
+  if (state.awaitingHuman && state.pendingHuman) {
+    await showHumanAttention(state.pendingHuman.requestingSide, state.pendingHuman.prompt);
+  } else {
+    await clearAttention();
+  }
+
+  if (state.sessionActive && state.running && !state.awaitingHuman) {
+    await ensureWatchdogAlarm();
+  } else {
+    await clearWatchdogAlarm();
+  }
+  try { await ensureUpdateAlarm(); } catch (_) {}
 }
 
 function rosterAgentForSide(side) {
@@ -3206,7 +3056,7 @@ async function forceRelayCapturedResponse(source, targets) {
   };
 }
 
-const CLOUD_SETTINGS_VERSION = 2;
+const CLOUD_SETTINGS_VERSION = 1;
 const CLOUD_SYNC_KEY = "bridgeCloudSettings";
 const CLOUD_SYNC_PREFIX = "bridgeCloudSettings";
 const CLOUD_SYNC_META_KEY = "bridgeCloudSettings.meta";
@@ -3231,26 +3081,12 @@ function clampCloudPane(value) {
   return Math.min(70, Math.max(24, Math.round(n * 10) / 10));
 }
 
-function cloudSettingsV2Contract() {
-  const contract = globalThis.__AI_BRIDGE_CLOUD_SETTINGS_V2__;
-  if (
-    !contract ||
-    contract.version !== CLOUD_SETTINGS_VERSION ||
-    typeof contract.normalizeRosterAndStart !== "function" ||
-    typeof contract.projectToLegacy !== "function"
-  ) {
-    throw new Error("Cloud Settings V2 contract is unavailable.");
-  }
-  return contract;
-}
-
 function sanitizeHistoryForCloud(kind, items, limit) {
   const list = Array.isArray(items) ? items : [];
   if (kind === "jobs") {
-    const cloudV2 = cloudSettingsV2Contract();
     return list.slice(0, limit).map(item => ({
       time: Number(item?.time) || Date.now(),
-      side: cloudV2.isLegacySide(item?.side) ? String(item.side).toUpperCase() : "A",
+      side: SIDES.includes(item?.side) ? item.side : "A",
       label: String(item?.label || "AI").slice(0, 80),
       job: String(item?.job || "").trim().slice(0, 4000)
     })).filter(item => item.job);
@@ -3262,13 +3098,11 @@ function sanitizeHistoryForCloud(kind, items, limit) {
 }
 
 function sanitizeCloudSettings(raw, options = {}) {
-  // Whitelist reconstruction. Cloud V2 stores only canonical logical-agent
-  // identity/job configuration. Browser tab bindings, transcripts, Vault bytes,
-  // source files, OAuth material, and live execution state are never copied.
+  // Whitelist reconstruction. Anything not copied here — transcripts, Vault
+  // bytes, source files, tab IDs, tokens, live session, recoveryCheckpoint,
+  // OAuth client IDs — is dropped. layout is studio|classic only.
   const src = raw && typeof raw === "object" && !Array.isArray(raw) ? raw : {};
   const stamp = options.stamp !== false;
-  const cloudV2 = cloudSettingsV2Contract();
-  const canonical = cloudV2.normalizeRosterAndStart(src);
   let maxTurns = INFINITE_TURNS;
   try { maxTurns = normalizeMaxTurns(src.maxTurns); } catch (_) { maxTurns = INFINITE_TURNS; }
   let maxCycles = maxTurns;
@@ -3282,14 +3116,16 @@ function sanitizeCloudSettings(raw, options = {}) {
     layout: ALLOWED_CLOUD_LAYOUTS.has(src.layout) ? src.layout : "studio",
     paneWidth: clampCloudPane(src.paneWidth),
     workMode: normalizeWorkMode(src.workMode),
-    startAgentId: canonical.startAgentId,
-    roster: canonical.roster,
+    startSide: SIDES.includes(src.startSide) ? src.startSide : "A",
     maxTurns,
     maxCycles,
     checkpointEveryNCycles: clampCheckpointEvery(src.checkpointEveryNCycles),
     stuckTimeoutMinutes: clampStuckTimeoutMinutes(src.stuckTimeoutMinutes),
     delayMs: Math.max(0, Math.min(30000, Number.isFinite(delay) ? delay : 1500)),
     freshOnStart: Boolean(src.freshOnStart),
+    jobA: String(src.jobA || "").trim().slice(0, 4000),
+    jobB: String(src.jobB || "").trim().slice(0, 4000),
+    jobC: String(src.jobC || "").trim().slice(0, 4000),
     teamRules: String(src.teamRules || "").trim().slice(0, 12000),
     history: {
       jobs: sanitizeHistoryForCloud("jobs", src.history?.jobs, 20),
@@ -3304,20 +3140,9 @@ function assertCloudSettingsSafe(settings) {
   if (/(ya29\.|[Aa]ccess[_-]?[Tt]oken|[Rr]efresh[_-]?[Tt]oken|Bearer\s+[A-Za-z0-9._~+/=-]+)/.test(json)) {
     throw new Error("Refusing cloud settings that contain credential material.");
   }
-
-  const pending = [settings];
-  while (pending.length) {
-    const current = pending.pop();
-    if (!current || typeof current !== "object") continue;
-    if (Array.isArray(current)) {
-      pending.push(...current);
-      continue;
-    }
-    for (const [key, value] of Object.entries(current)) {
-      if (/token|secret|password|authorization|credential/i.test(key)) {
-        throw new Error("Refusing cloud settings that contain credential fields.");
-      }
-      if (value && typeof value === "object") pending.push(value);
+  for (const key of Object.keys(settings || {})) {
+    if (/token|secret|password|authorization|credential/i.test(key)) {
+      throw new Error("Refusing cloud settings that contain credential fields.");
     }
   }
 }
@@ -3909,24 +3734,20 @@ async function cloudStatus() {
   };
 }
 
-async function applyIdleCloudSettings(settings, { persist = true } = {}) {
+async function applyIdleCloudSettings(settings) {
   if (state.sessionActive) {
     throw new Error("Stop the active Bridge session before pulling cloud settings into this profile.");
   }
-  const projected = cloudSettingsV2Contract().projectToLegacy(settings);
-  const baseCloudJobSides = Number(state?.stateVersion) === 4 && Array.isArray(state?.roster?.agents)
-    ? state.roster.agents.map(agent => String(agent?.legacySide || "")).filter(side => ["A", "B", "C"].includes(side))
-    : ["A", "B", "C"];
-  for (const side of baseCloudJobSides) {
-    writeRosterAgentForSide(side, { job: projected[`job${side}`] });
-  }
+  state.jobA = settings.jobA;
+  state.jobB = settings.jobB;
+  state.jobC = settings.jobC;
   state.teamRules = settings.teamRules;
   state.workMode = settings.workMode;
-  state.startSide = projected.startSide;
-  state.mainSide = projected.startSide;
+  state.startSide = settings.startSide;
+  state.mainSide = settings.startSide;
   state.maxTurns = settings.maxTurns;
   state.delayMs = settings.delayMs;
-  if (persist) await saveState();
+  await saveState();
 }
 
 async function pushCloudSettings(raw) {
@@ -4111,7 +3932,7 @@ async function setAutoCheckUpdates(enabled) {
 
 chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   (async () => {
-    await earlyStartupTimeout(stateReady, "AI Bridge state readiness", 6000);
+    await stateReady;
 
     if (!msg || typeof msg.type !== "string") throw new Error("Malformed AI Bridge message.");
     if (!isExtensionPageSender(sender) && !CONTENT_SCRIPT_MESSAGE_TYPES.has(msg.type)) {
