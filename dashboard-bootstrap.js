@@ -2,6 +2,7 @@
   "use strict";
 
   const VALID_LAYOUT_HINTS = new Set(["studio", "classic", "focus"]);
+  const RECOVERY_QUARANTINE_UI = true;
   const PROVIDER_TAB_PATTERNS = Object.freeze([
     "https://chatgpt.com/*",
     "https://chat.openai.com/*",
@@ -38,6 +39,14 @@
 
   // v1.17 disables the old user-pasted Web OAuth implicit flow.
   window.addEventListener("DOMContentLoaded", () => {
+    if (RECOVERY_QUARANTINE_UI) {
+      const badge = document.getElementById("versionBadge");
+      const status = document.getElementById("status");
+      if (badge) badge.textContent = "RECOVERY-Q";
+      if (status) status.textContent = "Recovery quarantine — production state and dynamic adapters are disabled.";
+      document.documentElement.dataset.recoveryQuarantine = "true";
+    }
+
     const input = document.getElementById("googleClientId");
     const save = document.getElementById("saveGoogleClientId");
     const label = document.querySelector("label[for='googleClientId']");
@@ -69,7 +78,7 @@
     // keep work-mode copy aligned to the live A-E roster, and expose viewpoint
     // activation diagnostics. Routing authority remains in the centralized
     // background binding evaluator.
-    if (!document.querySelector("script[data-ai-bridge-dynamic-agents]")) {
+    if (!RECOVERY_QUARANTINE_UI && !document.querySelector("script[data-ai-bridge-dynamic-agents]")) {
       const script = document.createElement("script");
       script.src = chrome.runtime.getURL("dashboard-dynamic-agents.js");
       script.async = false;
@@ -140,7 +149,8 @@
     providerHealthStartGateAdapter: true,
     dynamicTabValidationAdapter: true,
     dynamicWorkModeCopyAdapter: true,
-    viewpointActivationAdapter: true,
+    viewpointActivationAdapter: !RECOVERY_QUARANTINE_UI,
+    recoveryQuarantineUi: RECOVERY_QUARANTINE_UI,
     layouts: Object.freeze(["studio", "classic", "focus"])
   });
 })();
