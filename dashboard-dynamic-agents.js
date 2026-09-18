@@ -90,6 +90,7 @@
     const newChat = byId(`newChat${side}`);
     const resendButton = byId(`resend${side}`);
     const useLast = byId(`useLast${side}`);
+    const forceFrom = byId(`forceFrom${side}`);
     if (tab && !tab.dataset.dynamicBound) {
       tab.dataset.dynamicBound = "true";
       tab.addEventListener("change", () => {
@@ -108,6 +109,12 @@
       resendButton.dataset.dynamicBound = "true";
       resendButton.addEventListener("click", () => {
         try { if (typeof resend === "function") resend(side); } catch (_) {}
+      });
+    }
+    if (forceFrom && !forceFrom.dataset.dynamicBound) {
+      forceFrom.dataset.dynamicBound = "true";
+      forceFrom.addEventListener("click", () => {
+        try { if (typeof setForceSource === "function") setForceSource(side); } catch (_) {}
       });
     }
     if (useLast && !useLast.dataset.dynamicBound) {
