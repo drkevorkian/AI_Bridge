@@ -7,12 +7,16 @@
 
   const originalQueryGenerationStatus = queryGenerationStatus;
   const caps = globalThis.__AI_BRIDGE_AGENT_CAPABILITIES__ || null;
+  const executionKeys = globalThis.__AI_BRIDGE_EXECUTION_KEY_ADAPTER_V1__ || null;
+  if (!executionKeys || executionKeys.version !== 1 || typeof executionKeys.read !== "function" || typeof executionKeys.write !== "function") {
+    throw new Error("Watchdog hardening requires the execution-key adapter.");
+  }
 
   function watchdogConversationMatches(side, status) {
     if (!caps || caps.version !== 1 || typeof caps.conversationIdentity !== "function") return false;
     const normalizedSide = String(side || "").toUpperCase();
     const tabId = Number(typeof tabForSide === "function" ? tabForSide(normalizedSide) : state?.[`tab${normalizedSide}`]);
-    const expected = state?.viewpointIdentityBySide?.[normalizedSide] || null;
+    const expected = executionKeys.read(state, "viewpointIdentityBySide", normalizedSide, null);
     const observed = caps.conversationIdentity({
       side: normalizedSide,
       tabId,
@@ -28,18 +32,12 @@
   async function pauseForConversationAuthorityLoss(side, generationId) {
     const normalizedSide = String(side || "").toUpperCase();
     const expectedGeneration = String(generationId || "");
-    if (!normalizedSide || String(state.generationIdBySide?.[normalizedSide] || "") !== expectedGeneration) {
+    if (!normalizedSide || String(executionKeys.read(state, "generationIdBySide", normalizedSide, "") || "") !== expectedGeneration) {
       return { stale: true };
     }
 
-    state.generationIdBySide = { ...(state.generationIdBySide || {}) };
-    state.generationIdBySide[normalizedSide] = null;
-
-    if (state.viewpointIdentityBySide && typeof state.viewpointIdentityBySide === "object") {
-      const identities = { ...state.viewpointIdentityBySide };
-      delete identities[normalizedSide];
-      state.viewpointIdentityBySide = identities;
-    }
+    executionKeys.write(state, "generationIdBySide", normalizedSide, null);
+    executionKeys.remove(state, "viewpointIdentityBySide", normalizedSide);
 
     if (typeof isBatchWorkMode === "function" && isBatchWorkMode() && Array.isArray(state.phasePendingSides) && state.phasePendingSides.includes(normalizedSide)) {
       state.phaseSentSides = Array.isArray(state.phaseSentSides)
@@ -110,7 +108,7 @@
 
     const generationSnapshot = Object.fromEntries(initialSides.map(side => [
       side,
-      String(state.generationIdBySide?.[side] || "")
+      String(executionKeys.read(state, "generationIdBySide", side, "") || "")
     ]));
 
     // tabs.sendMessage can be slow. Never hold the coordinator queue while
@@ -131,7 +129,7 @@
       const currentExpected = new Set(expectedWatchdogSides());
       const sides = initialSides.filter(side =>
         currentExpected.has(side) &&
-        String(state.generationIdBySide?.[side] || "") === generationSnapshot[side]
+        String(executionKeys.read(state, "generationIdBySide", side, "") || "") === generationSnapshot[side]
       );
       if (!sides.length) return { checked: true, results: [] };
 
@@ -180,14 +178,14 @@
 
         // Re-check generation immediately before committing recovery. This is
         // intentionally redundant with the queue-entry validation above.
-        if (String(state.generationIdBySide?.[side] || "") !== generationSnapshot[side]) {
+        if (String(executionKeys.read(state, "generationIdBySide", side, "") || "") !== generationSnapshot[side]) {
           results.push({ side, stale: true });
           continue;
         }
 
         if (state.checkpointPending && generationMatches(
-          state.checkpointRequestId || state.generationIdBySide?.[side],
-          state.generationIdBySide?.[side]
+          state.checkpointRequestId || executionKeys.read(state, "generationIdBySide", side, null),
+          executionKeys.read(state, "generationIdBySide", side, null)
         )) {
           await skipStalledCheckpoint(side);
           results.push({ side, checkpointSkipped: true });
@@ -210,6 +208,7 @@
     mutatesActiveSides: false,
     generationStatusCarriesPageIdentity: true,
     revokesMismatchedConversationBeforeTimeout: true,
-    neverAutoTrustsNavigatedConversation: true
+    neverAutoTrustsNavigatedConversation: true,
+    canonicalExecutionMapAccess: true
   });
 })();
