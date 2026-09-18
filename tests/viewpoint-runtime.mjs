@@ -8,6 +8,7 @@ const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const wrapper = fs.readFileSync(path.join(root, "background-wrapper.js"), "utf8");
 const capsSrc = fs.readFileSync(path.join(root, "agent-capabilities.js"), "utf8");
 const rosterSrc = fs.readFileSync(path.join(root, "roster-state-adapter.js"), "utf8");
+const executionSrc = fs.readFileSync(path.join(root, "execution-key-adapter.js"), "utf8");
 const runtimeSrc = fs.readFileSync(path.join(root, "viewpoint-runtime.js"), "utf8");
 
 assert.ok(wrapper.includes('importScripts("viewpoint-runtime.js")'));
