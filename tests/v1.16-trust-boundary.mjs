@@ -31,7 +31,9 @@ function extractFunction(src, name) {
 assert.match(manifest.version, /^\d+\.\d+\.\d+$/);
 assert.equal(manifest.oauth2, undefined);
 assert.match(background, /CONTENT_VERSION = "1\.14\.0"/);
-assert.match(background, /STATE_VERSION = 3/);
+assert.match(background, /STATE_VERSION = 4/);
+assert.match(background, /function stateV4Persistence\(/);
+assert.match(background, /Stored data was left unchanged/);
 assert.match(content, /version: "1\.14\.0"/);
 
 assert.match(html, /id="powerPill"/);

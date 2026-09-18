@@ -180,19 +180,25 @@
   if (typeof applyIdleCloudSettings === "function") {
     const baseApply = applyIdleCloudSettings;
     applyIdleCloudSettings = async function dynamicApplyIdleCloudSettings(settings) {
-      await baseApply(settings);
-      for (const side of ALL_JOB_SIDES) {
-        if (typeof settings?.[`job${side}`] === "string") {
-          rosterState.writeAgent(state, side, {
-            job: String(settings[`job${side}`]).trim().slice(0, 4000)
-          });
-        }
-      }
+      // Resize first so job writes target the intended active roster. This
+      // prevents V4 cloud pulls from partially applying A-C and then failing on
+      // inactive D/E (or on B/C for a one-agent roster).
       if (settings && Object.prototype.hasOwnProperty.call(settings, "agentCount") && typeof applyAgentCount === "function") {
         try {
           await applyAgentCount(settings.agentCount, { persist: false });
         } catch (_) {
           // Leave the current idle roster if the stored count is invalid.
+        }
+      }
+
+      await baseApply(settings);
+      const active = new Set(liveSides());
+      for (const side of ALL_JOB_SIDES) {
+        if (!active.has(side)) continue;
+        if (typeof settings?.[`job${side}`] === "string") {
+          rosterState.writeAgent(state, side, {
+            job: String(settings[`job${side}`]).trim().slice(0, 4000)
+          });
         }
       }
       const sides = liveSides();
@@ -211,6 +217,8 @@
     liveRosterMeshTargets: true,
     derivedTurnMinimums: true,
     cloudJobsThroughE: true,
-    cloudJobWritesThroughRosterAdapter: true
+    cloudJobWritesThroughRosterAdapter: true,
+    cloudResizesRosterBeforeJobWrites: true,
+    cloudSkipsInactiveRosterSlots: true
   });
 })();

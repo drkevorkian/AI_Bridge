@@ -207,4 +207,47 @@ assert.throws(
 
 assert.equal(cloud.__AI_BRIDGE_DYNAMIC_SEMANTICS_V1__.derivedTurnMinimums, true);
 assert.equal(cloud.__AI_BRIDGE_DYNAMIC_SEMANTICS_V1__.cloudJobWritesThroughRosterAdapter, true);
+assert.equal(cloud.__AI_BRIDGE_DYNAMIC_SEMANTICS_V1__.cloudResizesRosterBeforeJobWrites, true);
+assert.equal(cloud.__AI_BRIDGE_DYNAMIC_SEMANTICS_V1__.cloudSkipsInactiveRosterSlots, true);
+
+// State V4: expanding from one agent to five must happen before D/E job writes,
+// while a one-agent cloud profile must skip inactive B-E without throwing.
+const cloudV4 = load(1);
+cloudV4.state.stateVersion = 4;
+cloudV4.state.roster = {
+  version: 2,
+  nextOrdinal: 2,
+  agents: [{ id: "agent-1", ordinal: 1, legacySide: "A", label: "AI A", job: "", tabId: null }]
+};
+cloudV4.state.agentCount = 1;
+cloudV4.applyAgentCount = async count => {
+  cloudV4.__AI_BRIDGE_ROSTER_STATE_ADAPTER_V1__.setAgentCount(cloudV4.state, count);
+  cloudV4.SIDES.splice(0, cloudV4.SIDES.length, ...cloudV4.__AI_BRIDGE_AGENT_CAPABILITIES__.sideIdsForCount(count));
+};
+
+await cloudV4.applyIdleCloudSettings({
+  agentCount: 1,
+  startSide: "A",
+  jobA: "Solo",
+  jobB: "inactive",
+  jobC: "inactive",
+  jobD: "inactive",
+  jobE: "inactive"
+});
+assert.equal(cloudV4.state.roster.agents.length, 1);
+assert.equal(cloudV4.state.roster.agents[0].job, "Solo");
+
+await cloudV4.applyIdleCloudSettings({
+  agentCount: 5,
+  startSide: "E",
+  jobA: "Lead",
+  jobB: "Back",
+  jobC: "Front",
+  jobD: "Second viewpoint",
+  jobE: "Auditor"
+});
+assert.equal(cloudV4.state.roster.agents.length, 5);
+assert.equal(cloudV4.state.roster.agents[3].job, "Second viewpoint");
+assert.equal(cloudV4.state.roster.agents[4].job, "Auditor");
+
 console.log("dynamic-agent-semantics: ok");

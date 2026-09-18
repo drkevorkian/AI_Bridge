@@ -46,7 +46,20 @@ const caps = {
   supportedAgentSides: ["A", "B", "C", "D", "E"],
   defaultAgentCount: 3,
   maxUniqueProviderAgents: 5,
+  maxLogicalAgents: 5,
   duplicateProviderAgentsEnabled: true,
+  agentIdForOrdinal(ordinal) {
+    const n = Number(ordinal);
+    return Number.isInteger(n) && n >= 1 ? `agent-${n}` : null;
+  },
+  ordinalForLegacySide(side) {
+    const value = String(side || "").toUpperCase();
+    return /^[A-E]$/.test(value) ? value.charCodeAt(0) - 64 : null;
+  },
+  legacySideForOrdinal(ordinal) {
+    const n = Number(ordinal);
+    return Number.isInteger(n) && n >= 1 && n <= 5 ? String.fromCharCode(64 + n) : null;
+  },
   normalizeAgentCount(value, fallback) {
     const n = Number(value);
     return Number.isInteger(n) && n >= 1 && n <= 5 ? n : fallback;
@@ -105,6 +118,7 @@ assert.equal(replacedListeners.length, 1);
 const contract = sandbox.__AI_BRIDGE_DYNAMIC_AGENTS_V1__;
 assert.equal(contract.revokesRetiredTabAuthority, true);
 assert.equal(contract.tabRetirementUsesRosterAdapter, true);
+assert.equal(contract.agentCountPrunesRetiredRoutingRefs, true);
 assert.equal(contract.pausesOnBoundTabReplacement, true);
 assert.equal(contract.neverAutoTrustsReplacementTab, true);
 
@@ -119,7 +133,7 @@ assert.equal(Object.prototype.hasOwnProperty.call(state.viewpointIdentityBySide,
 assert.equal(state.running, false);
 assert.equal(state.paused, true);
 assert.match(state.pauseReason, /replaced by Chrome/);
-assert.deepEqual(state.phaseSentSides, ["B"]);
+assert.deepEqual([...state.phaseSentSides], ["B"]);
 assert.equal(Object.prototype.hasOwnProperty.call(state.lastResponseBySide, "A"), false);
 assert.ok(saves.length >= 1);
 assert.match(logs.at(-1).text, /replaced by Chrome/);
