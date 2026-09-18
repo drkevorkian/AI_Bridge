@@ -18,6 +18,16 @@ if (
   throw new Error("AI Bridge agent capability contract failed to initialize.");
 }
 
+importScripts("execution-key-adapter.js");
+if (
+  globalThis.__AI_BRIDGE_EXECUTION_KEY_ADAPTER_V1__?.version !== 1 ||
+  globalThis.__AI_BRIDGE_EXECUTION_KEY_ADAPTER_V1__?.persistsSecondExecutionMapRepresentation !== false ||
+  globalThis.__AI_BRIDGE_EXECUTION_KEY_ADAPTER_V1__?.legacyExecutionKeyCompatibility !== true ||
+  globalThis.__AI_BRIDGE_EXECUTION_KEY_ADAPTER_V1__?.canonicalFPlusFailsClosedUntilRosterV2Cutover !== true
+) {
+  throw new Error("AI Bridge execution-key adapter failed to initialize.");
+}
+
 importScripts("coordinator-mutex-prelude.js");
 if (
   globalThis.__AI_BRIDGE_COORDINATOR_MUTEX__?.version !== 6 ||
