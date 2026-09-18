@@ -10,6 +10,7 @@
 
   const caps = globalThis.__AI_BRIDGE_AGENT_CAPABILITIES__;
   const rosterState = globalThis.__AI_BRIDGE_ROSTER_STATE_ADAPTER_V1__;
+  const executionKeys = globalThis.__AI_BRIDGE_EXECUTION_KEY_ADAPTER_V1__;
   if (!caps || caps.version !== 1 || typeof caps.conversationIdentity !== "function" || typeof caps.sameFamilySendPlan !== "function") {
     throw new Error("Viewpoint runtime requires the conversation-identity contract.");
   }
@@ -18,6 +19,9 @@
   }
   if (!rosterState || rosterState.version !== 1 || typeof rosterState.readAgent !== "function") {
     throw new Error("Viewpoint runtime requires the roster-state adapter.");
+  }
+  if (!executionKeys || executionKeys.version !== 1 || typeof executionKeys.read !== "function" || typeof executionKeys.write !== "function") {
+    throw new Error("Viewpoint runtime requires the execution-key adapter.");
   }
 
   const familyQueues = new Map();
@@ -76,22 +80,13 @@
 
   function rememberIdentity(side, identity) {
     const safe = sanitizedIdentity(identity);
-    state.viewpointIdentityBySide = {
-      ...(state.viewpointIdentityBySide && typeof state.viewpointIdentityBySide === "object" ? state.viewpointIdentityBySide : {}),
-      [side]: safe
-    };
+    executionKeys.write(state, "viewpointIdentityBySide", side, safe);
     return safe;
   }
 
   function clearFailedDispatchState(side) {
-    if (state?.viewpointIdentityBySide && typeof state.viewpointIdentityBySide === "object") {
-      const next = { ...state.viewpointIdentityBySide };
-      delete next[side];
-      state.viewpointIdentityBySide = next;
-    }
-    if (state?.generationIdBySide && typeof state.generationIdBySide === "object") {
-      state.generationIdBySide = { ...state.generationIdBySide, [side]: null };
-    }
+    executionKeys.remove(state, "viewpointIdentityBySide", side);
+    executionKeys.write(state, "generationIdBySide", side, null);
   }
 
   function stampEntry(entry, identity) {
@@ -281,7 +276,7 @@
     recordTranscript = function viewpointRecordTranscript(type, payload = {}) {
       const entry = baseRecordTranscript(type, payload);
       if (type === "response" && payload?.side) {
-        const identity = state?.viewpointIdentityBySide?.[payload.side] || null;
+        const identity = executionKeys.read(state, "viewpointIdentityBySide", payload.side, null);
         if (identity) stampEntry(entry, identity);
       }
       return entry;
@@ -389,6 +384,7 @@
     queueTelemetryEphemeral: true,
     queueTelemetryContainsSensitiveIdentity: false,
     readsRosterThroughAdapter: true,
+    canonicalExecutionMapAccess: true,
     enablesDuplicateProviders: true
   });
 })();
