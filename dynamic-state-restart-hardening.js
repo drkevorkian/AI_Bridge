@@ -14,7 +14,6 @@
 
   const caps = globalThis.__AI_BRIDGE_AGENT_CAPABILITIES__;
   const dynamicAgents = globalThis.__AI_BRIDGE_DYNAMIC_AGENTS_V1__;
-  const stateV4 = globalThis.__AI_BRIDGE_STATE_V4_PERSISTENCE_V1__ || null;
   if (!caps || caps.version !== 1 || !dynamicAgents || dynamicAgents.version !== 1) {
     throw new Error("Dynamic restart hydration requires the dynamic-agent runtime.");
   }
@@ -34,23 +33,8 @@
     return globalThis.state || null;
   }
 
-  function runtimeSnapshotForRestore(snapshot) {
-    if (
-      Number(snapshot?.stateVersion) === 4 &&
-      stateV4?.version === 1 &&
-      typeof stateV4.hydratePersistedState === "function"
-    ) {
-      return stateV4.hydratePersistedState(snapshot);
-    }
-    return snapshot;
-  }
-
   function sidesForSnapshot(snapshot) {
-    const runtimeSnapshot = runtimeSnapshotForRestore(snapshot);
-    const rosterCount = Number(runtimeSnapshot?.stateVersion) === 4 && Array.isArray(runtimeSnapshot?.roster?.agents)
-      ? runtimeSnapshot.roster.agents.length
-      : null;
-    const count = caps.normalizeAgentCount(rosterCount ?? runtimeSnapshot?.agentCount, caps.defaultAgentCount);
+    const count = caps.normalizeAgentCount(snapshot?.agentCount, caps.defaultAgentCount);
     return [...caps.sideIdsForCount(count)];
   }
 
@@ -68,41 +52,33 @@
     if (!current || typeof current !== "object" || !persisted || typeof persisted !== "object") {
       return current;
     }
-
-    let runtimePersisted;
-    try {
-      runtimePersisted = runtimeSnapshotForRestore(persisted);
-    } catch (_) {
-      return current;
-    }
-
     if (
       current.stateVersion != null &&
-      runtimePersisted.stateVersion != null &&
-      Number(current.stateVersion) !== Number(runtimePersisted.stateVersion)
+      persisted.stateVersion != null &&
+      Number(current.stateVersion) !== Number(persisted.stateVersion)
     ) {
       return current;
     }
 
-    const sides = sidesForSnapshot(runtimePersisted);
+    const sides = sidesForSnapshot(persisted);
     const allowed = new Set(sides);
 
     // Scalars can be irreversibly normalized by the legacy A/B/C load before
     // the dynamic overlay runs. Restore only values valid for the persisted
     // configured roster.
     for (const field of ["startSide", "mainSide", "currentSide"]) {
-      const side = String(runtimePersisted[field] || "").toUpperCase();
+      const side = String(persisted[field] || "").toUpperCase();
       if (allowed.has(side)) current[field] = side;
     }
 
     // Sequential modes use cycleParticipants to track completion of a team
     // cycle, so preserve it for every mode. Batch-only phase lists remain empty
     // outside batch modes, matching background.js's intentional reset behavior.
-    current.cycleParticipants = sanitizeSideList(runtimePersisted.cycleParticipants, sides);
+    current.cycleParticipants = sanitizeSideList(persisted.cycleParticipants, sides);
 
-    if (BATCH_MODES.has(String(current.workMode || runtimePersisted.workMode || "").toLowerCase())) {
+    if (BATCH_MODES.has(String(current.workMode || persisted.workMode || "").toLowerCase())) {
       for (const field of ROUTING_LIST_FIELDS.slice(1)) {
-        current[field] = sanitizeSideList(runtimePersisted[field], sides);
+        current[field] = sanitizeSideList(persisted[field], sides);
       }
     }
 
@@ -163,7 +139,6 @@
     restoresPersistedMainSide: true,
     restoresPersistedPhaseLists: true,
     restoresPersistedCycleParticipants: true,
-    hydratesCanonicalStateV4BeforeRestore: true,
     restoresServiceWorkerQueue: false,
     restoreDynamicRoutingFields,
     restorePersistedDynamicRoutingState
