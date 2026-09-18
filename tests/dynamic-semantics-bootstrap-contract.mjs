@@ -27,5 +27,15 @@ assert.match(
   /liveRosterMeshTargets:\s*true/,
   "dynamic semantics runtime must advertise live-roster Mesh target support"
 );
+assert.match(
+  wrapper,
+  /__AI_BRIDGE_DYNAMIC_SEMANTICS_V1__\?\.cloudJobWritesThroughRosterAdapter !== true/,
+  "background bootstrap must require adapter-backed cloud job writes"
+);
+assert.match(
+  semantics,
+  /cloudJobWritesThroughRosterAdapter:\s*true/,
+  "dynamic semantics runtime must advertise adapter-backed cloud job writes"
+);
 
 console.log("dynamic-semantics-bootstrap-contract: ok");
