@@ -122,7 +122,8 @@
         throw new Error("Roster V2 agents must be contiguous and ordered by canonical ordinal.");
       }
       const expectedLegacySide = caps.legacySideForOrdinal(expectedOrdinal);
-      if (!expectedLegacySide || String(raw.legacySide || "") !== expectedLegacySide) {
+      const rawLegacySide = raw.legacySide == null ? null : String(raw.legacySide);
+      if (rawLegacySide !== expectedLegacySide) {
         throw new Error("Roster V2 legacy compatibility aliases must match canonical ordinals.");
       }
 
@@ -137,7 +138,7 @@
         id,
         ordinal: expectedOrdinal,
         legacySide: expectedLegacySide,
-        label: String(raw.label ?? `AI ${expectedLegacySide}`).slice(0, rosterMigration.maxLabelChars),
+        label: String(raw.label ?? `AI ${runtimeKeyForOrdinal(expectedOrdinal)}`).slice(0, rosterMigration.maxLabelChars),
         job: String(raw.job ?? "").trim().slice(0, rosterMigration.maxJobChars),
         tabId
       }));
@@ -164,14 +165,29 @@
     return sanitizeRoster(rosterMigration.buildRosterV2FromLegacyState(legacyRosterInput(runtimeState)).roster);
   }
 
-  function canonicalIdForRuntimeSide(rawSide, roster, { allowNull = true } = {}) {
-    if (rawSide === null || rawSide === undefined || rawSide === "") {
+  function runtimeKeyForOrdinal(ordinal) {
+    if (typeof caps.runtimeAgentKeyForOrdinal === "function") {
+      return caps.runtimeAgentKeyForOrdinal(ordinal);
+    }
+    return caps.legacySideForOrdinal(ordinal) || caps.agentIdForOrdinal(ordinal);
+  }
+
+  function ordinalForRuntimeKey(rawKey) {
+    if (typeof caps.ordinalForRuntimeAgentKey === "function") {
+      return caps.ordinalForRuntimeAgentKey(rawKey);
+    }
+    const legacyOrdinal = caps.ordinalForLegacySide(rawKey);
+    if (legacyOrdinal !== null) return legacyOrdinal;
+    return caps.ordinalForAgentId(rawKey);
+  }
+
+  function canonicalIdForRuntimeRef(rawRef, roster, { allowNull = true } = {}) {
+    if (rawRef === null || rawRef === undefined || rawRef === "") {
       if (allowNull) return null;
       throw new Error("Logical-agent reference is required.");
     }
-    const side = String(rawSide).toUpperCase();
-    const ordinal = caps.ordinalForLegacySide(side);
-    if (ordinal === null) throw new Error("Persisted runtime contains an unknown logical-agent alias.");
+    const ordinal = ordinalForRuntimeKey(String(rawRef));
+    if (ordinal === null) throw new Error("Persisted runtime contains an unknown logical-agent reference.");
     const id = caps.agentIdForOrdinal(ordinal);
     if (!roster.agents.some(agent => agent.id === id)) {
       throw new Error("Persisted runtime references an agent outside the active roster.");
@@ -179,7 +195,7 @@
     return id;
   }
 
-  function runtimeSideForCanonicalId(rawId, roster, { allowNull = true } = {}) {
+  function runtimeRefForCanonicalId(rawId, roster, { allowNull = true } = {}) {
     if (rawId === null || rawId === undefined || rawId === "") {
       if (allowNull) return null;
       throw new Error("Canonical logical-agent reference is required.");
@@ -189,14 +205,14 @@
     if (ordinal === null) throw new Error("Persisted state contains a malformed canonical agent ID.");
     const agent = roster.agents.find(row => row.id === id);
     if (!agent) throw new Error("Persisted state references an agent outside the active roster.");
-    return agent.legacySide;
+    return runtimeKeyForOrdinal(ordinal);
   }
 
   function canonicalizeRefList(raw, roster) {
     if (!Array.isArray(raw)) return [];
     const out = [];
     for (const item of raw) {
-      const id = canonicalIdForRuntimeSide(item, roster, { allowNull: false });
+      const id = canonicalIdForRuntimeRef(item, roster, { allowNull: false });
       if (!out.includes(id)) out.push(id);
     }
     return out;
@@ -206,7 +222,7 @@
     if (!Array.isArray(raw)) return [];
     const out = [];
     for (const item of raw) {
-      const side = runtimeSideForCanonicalId(item, roster, { allowNull: false });
+      const side = runtimeRefForCanonicalId(item, roster, { allowNull: false });
       if (!out.includes(side)) out.push(side);
     }
     return out;
@@ -216,8 +232,9 @@
     const source = isPlainObject(raw) ? raw : {};
     const out = {};
     for (const agent of roster.agents) {
-      if (!Object.prototype.hasOwnProperty.call(source, agent.legacySide)) continue;
-      const cloned = cloneData(source[agent.legacySide], `${fieldName}.${agent.legacySide}`);
+      const runtimeKey = runtimeKeyForOrdinal(agent.ordinal);
+      if (!Object.prototype.hasOwnProperty.call(source, runtimeKey)) continue;
+      const cloned = cloneData(source[runtimeKey], `${fieldName}.${runtimeKey}`);
       if (cloned !== undefined) out[agent.id] = cloned;
     }
     return out;
@@ -229,7 +246,7 @@
     const out = {};
     for (const [id, value] of Object.entries(raw)) {
       if (FORBIDDEN_KEYS.has(id)) throw new TypeError(`${fieldName} contains a forbidden key.`);
-      const side = runtimeSideForCanonicalId(id, roster, { allowNull: false });
+      const side = runtimeRefForCanonicalId(id, roster, { allowNull: false });
       out[side] = cloneData(value, `${fieldName}.${id}`);
     }
     return out;
@@ -251,7 +268,7 @@
 
     for (const field of SINGLE_AGENT_REF_FIELDS) {
       if (!Object.prototype.hasOwnProperty.call(runtimeState, field)) continue;
-      out[field] = canonicalIdForRuntimeSide(runtimeState[field], roster, { allowNull: true });
+      out[field] = canonicalIdForRuntimeRef(runtimeState[field], roster, { allowNull: true });
     }
 
     for (const field of AGENT_REF_LIST_FIELDS) {
@@ -285,7 +302,7 @@
 
     for (const field of SINGLE_AGENT_REF_FIELDS) {
       if (!Object.prototype.hasOwnProperty.call(rawState, field)) continue;
-      out[field] = runtimeSideForCanonicalId(rawState[field], roster, { allowNull: true });
+      out[field] = runtimeRefForCanonicalId(rawState[field], roster, { allowNull: true });
     }
 
     for (const field of AGENT_REF_LIST_FIELDS) {
@@ -297,7 +314,11 @@
       out[field] = hydrateSideMap(rawState[field], roster, field);
     }
 
-    const bySide = new Map(roster.agents.map(agent => [agent.legacySide, agent]));
+    const bySide = new Map(
+      roster.agents
+        .filter(agent => agent.legacySide)
+        .map(agent => [agent.legacySide, agent])
+    );
     for (const side of caps.supportedAgentSides) {
       const agent = bySide.get(side);
       out[`tab${side}`] = agent?.tabId ?? null;
@@ -339,6 +360,7 @@
     persistsLegacyRosterFields: false,
     canonicalizesAgentReferences: true,
     canonicalizesExecutionMaps: true,
+    runtimeAgentReferencesDecoupledFromLegacyAliases: true,
     noStorageSideEffects: true
   });
 })();
