@@ -68,7 +68,8 @@ if (
   globalThis.__AI_BRIDGE_EXECUTION_KEY_ADAPTER_V1__?.version !== 1 ||
   globalThis.__AI_BRIDGE_EXECUTION_KEY_ADAPTER_V1__?.persistsSecondExecutionMapRepresentation !== false ||
   globalThis.__AI_BRIDGE_EXECUTION_KEY_ADAPTER_V1__?.legacyExecutionKeyCompatibility !== true ||
-  globalThis.__AI_BRIDGE_EXECUTION_KEY_ADAPTER_V1__?.canonicalFPlusFailsClosedUntilRosterV2Cutover !== true
+  globalThis.__AI_BRIDGE_EXECUTION_KEY_ADAPTER_V1__?.canonicalFPlusExecutionKeys !== true ||
+  globalThis.__AI_BRIDGE_EXECUTION_KEY_ADAPTER_V1__?.activeFPlusStillCapacityGated !== true
 ) {
   throw new Error("AI Bridge execution-key adapter failed to initialize.");
 }
