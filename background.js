@@ -1528,8 +1528,18 @@ async function loadState() {
       state.sourceDeliveredBySide = { A: false, B: false, C: false };
     }
   } else {
-    // Older builds may not have the current three-agent/dashboard state shape.
-    // Preserve a few useful settings, but start with a clean v1.5 session.
+    // Recovery build safety: if this pre-V4 runtime sees a newer State V4
+    // snapshot, preserve it under a separate backup key before establishing a
+    // fresh V3 runtime. Never silently destroy the newer persisted state.
+    if (Number(bridgeState?.stateVersion) > STATE_VERSION) {
+      await chrome.storage.local.set({
+        bridgeStateV4Backup: bridgeState,
+        bridgeStateV4BackupAt: Date.now()
+      });
+    }
+
+    // Older/newer incompatible builds may not have the current state shape.
+    // Preserve low-risk preferences only, then start from a clean runtime.
     state = cloneDefaultState();
     if (bridgeState) {
       state.maxTurns = Number(bridgeState.maxTurns) || state.maxTurns;
