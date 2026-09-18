@@ -9,6 +9,8 @@ const html = fs.readFileSync(path.join(root, "dashboard.html"), "utf8");
 const css = fs.readFileSync(path.join(root, "dashboard.css"), "utf8");
 const dashboardJs = fs.readFileSync(path.join(root, "dashboard.js"), "utf8");
 const background = fs.readFileSync(path.join(root, "background.js"), "utf8");
+const capsSrc = fs.readFileSync(path.join(root, "agent-capabilities.js"), "utf8");
+const cloudV2Src = fs.readFileSync(path.join(root, "cloud-settings-v2.js"), "utf8");
 const readme = fs.readFileSync(path.join(root, "README.md"), "utf8");
 
 function extractFunction(src, name) {
@@ -79,7 +81,7 @@ assert.match(readme, /dashboard layout \(Studio \/ Classic\)/i);
 const sandbox = {
   SIDES: ["A", "B", "C"],
   INFINITE_TURNS: -1,
-  CLOUD_SETTINGS_VERSION: 1,
+  CLOUD_SETTINGS_VERSION: 2,
   ALLOWED_CLOUD_THEMES: new Set(["blizzard", "ghostwhite", "midnight", "slate", "light", "solarized", "ocean", "terminal"]),
   ALLOWED_CLOUD_LAYOUTS: new Set(["studio", "classic"]),
   Date,
@@ -117,13 +119,18 @@ sandbox.clampCloudPane = function clampCloudPane(value) {
   return Math.min(70, Math.max(24, Math.round(n * 10) / 10));
 };
 
-vm.runInNewContext(
+const context = vm.createContext(sandbox);
+context.globalThis = context;
+vm.runInContext(capsSrc, context, { filename: "agent-capabilities.js" });
+vm.runInContext(cloudV2Src, context, { filename: "cloud-settings-v2.js" });
+vm.runInContext(
   [
+    extractFunction(background, "cloudSettingsV2Contract"),
     extractFunction(background, "sanitizeHistoryForCloud"),
     extractFunction(background, "sanitizeCloudSettings"),
     "this.sanitizeCloudSettings = sanitizeCloudSettings;"
   ].join("\n"),
-  sandbox
+  context
 );
 
 const clean = sandbox.sanitizeCloudSettings({
