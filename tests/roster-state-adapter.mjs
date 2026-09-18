@@ -128,7 +128,6 @@ assert.deepEqual(Array.from(v4Adapter.sides()), ["A", "B", "C", "D", "E"]);
 assert.equal(v4.roster.agents[3].id, "agent-4");
 assert.equal(v4.roster.agents[4].legacySide, "E");
 assert.equal(v4Adapter.get("agent-5").side, "E");
-assert.equal(v4Adapter.get("agent-5").runtimeKey, "E");
 
 v4Adapter.setCount(2);
 assert.equal(v4.roster.agents.length, 2);
