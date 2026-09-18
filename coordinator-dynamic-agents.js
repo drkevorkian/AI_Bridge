@@ -351,6 +351,7 @@
     uniqueTabBinding: true,
     duplicateProviderAgentsEnabled: caps.duplicateProviderAgentsEnabled === true,
     revokesRetiredTabAuthority: true,
+    tabRetirementUsesRosterAdapter: true,
     pausesOnBoundTabReplacement: true,
     neverAutoTrustsReplacementTab: true
   });
