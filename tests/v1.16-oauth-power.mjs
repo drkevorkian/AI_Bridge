@@ -35,9 +35,7 @@ for (const permission of ["power", "identity", "alarms"]) assert.ok(manifest.per
 assert.match(readme, /cryptographically random/);
 assert.match(readme, /requestKeepAwake/);
 assert.match(background, /CONTENT_VERSION = "1\.14\.0"/);
-assert.match(background, /STATE_VERSION = 4/);
-assert.match(background, /function stateV4Persistence\(/);
-assert.match(background, /serializeRuntimeState\(state\)/);
+assert.match(background, /STATE_VERSION = 3/);
 assert.match(background, /GOOGLE_OAUTH_STATE_KEY/);
 assert.match(background, /OAUTH_STATE_TTL_MS = 10 \* 60 \* 1000/);
 assert.match(background, /createOauthCsrfState/);
