@@ -7,6 +7,7 @@ import { fileURLToPath } from "node:url";
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const healthSrc = fs.readFileSync(path.join(root, "provider-health-runtime.js"), "utf8");
 const capsSrc = fs.readFileSync(path.join(root, "agent-capabilities.js"), "utf8");
+const rosterSrc = fs.readFileSync(path.join(root, "roster-state-adapter.js"), "utf8");
 
 const tabs = new Map([
   [11, { id: 11, url: "https://chatgpt.com/" }],
@@ -62,6 +63,7 @@ const context = vm.createContext({
 });
 context.globalThis = context;
 vm.runInContext(capsSrc, context, { filename: "agent-capabilities.js" });
+vm.runInContext(rosterSrc, context, { filename: "roster-state-adapter.js" });
 context.__AI_BRIDGE_DYNAMIC_AGENTS_V1__ = Object.freeze({
   version: 1,
   uniqueTabBinding: true,
