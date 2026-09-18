@@ -14,7 +14,16 @@ assert.ok(wrapper.indexOf('importScripts("coordinator-generation-hardening.js")'
 assert.match(wrapper, /coordinator mutex failed to initialize/i);
 assert.match(wrapper, /generation hardening failed to initialize/i);
 
-const context = vm.createContext({ globalThis: null, String, Boolean });
+const context = vm.createContext({
+  globalThis: null,
+  String,
+  Boolean,
+  __AI_BRIDGE_EXECUTION_KEY_ADAPTER_V1__: {
+    version: 1,
+    read() { return undefined; },
+    write(_state, _mapName, _agentRef, value) { return value; }
+  }
+});
 context.globalThis = context;
 vm.runInContext('function generationMatches(expectedId, incomingId) { const expected = String(expectedId || ""); if (!expected) return true; return String(incomingId || "") === expected; }', context);
 vm.runInContext(generation, context, { filename: "coordinator-generation-hardening.js" });

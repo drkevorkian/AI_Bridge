@@ -5,6 +5,7 @@ import vm from "node:vm";
 import { fileURLToPath } from "node:url";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
+const execution = fs.readFileSync(path.join(root, "execution-key-adapter.js"), "utf8");
 const hardening = fs.readFileSync(path.join(root, "coordinator-generation-hardening.js"), "utf8");
 const background = fs.readFileSync(path.join(root, "background.js"), "utf8");
 const wrapper = fs.readFileSync(path.join(root, "background-wrapper.js"), "utf8");
@@ -51,6 +52,19 @@ const sandbox = {
   },
   __AI_BRIDGE_AGENT_CAPABILITIES__: {
     version: 1,
+    ordinalForAgentId(id) {
+      const match = /^agent-([1-9][0-9]*)$/.exec(String(id || ""));
+      return match ? Number(match[1]) : null;
+    },
+    ordinalForLegacySide(side) {
+      const value = String(side || "").toUpperCase();
+      return /^[A-E]$/.test(value) ? value.charCodeAt(0) - 64 : null;
+    },
+    legacySideForOrdinal(ordinal) {
+      const n = Number(ordinal);
+      return Number.isInteger(n) && n >= 1 && n <= 5 ? String.fromCharCode(64 + n) : null;
+    },
+    agentIdForOrdinal(ordinal) { return `agent-${Number(ordinal)}`; },
     conversationIdentity({ side, tabId, url }) {
       try {
         const parsed = new URL(String(url || ""));
@@ -122,6 +136,7 @@ const sandbox = {
 };
 sandbox.globalThis = sandbox;
 vm.createContext(sandbox);
+vm.runInContext(execution, sandbox, { filename: "execution-key-adapter.js" });
 vm.runInContext(hardening, sandbox, { filename: "coordinator-generation-hardening.js" });
 
 const contract = sandbox.__AI_BRIDGE_GENERATION_SECURITY__;
@@ -139,6 +154,7 @@ assert.equal(contract.preventsSequentialReplayWindow, true);
 assert.equal(contract.preventsRestartGenerationResurrection, true);
 assert.equal(contract.requiresAutomaticResponsePageIdentity, true);
 assert.equal(contract.rejectsCrossThreadSpaResponseBeforeConsumption, true);
+assert.equal(contract.canonicalExecutionMapAccess, true);
 
 // A coordinator-owned provider prompt cannot cross chrome.tabs.sendMessage until
 // its currently armed generation is durable. The base sendMessage stub observes
@@ -255,7 +271,12 @@ const matcherOnly = {
   Boolean,
   Object,
   Promise,
-  Error
+  Error,
+  __AI_BRIDGE_EXECUTION_KEY_ADAPTER_V1__: {
+    version: 1,
+    read() { return undefined; },
+    write(_state, _mapName, _agentRef, value) { return value; }
+  }
 };
 matcherOnly.globalThis = matcherOnly;
 vm.createContext(matcherOnly);

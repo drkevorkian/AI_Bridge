@@ -59,8 +59,22 @@ assert.match(dynamic, /SIDES\.splice\(0,\s*SIDES\.length,\s*\.\.\.next\)/);
 assert.match(dynamic, /next\.generationIdBySide\s*=\s*expandMap\(next\.generationIdBySide,\s*null\)/);
 assert.match(dynamic, /next\.recoveryAttemptBySide\s*=\s*expandMap\(next\.recoveryAttemptBySide,\s*0\)/);
 
-assert.match(viewpoint, /\[side\]:\s*safe/);
-assert.match(viewpoint, /delete\s+next\[side\]/);
-assert.match(viewpoint, /generationIdBySide\s*=\s*\{\s*\.\.\.state\.generationIdBySide,\s*\[side\]:\s*null\s*\}/);
+assert.match(
+  viewpoint,
+  /executionKeys\.write\(state,\s*"viewpointIdentityBySide",\s*side,\s*safe\)/,
+  "viewpoint identity publication must use the canonical execution-key adapter"
+);
+assert.match(
+  viewpoint,
+  /executionKeys\.remove\(state,\s*"viewpointIdentityBySide",\s*side\)/,
+  "failed dispatch cleanup must remove only the selected agent identity through the adapter"
+);
+assert.match(
+  viewpoint,
+  /executionKeys\.write\(state,\s*"generationIdBySide",\s*side,\s*null\)/,
+  "failed dispatch cleanup must disarm only the selected agent generation through the adapter"
+);
+assert.doesNotMatch(viewpoint, /\[side\]:\s*safe/);
+assert.doesNotMatch(viewpoint, /delete\s+next\[side\]/);
 
 console.log("viewpoint-lifecycle-isolation: ok");

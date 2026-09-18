@@ -99,11 +99,13 @@ for (const requiredModule of [
   "coordinator-mutex-prelude.js", "worker-fetch-security-prelude.js", "artifact-fetch-runtime-hardening.js",
   "update-runtime-hardening.js", "manual-relay-runtime-hardening.js", "coordinator-generation-hardening.js",
   "human-input-runtime-hardening.js", "watchdog-runtime-hardening.js", "reconnect-runtime-hardening.js",
-  "agent-capabilities.js", "roster-state-adapter.js", "coordinator-dynamic-agents.js", "coordinator-dynamic-semantics.js", "provider-health-runtime.js", "viewpoint-runtime.js"
+  "agent-capabilities.js", "execution-key-adapter.js", "roster-state-adapter.js", "coordinator-dynamic-agents.js", "coordinator-dynamic-semantics.js", "provider-health-runtime.js", "viewpoint-runtime.js"
 ]) assert.ok(wrapper.includes(`importScripts("${requiredModule}")`), `service worker is not loading ${requiredModule}`);
 
 const mutexIndex = wrapper.indexOf('importScripts("coordinator-mutex-prelude.js")');
 const workerFetchIndex = wrapper.indexOf('importScripts("worker-fetch-security-prelude.js")');
+const capabilitiesIndex = wrapper.indexOf('importScripts("agent-capabilities.js")');
+const executionKeyIndex = wrapper.indexOf('importScripts("execution-key-adapter.js")');
 const backgroundIndex = wrapper.indexOf('importScripts("background.js")');
 const rosterIndex = wrapper.indexOf('importScripts("roster-state-adapter.js")');
 const dynamicAgentIndex = wrapper.indexOf('importScripts("coordinator-dynamic-agents.js")');
@@ -111,6 +113,8 @@ const artifactIndex = wrapper.indexOf('importScripts("artifact-fetch-runtime-har
 const updateIndex = wrapper.indexOf('importScripts("update-runtime-hardening.js")');
 const helperIndex = wrapper.indexOf('importScripts("completion-runtime-hardening.js", "oauth-runtime-hardening.js", "power.js")');
 assert.ok(mutexIndex >= 0 && mutexIndex < workerFetchIndex, "coordinator mutex must load before worker network guard");
+assert.ok(capabilitiesIndex >= 0 && capabilitiesIndex < executionKeyIndex && executionKeyIndex < backgroundIndex,
+  "execution-key adapter must load after agent capabilities and before background.js");
 assert.ok(workerFetchIndex < backgroundIndex, "worker credential guard must load before background.js");
 assert.ok(backgroundIndex < rosterIndex && rosterIndex < dynamicAgentIndex,
   "roster-state adapter must load after legacy state exists and before dynamic-agent coordinator");

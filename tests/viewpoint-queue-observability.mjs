@@ -7,6 +7,7 @@ import { fileURLToPath } from "node:url";
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const capsSrc = fs.readFileSync(path.join(root, "agent-capabilities.js"), "utf8");
 const rosterSrc = fs.readFileSync(path.join(root, "roster-state-adapter.js"), "utf8");
+const executionSrc = fs.readFileSync(path.join(root, "execution-key-adapter.js"), "utf8");
 const runtimeSrc = fs.readFileSync(path.join(root, "viewpoint-runtime.js"), "utf8");
 const queueUiSrc = fs.readFileSync(path.join(root, "dashboard-viewpoint-queue.js"), "utf8");
 
@@ -86,6 +87,7 @@ function load(tabs, sendDelayMs = 15) {
   });
   context.globalThis = context;
   vm.runInContext(capsSrc, context, { filename: "agent-capabilities.js" });
+  vm.runInContext(executionSrc, context, { filename: "execution-key-adapter.js" });
   vm.runInContext(rosterSrc, context, { filename: "roster-state-adapter.js" });
   context.__AI_BRIDGE_DYNAMIC_AGENTS_V1__ = Object.freeze({ version: 1, liveSides: () => Object.keys(tabs) });
   vm.runInContext(runtimeSrc, context, { filename: "viewpoint-runtime.js" });

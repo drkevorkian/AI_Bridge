@@ -5,6 +5,7 @@ import vm from "node:vm";
 import { fileURLToPath } from "node:url";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
+const execution = fs.readFileSync(path.join(root, "execution-key-adapter.js"), "utf8");
 const source = fs.readFileSync(path.join(root, "watchdog-runtime-hardening.js"), "utf8");
 const wrapper = fs.readFileSync(path.join(root, "background-wrapper.js"), "utf8");
 
@@ -48,6 +49,19 @@ const context = vm.createContext({
   SIDES: ["A", "B", "C"],
   __AI_BRIDGE_AGENT_CAPABILITIES__: {
     version: 1,
+    ordinalForAgentId(id) {
+      const match = /^agent-([1-9][0-9]*)$/.exec(String(id || ""));
+      return match ? Number(match[1]) : null;
+    },
+    ordinalForLegacySide(side) {
+      const value = String(side || "").toUpperCase();
+      return /^[A-E]$/.test(value) ? value.charCodeAt(0) - 64 : null;
+    },
+    legacySideForOrdinal(ordinal) {
+      const n = Number(ordinal);
+      return Number.isInteger(n) && n >= 1 && n <= 5 ? String.fromCharCode(64 + n) : null;
+    },
+    agentIdForOrdinal(ordinal) { return `agent-${Number(ordinal)}`; },
     conversationIdentity({ side, tabId, url }) {
       try {
         const parsed = new URL(String(url || ""));
@@ -81,6 +95,7 @@ const context = vm.createContext({
   async enqueueCoordinatorMutation(task) { return task(); }
 });
 context.globalThis = context;
+vm.runInContext(execution, context, { filename: "execution-key-adapter.js" });
 vm.runInContext(source, context, { filename: "watchdog-runtime-hardening.js" });
 
 const transformed = await context.queryGenerationStatus("B");
@@ -112,4 +127,5 @@ assert.equal(context.__AI_BRIDGE_WATCHDOG_SECURITY__.serializedWithCoordinator, 
 assert.equal(context.__AI_BRIDGE_WATCHDOG_SECURITY__.generationStatusCarriesPageIdentity, true);
 assert.equal(context.__AI_BRIDGE_WATCHDOG_SECURITY__.revokesMismatchedConversationBeforeTimeout, true);
 assert.equal(context.__AI_BRIDGE_WATCHDOG_SECURITY__.mutatesActiveSides, false);
+assert.equal(context.__AI_BRIDGE_WATCHDOG_SECURITY__.canonicalExecutionMapAccess, true);
 console.log("v1.16.4 watchdog hardening regression checks passed.");
