@@ -226,12 +226,38 @@
     return out;
   }
 
-  function hydrateRefList(raw, roster) {
+  function tryRuntimeRefForPersistedId(rawId, roster) {
+    try {
+      return runtimeRefForCanonicalId(rawId, roster, { allowNull: false });
+    } catch (_) {
+      return null;
+    }
+  }
+
+  function hydrateSingleAgentRef(fieldName, raw, roster) {
+    if (raw === null || raw === undefined || raw === "") return null;
+    const resolved = tryRuntimeRefForPersistedId(raw, roster);
+    if (resolved) return resolved;
+
+    // Single-agent runtime pointers are not roster authority. If they are stale
+    // or malformed, fail closed to a deterministic safe state instead of
+    // preventing the dashboard from loading.
+    if (fieldName === "currentSide") return null;
+    return roster.agents.length ? runtimeKeyForOrdinal(roster.agents[0].ordinal) : null;
+  }
+
+  function hydrateRefList(raw, roster, fieldName = "agentRefs") {
     if (!Array.isArray(raw)) return [];
     const out = [];
     for (const item of raw) {
-      const side = runtimeRefForCanonicalId(item, roster, { allowNull: false });
-      if (!out.includes(side)) out.push(side);
+      const side = tryRuntimeRefForPersistedId(item, roster);
+      if (side && !out.includes(side)) out.push(side);
+    }
+
+    // activeSides represents the live roster shape. Reconstruct it from the
+    // canonical roster if the persisted list was empty/corrupt.
+    if (fieldName === "activeSides" && out.length === 0) {
+      return roster.agents.map(agent => runtimeKeyForOrdinal(agent.ordinal));
     }
     return out;
   }
@@ -254,7 +280,8 @@
     const out = {};
     for (const [id, value] of Object.entries(raw)) {
       if (FORBIDDEN_KEYS.has(id)) throw new TypeError(`${fieldName} contains a forbidden key.`);
-      const side = runtimeRefForCanonicalId(id, roster, { allowNull: false });
+      const side = tryRuntimeRefForPersistedId(id, roster);
+      if (!side) continue;
       out[side] = cloneData(value, `${fieldName}.${id}`);
     }
     return out;
@@ -310,11 +337,11 @@
 
     for (const field of SINGLE_AGENT_REF_FIELDS) {
       if (!Object.prototype.hasOwnProperty.call(rawState, field)) continue;
-      out[field] = runtimeRefForCanonicalId(rawState[field], roster, { allowNull: true });
+      out[field] = hydrateSingleAgentRef(field, rawState[field], roster);
     }
 
     for (const field of AGENT_REF_LIST_FIELDS) {
-      out[field] = hydrateRefList(rawState[field], roster);
+      out[field] = hydrateRefList(rawState[field], roster, field);
     }
 
     for (const field of AGENT_MAP_FIELDS) {
@@ -370,6 +397,8 @@
     canonicalizesExecutionMaps: true,
     runtimeAgentReferencesDecoupledFromLegacyAliases: true,
     importsLegacyRuntimeRefsInV4: true,
+    recoversStaleRuntimeRefsInV4: true,
+    canonicalRosterRemainsStrictDuringRecovery: true,
     noStorageSideEffects: true
   });
 })();
