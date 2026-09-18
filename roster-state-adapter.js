@@ -16,8 +16,7 @@
     !Array.isArray(caps.supportedAgentSides) ||
     typeof caps.normalizeAgentCount !== "function" ||
     typeof caps.agentIdForOrdinal !== "function" ||
-    typeof caps.ordinalForLegacySide !== "function" ||
-    typeof caps.ordinalForAgentId !== "function"
+    typeof caps.ordinalForLegacySide !== "function"
   ) {
     throw new Error("Roster-state adapter requires the logical-agent capability contract.");
   }
@@ -48,7 +47,11 @@
     }
     const legacyOrdinal = caps.ordinalForLegacySide(rawRef);
     if (legacyOrdinal !== null) return legacyOrdinal;
-    return caps.ordinalForAgentId(rawRef);
+    if (typeof caps.ordinalForAgentId === "function") return caps.ordinalForAgentId(rawRef);
+    const match = /^agent-([1-9][0-9]*)$/.exec(rawRef);
+    if (!match) return null;
+    const ordinal = Number(match[1]);
+    return Number.isSafeInteger(ordinal) && ordinal >= 1 ? ordinal : null;
   }
 
   function normalizeAgentRef(rawRef) {
