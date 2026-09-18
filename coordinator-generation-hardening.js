@@ -16,6 +16,10 @@
 
   const persistenceAvailable = typeof saveState === "function";
   const caps = globalThis.__AI_BRIDGE_AGENT_CAPABILITIES__ || null;
+  const executionKeys = globalThis.__AI_BRIDGE_EXECUTION_KEY_ADAPTER_V1__ || null;
+  if (!executionKeys || executionKeys.version !== 1 || typeof executionKeys.read !== "function" || typeof executionKeys.write !== "function") {
+    throw new Error("Generation hardening requires the execution-key adapter.");
+  }
   let generationPersistenceQueue = Promise.resolve();
 
   // Generation authorization changes cross the MV3 persistence boundary in both
@@ -38,7 +42,7 @@
     globalThis.persistArmedGenerationBeforeProviderSend = async function persistArmedGenerationBeforeProviderSend(side, generationId) {
       const normalizedSide = String(side || "").toUpperCase();
       const incomingGenerationId = String(generationId || "");
-      const expectedGenerationId = String(state?.generationIdBySide?.[normalizedSide] || "");
+      const expectedGenerationId = String(executionKeys.read(state, "generationIdBySide", normalizedSide, "") || "");
       if (!generationMatches(expectedGenerationId, incomingGenerationId)) {
         throw new Error(`AI ${normalizedSide || "?"} generation changed before provider dispatch.`);
       }
@@ -48,7 +52,7 @@
       // Re-check after the async storage boundary. If some lifecycle action
       // deliberately disarmed/replaced this side while persistence was pending,
       // never send a prompt carrying the superseded capability.
-      const currentGenerationId = String(state?.generationIdBySide?.[normalizedSide] || "");
+      const currentGenerationId = String(executionKeys.read(state, "generationIdBySide", normalizedSide, "") || "");
       if (!generationMatches(currentGenerationId, incomingGenerationId)) {
         throw new Error(`AI ${normalizedSide || "?"} generation changed while arming provider dispatch.`);
       }
@@ -104,7 +108,7 @@
     if (!caps || caps.version !== 1 || typeof caps.conversationIdentity !== "function") return false;
     const normalizedSide = String(side || "").toUpperCase();
     const tabId = Number(typeof tabForSide === "function" ? tabForSide(normalizedSide) : state?.[`tab${normalizedSide}`]);
-    const expected = state?.viewpointIdentityBySide?.[normalizedSide] || null;
+    const expected = executionKeys.read(state, "viewpointIdentityBySide", normalizedSide, null);
     const observed = caps.conversationIdentity({ side: normalizedSide, tabId, url: String(pageUrl || "") });
     if (!expected || !observed) return false;
     return String(expected.provenanceId || "") === String(observed.provenanceId || "") &&
@@ -126,7 +130,7 @@
     handleCompletedResponse = async function generationHardenedHandleCompletedResponse(side, text, options = {}) {
       const normalizedSide = String(side || "").toUpperCase();
       const incomingGenerationId = String(options?.generationId || "");
-      const expectedGenerationId = String(state?.generationIdBySide?.[normalizedSide] || "");
+      const expectedGenerationId = String(executionKeys.read(state, "generationIdBySide", normalizedSide, "") || "");
       const responsePageUrl = String(options?.pageUrl || "");
 
       // Sender-tab and generation authority are necessary but not sufficient on
@@ -162,10 +166,7 @@
       // Consume before delegating. The delegated handler may eventually dispatch
       // another prompt to this same side and arm a newer generation; clearing
       // only after delegation could accidentally destroy that fresh token.
-      state.generationIdBySide = {
-        ...(state.generationIdBySide && typeof state.generationIdBySide === "object" ? state.generationIdBySide : {}),
-        [normalizedSide]: null
-      };
+      executionKeys.write(state, "generationIdBySide", normalizedSide, null);
 
       // MV3 workers are disposable. Persist the disarm before any further
       // response processing so a worker termination, an ignored/duplicate early
@@ -215,6 +216,7 @@
     preventsSequentialReplayWindow: consumptionAttached,
     preventsRestartGenerationResurrection: consumptionAttached,
     requiresAutomaticResponsePageIdentity: conversationBindingAttached,
-    rejectsCrossThreadSpaResponseBeforeConsumption: conversationBindingAttached
+    rejectsCrossThreadSpaResponseBeforeConsumption: conversationBindingAttached,
+    canonicalExecutionMapAccess: true
   });
 })();
