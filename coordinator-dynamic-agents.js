@@ -12,6 +12,10 @@
 
   const ALL_SIDES = Object.freeze([...caps.supportedAgentSides]);
   const DEFAULT_COUNT = caps.defaultAgentCount;
+  const rosterState = globalThis.__AI_BRIDGE_ROSTER_STATE_ADAPTER_V1__;
+  if (!rosterState || rosterState.version !== 1 || typeof rosterState.AgentRosterStateAdapter !== "function") {
+    throw new Error("Dynamic-agent coordinator requires the roster-state adapter.");
+  }
 
   function liveState() {
     try {
@@ -63,11 +67,7 @@
     const sides = liveSides(count);
     next.agentCount = count;
     next.activeSides = sides.slice();
-    for (const side of ALL_SIDES) {
-      if (next[`tab${side}`] === undefined) next[`tab${side}`] = null;
-      if (next[`label${side}`] === undefined) next[`label${side}`] = `AI ${side}`;
-      if (next[`job${side}`] === undefined) next[`job${side}`] = "";
-    }
+    new rosterState.AgentRosterStateAdapter(next).ensureLegacyFields();
     next.sourceDeliveredBySide = expandMap(next.sourceDeliveredBySide, false);
     next.lastSentArtifactIdsBySide = expandMap(next.lastSentArtifactIdsBySide, []);
     next.lastDeliveredSeqBySide = expandMap(next.lastDeliveredSeqBySide, 0);
@@ -172,11 +172,14 @@
     const tabIds = uniqueTabIds(sides.map(side => Number(msg[`tab${side}`])));
     await assertProviderPolicy(tabIds);
     await Promise.all(tabIds.map(ensureTabListener));
+    const adapter = new rosterState.AgentRosterStateAdapter(state);
     for (const side of sides) {
-      const previousTab = Number(state[`tab${side}`]);
+      const previousTab = Number(adapter.get(side).tabId);
       const nextTab = Number(msg[`tab${side}`]);
-      state[`tab${side}`] = nextTab;
-      if (msg[`label${side}`]) state[`label${side}`] = String(msg[`label${side}`]);
+      adapter.set(side, {
+        tabId: nextTab,
+        ...(msg[`label${side}`] ? { label: String(msg[`label${side}`]) } : {})
+      });
       if (typeof isBatchWorkMode === "function" && isBatchWorkMode() && state.phasePendingSides.includes(side) && previousTab !== nextTab) {
         state.phaseSentSides = state.phaseSentSides.filter(item => item !== side);
         delete state.lastResponseBySide[side];
@@ -190,7 +193,7 @@
     }
     const count = caps.parseAgentCount(rawCount);
     if (count === null) {
-      throw new RangeError(`Agent count must be an integer from 1 to ${caps.maxUniqueProviderAgents}.`);
+      throw new RangeError(`Agent count must be an integer from 1 to ${caps.maxLogicalAgents}.`);
     }
     const current = liveState() || {};
     const next = migrateDynamicAgentState({ ...current, agentCount: count });
@@ -204,11 +207,7 @@
     const target = typeof DEFAULT_STATE === "object" && DEFAULT_STATE ? DEFAULT_STATE : null;
     if (!target) return;
     if (target.agentCount == null) target.agentCount = DEFAULT_COUNT;
-    for (const side of ALL_SIDES) {
-      if (target[`tab${side}`] === undefined) target[`tab${side}`] = null;
-      if (target[`label${side}`] === undefined) target[`label${side}`] = `AI ${side}`;
-      if (target[`job${side}`] === undefined) target[`job${side}`] = "";
-    }
+    rosterState.ensureLegacyFields(target);
   }
 
   async function migrateLoadedState() {
