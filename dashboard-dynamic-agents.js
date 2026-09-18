@@ -1,8 +1,19 @@
 (() => {
   "use strict";
 
-  const ALL_SIDES = Object.freeze(["A", "B", "C", "D", "E"]);
-  const DEFAULT_COUNT = 3;
+  const rosterPrelude = globalThis.__AI_BRIDGE_ROSTER_UI_PRELUDE_V1__;
+  if (
+    !rosterPrelude ||
+    rosterPrelude.version !== 1 ||
+    rosterPrelude.generatedBeforeLegacyHandlers !== true ||
+    rosterPrelude.canonicalAgentMetadata !== true ||
+    !Array.isArray(rosterPrelude.sides)
+  ) {
+    throw new Error("Dynamic dashboard requires the generated roster prelude.");
+  }
+
+  const ALL_SIDES = Object.freeze(Array.from(rosterPrelude.sides, side => String(side)));
+  const DEFAULT_COUNT = Number(rosterPrelude.defaultVisibleCount) || 3;
   const HEALTH_POLL_MS = 1500;
   const cardCache = new Map();
   let activeCount = DEFAULT_COUNT;
@@ -73,63 +84,6 @@
     return badge;
   }
 
-  function createExtendedCard(side) {
-    const card = document.createElement("article");
-    card.className = `agent-card agent-${side.toLowerCase()}`;
-    card.dataset.side = side;
-
-    const topline = document.createElement("div");
-    topline.className = "agent-topline";
-    const identity = document.createElement("div");
-    identity.className = "agent-identity";
-    const title = document.createElement("strong");
-    title.id = `labelText${side}`;
-    title.textContent = `AI ${side}`;
-    identity.appendChild(title);
-
-    const timers = document.createElement("div");
-    timers.className = "agent-timers";
-    for (const spec of [
-      [`timerTotal${side}`, "Total 0s", "Total working time for this LLM in the current session"],
-      [`timerCurrent${side}`, "Current —", "Current turn timer for this LLM"]
-    ]) {
-      const timer = document.createElement("span");
-      timer.id = spec[0];
-      timer.className = "round-timer idle";
-      timer.textContent = spec[1];
-      timer.title = spec[2];
-      timers.appendChild(timer);
-    }
-    identity.append(timers, createStatusBadge(side));
-
-    const actions = document.createElement("div");
-    actions.className = "agent-actions";
-    for (const [prefix, text, disabled] of [
-      ["newChat", "New chat", false],
-      ["resend", "Resend", true],
-      ["useLast", "Use last reply", true]
-    ]) {
-      const button = document.createElement("button");
-      button.id = `${prefix}${side}`;
-      button.type = "button";
-      button.className = "tiny ghost";
-      button.textContent = text;
-      button.disabled = disabled;
-      actions.appendChild(button);
-    }
-    topline.append(identity, actions);
-
-    const tab = document.createElement("select");
-    tab.id = `tab${side}`;
-    tab.setAttribute("aria-label", `AI ${side} tab`);
-    const job = document.createElement("textarea");
-    job.id = `job${side}`;
-    job.rows = 3;
-    job.placeholder = `AI ${side} job / responsibility`;
-    card.append(topline, tab, job);
-    return card;
-  }
-
   function attachExtendedListeners(side) {
     if (!new Set(["D", "E"]).has(side)) return;
     const tab = byId(`tab${side}`);
@@ -167,55 +121,26 @@
     }
   }
 
-  function ensureManualRelayControls(side) {
-    const fromHost = document.querySelector(".manual-relay-from");
-    const toHost = document.querySelector(".manual-relay-to");
-    if (!fromHost || !toHost) return;
-    let from = byId(`forceFrom${side}`);
-    if (!from) {
-      from = document.createElement("button");
-      from.id = `forceFrom${side}`;
-      from.className = "layout-chip";
-      from.type = "button";
-      from.textContent = side;
-      from.setAttribute("aria-pressed", "false");
-      from.addEventListener("click", () => {
-        try { if (typeof setForceSource === "function") setForceSource(side); } catch (_) {}
-      });
-      fromHost.appendChild(from);
-    }
-    let to = byId(`forceTo${side}`);
-    if (!to) {
-      const label = document.createElement("label");
-      label.className = "check-line";
-      to = document.createElement("input");
-      to.id = `forceTo${side}`;
-      to.type = "checkbox";
-      label.append(to, document.createTextNode(` ${side}`));
-      toHost.appendChild(label);
-    }
-  }
-
   function ensureCards() {
-    const team = document.querySelector(".team-section");
-    const relayPanel = document.querySelector(".manual-relay-panel");
-    if (!team || !relayPanel) return false;
-    for (const side of ["A", "B", "C"]) {
-      const card = document.querySelector(`.agent-${side.toLowerCase()}`);
-      if (!card) continue;
+    const host = byId("agentRosterHost");
+    if (!host) return false;
+
+    for (const side of ALL_SIDES) {
+      const card = host.querySelector(`.agent-${side.toLowerCase()}`);
+      if (!card) {
+        throw new Error(`Generated roster is missing AI ${side}.`);
+      }
+      const ordinal = ALL_SIDES.indexOf(side) + 1;
+      const expectedAgentId = `agent-${ordinal}`;
+      if (card.dataset.agentId !== expectedAgentId) {
+        throw new Error(`Generated roster identity mismatch for AI ${side}.`);
+      }
+
       card.dataset.side = side;
       cardCache.set(side, card);
       ensureThreadBadge(card, side);
       ensureHealthBadge(card, side);
-    }
-    for (const side of ["D", "E"]) {
-      let card = cardCache.get(side) || document.querySelector(`.agent-${side.toLowerCase()}`);
-      if (!card) card = createExtendedCard(side);
-      cardCache.set(side, card);
-      if (!card.isConnected) team.insertBefore(card, relayPanel);
-      ensureThreadBadge(card, side);
-      ensureManualRelayControls(side);
-      attachExtendedListeners(side);
+      if (ordinal > DEFAULT_COUNT) attachExtendedListeners(side);
     }
     return true;
   }
@@ -543,6 +468,8 @@
     window.__AI_BRIDGE_DYNAMIC_DASHBOARD_V1__ = Object.freeze({
       version: 1,
       maxAgents: ALL_SIDES.length,
+      generatedRosterUi: true,
+      canonicalAgentMetadata: true,
       duplicateProviderAgentsEnabled: true,
       threadBadges: true,
       duplicateThreadStartBlock: true,
