@@ -26,7 +26,9 @@ const caps = context.__AI_BRIDGE_AGENT_CAPABILITIES__;
 assert.ok(caps, "capability contract should initialize");
 assert.equal(caps.version, 1);
 assert.equal(caps.defaultAgentCount, 3);
-assert.equal(caps.maxUniqueProviderAgents, 5);
+assert.equal(caps.providerFamilyCount, 5, "provider-family count must be reported independently");
+assert.equal(caps.maxLogicalAgents, 5, "logical-agent capacity must not be derived implicitly from provider-family count");
+assert.equal(caps.maxUniqueProviderAgents, 5, "legacy capacity alias must remain compatible during v1.17.1");
 assert.deepEqual(Array.from(caps.supportedAgentSides), ["A", "B", "C", "D", "E"]);
 assert.deepEqual(Array.from(caps.providerFamilies, provider => provider.id), [
   "chatgpt",
@@ -35,6 +37,12 @@ assert.deepEqual(Array.from(caps.providerFamilies, provider => provider.id), [
   "gemini",
   "copilot"
 ]);
+assert.notEqual(
+  caps.maxLogicalAgents,
+  undefined,
+  "capability contract must expose an explicit logical-agent ceiling"
+);
+assert.equal(caps.providerFamilyCount, Array.from(caps.providerFamilies).length);
 assert.equal(caps.duplicateProviderAgentsEnabled, true);
 assert.equal(caps.uniqueTabBindingNeverRelaxed, true);
 assert.equal(caps.distinctThreadRequiredWhenSameFamily, true);
