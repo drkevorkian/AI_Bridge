@@ -336,11 +336,31 @@
         const wrappedApply = function dynamicApplyCloudSettingsToForm(settings) {
           baseApply(settings);
           if (!settings || typeof settings !== "object") return;
-          const count = Number(settings.agentCount);
+
+          const canonicalAgents = Number(settings.schemaVersion) === 2 && Array.isArray(settings?.roster?.agents)
+            ? settings.roster.agents
+            : null;
+          const count = canonicalAgents ? canonicalAgents.length : Number(settings.agentCount);
           if (Number.isInteger(count)) renderRoster(count);
-          for (const side of ALL_SIDES) {
-            const job = byId(`job${side}`);
-            if (job && typeof settings[`job${side}`] === "string") job.value = settings[`job${side}`];
+
+          if (canonicalAgents) {
+            canonicalAgents.forEach((agent, index) => {
+              const side = ALL_SIDES[index];
+              if (!side || String(agent?.id || "") !== `agent-${index + 1}`) return;
+              const job = byId(`job${side}`);
+              if (job) job.value = String(agent?.job || "");
+            });
+            const startMatch = /^agent-([1-5])$/.exec(String(settings.startAgentId || ""));
+            if (startMatch) {
+              const startSide = ALL_SIDES[Number(startMatch[1]) - 1];
+              const startSelect = byId("startSide");
+              if (startSide && startSelect) startSelect.value = startSide;
+            }
+          } else {
+            for (const side of ALL_SIDES) {
+              const job = byId(`job${side}`);
+              if (job && typeof settings[`job${side}`] === "string") job.value = settings[`job${side}`];
+            }
           }
         };
         wrappedApply.__aiBridgeDynamic = true;
