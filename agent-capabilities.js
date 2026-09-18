@@ -16,16 +16,30 @@
   ]);
 
   const DEFAULT_AGENT_COUNT = 3;
-  const MAX_UNIQUE_PROVIDER_AGENTS = PROVIDER_FAMILIES.length;
+
+  // Provider-family count and logical-agent capacity are intentionally separate.
+  // Multiple logical agents may use different tabs/conversations from the same
+  // provider family, so the number of provider families must never implicitly
+  // cap the number of logical viewpoints. Keep the visible/runtime ceiling at
+  // five for v1.17.1; later slices can raise MAX_LOGICAL_AGENTS without changing
+  // provider discovery or weakening any same-provider isolation rule.
+  const PROVIDER_FAMILY_COUNT = PROVIDER_FAMILIES.length;
+  const MAX_LOGICAL_AGENTS = 5;
+
+  // Compatibility alias retained for older v1.17.1 modules/tests that still
+  // consume this property name. Its meaning is now explicitly the logical-slot
+  // ceiling, not the number of unique provider families.
+  const MAX_UNIQUE_PROVIDER_AGENTS = MAX_LOGICAL_AGENTS;
+
   const SIDE_ALPHABET = Object.freeze("ABCDEFGHIJKLMNOPQRSTUVWXYZ".split(""));
-  const SUPPORTED_AGENT_SIDES = Object.freeze(SIDE_ALPHABET.slice(0, MAX_UNIQUE_PROVIDER_AGENTS));
+  const SUPPORTED_AGENT_SIDES = Object.freeze(SIDE_ALPHABET.slice(0, MAX_LOGICAL_AGENTS));
   const DUPLICATE_PROVIDER_AGENTS_ENABLED = true;
 
   function parseAgentCount(raw) {
     if (raw === null || raw === undefined || raw === "") return null;
     const value = Number(raw);
     if (!Number.isInteger(value)) return null;
-    if (value < 1 || value > MAX_UNIQUE_PROVIDER_AGENTS) return null;
+    if (value < 1 || value > MAX_LOGICAL_AGENTS) return null;
     return value;
   }
 
@@ -39,7 +53,7 @@
   function sideIdsForCount(raw) {
     const count = parseAgentCount(raw);
     if (count === null) {
-      throw new RangeError(`Agent count must be an integer from 1 to ${MAX_UNIQUE_PROVIDER_AGENTS}.`);
+      throw new RangeError(`Agent count must be an integer from 1 to ${MAX_LOGICAL_AGENTS}.`);
     }
     return SUPPORTED_AGENT_SIDES.slice(0, count);
   }
@@ -199,6 +213,8 @@
   globalThis.__AI_BRIDGE_AGENT_CAPABILITIES__ = Object.freeze({
     version: 1,
     defaultAgentCount: DEFAULT_AGENT_COUNT,
+    providerFamilyCount: PROVIDER_FAMILY_COUNT,
+    maxLogicalAgents: MAX_LOGICAL_AGENTS,
     maxUniqueProviderAgents: MAX_UNIQUE_PROVIDER_AGENTS,
     supportedAgentSides: SUPPORTED_AGENT_SIDES,
     providerFamilies: PROVIDER_FAMILIES,
