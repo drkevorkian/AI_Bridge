@@ -198,13 +198,12 @@ assert.throws(
   }),
   /forbidden key|malformed canonical agent ID/i
 );
-assert.throws(
-  () => api.hydratePersistedState({
-    ...migrated,
-    currentSide: "agent-6"
-  }),
-  /outside the active roster/i
-);
+const staleCurrent = api.hydratePersistedState({
+  ...migrated,
+  currentSide: "agent-6"
+});
+assert.equal(staleCurrent.currentSide, null,
+  "out-of-roster currentSide is a stale runtime pointer and must recover closed");
 assert.throws(
   () => api.hydratePersistedState({
     ...migrated,
