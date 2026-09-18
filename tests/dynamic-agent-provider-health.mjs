@@ -8,6 +8,7 @@ const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const wrapper = fs.readFileSync(path.join(root, "background-wrapper.js"), "utf8");
 const healthSrc = fs.readFileSync(path.join(root, "provider-health-runtime.js"), "utf8");
 const capsSrc = fs.readFileSync(path.join(root, "agent-capabilities.js"), "utf8");
+const rosterSrc = fs.readFileSync(path.join(root, "roster-state-adapter.js"), "utf8");
 
 assert.ok(wrapper.includes('importScripts("provider-health-runtime.js")'));
 assert.ok(
@@ -62,6 +63,7 @@ function load(state, { senderUrl = "chrome-extension://bridge/dashboard.html" } 
   });
   context.globalThis = context;
   vm.runInContext(capsSrc, context, { filename: "agent-capabilities.js" });
+  vm.runInContext(rosterSrc, context, { filename: "roster-state-adapter.js" });
   context.__AI_BRIDGE_DYNAMIC_AGENTS_V1__ = Object.freeze({
     version: 1,
     uniqueTabBinding: true,
@@ -232,6 +234,7 @@ assert.equal(noneReadySelect.recommendation.side, null);
 assert.match(noneReadySelect.recommendation.reason, /No READY agent/);
 
 assert.equal(three.__AI_BRIDGE_PROVIDER_HEALTH_V1__.stateKeyedProbeCache, true);
+assert.equal(three.__AI_BRIDGE_PROVIDER_HEALTH_V1__.readsRosterThroughAdapter, true);
 assert.equal(three.__AI_BRIDGE_PROVIDER_HEALTH_V1__.mutatesRouting, false);
 assert.equal(three.__AI_BRIDGE_PROVIDER_HEALTH_V1__.sendsProviderPrompts, false);
 

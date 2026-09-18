@@ -6,6 +6,7 @@ import { fileURLToPath } from "node:url";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const capsSrc = fs.readFileSync(path.join(root, "agent-capabilities.js"), "utf8");
+const rosterSrc = fs.readFileSync(path.join(root, "roster-state-adapter.js"), "utf8");
 const healthSrc = fs.readFileSync(path.join(root, "provider-health-runtime.js"), "utf8");
 const dashboardSrc = fs.readFileSync(path.join(root, "dashboard-dynamic-agents.js"), "utf8");
 const css = fs.readFileSync(path.join(root, "dashboard-dynamic-agents.css"), "utf8");
@@ -49,6 +50,7 @@ function loadHealth({ duplicateProviderAgentsEnabled }) {
   });
   context.globalThis = context;
   vm.runInContext(capsSrc, context, { filename: "agent-capabilities.js" });
+  vm.runInContext(rosterSrc, context, { filename: "roster-state-adapter.js" });
   context.__AI_BRIDGE_AGENT_CAPABILITIES__ = Object.freeze({
     ...context.__AI_BRIDGE_AGENT_CAPABILITIES__,
     duplicateProviderAgentsEnabled
