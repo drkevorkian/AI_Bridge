@@ -9,11 +9,15 @@
   if (globalThis[FLAG]) return;
 
   const caps = globalThis.__AI_BRIDGE_AGENT_CAPABILITIES__;
+  const rosterState = globalThis.__AI_BRIDGE_ROSTER_STATE_ADAPTER_V1__;
   if (!caps || caps.version !== 1 || typeof caps.conversationIdentity !== "function" || typeof caps.sameFamilySendPlan !== "function") {
     throw new Error("Viewpoint runtime requires the conversation-identity contract.");
   }
   if (caps.duplicateProviderAgentsEnabled !== true) {
     throw new Error("Viewpoint runtime activation requires duplicate-provider mode.");
+  }
+  if (!rosterState || rosterState.version !== 1 || typeof rosterState.readAgent !== "function") {
+    throw new Error("Viewpoint runtime requires the roster-state adapter.");
   }
 
   const familyQueues = new Map();
@@ -36,8 +40,12 @@
     }
   }
 
+  function boundTabIdForSide(side) {
+    return Number(rosterState.readAgent(state, side).tabId) || 0;
+  }
+
   async function identityForSide(side) {
-    const tabId = typeof tabForSide === "function" ? Number(tabForSide(side)) : 0;
+    const tabId = boundTabIdForSide(side);
     return caps.conversationIdentity({ side, tabId, url: await tabUrl(tabId) });
   }
 
@@ -98,7 +106,7 @@
   async function currentAssignments() {
     const rows = [];
     for (const side of liveSides()) {
-      const tabId = typeof tabForSide === "function" ? Number(tabForSide(side)) : 0;
+      const tabId = boundTabIdForSide(side);
       rows.push({ side, tabId, url: await tabUrl(tabId) });
     }
     return rows;
@@ -380,6 +388,7 @@
     queueTelemetryReadOnly: true,
     queueTelemetryEphemeral: true,
     queueTelemetryContainsSensitiveIdentity: false,
+    readsRosterThroughAdapter: true,
     enablesDuplicateProviders: true
   });
 })();
