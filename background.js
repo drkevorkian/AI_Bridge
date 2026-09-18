@@ -1,5 +1,5 @@
 const SIDES = ["A", "B", "C"];
-const STATE_VERSION = 3;
+const STATE_VERSION = 4;
 const CONTENT_VERSION = "1.14.0";
 const WORK_MODES = new Set(["relay", "collaborate", "compete", "parallel", "review", "mesh"]);
 const INFINITE_TURNS = -1;
@@ -1237,8 +1237,27 @@ function canFallbackToText(artifacts) {
   return Array.isArray(artifacts) && artifacts.length > 0 && artifacts.every(file => String(file.previewText || "").trim());
 }
 
+function stateV4Persistence() {
+  const persistence = globalThis.__AI_BRIDGE_STATE_V4_PERSISTENCE_V1__;
+  if (
+    !persistence ||
+    persistence.version !== 1 ||
+    persistence.targetStateVersion !== STATE_VERSION ||
+    typeof persistence.serializeRuntimeState !== "function" ||
+    typeof persistence.hydratePersistedState !== "function" ||
+    typeof persistence.migrateV3State !== "function"
+  ) {
+    throw new Error("State V4 persistence boundary is unavailable.");
+  }
+  return persistence;
+}
+
 async function saveState() {
-  await chrome.storage.local.set({ bridgeState: state });
+  // State V4 persistence is a strict boundary: the live runtime may expose
+  // ephemeral A-E compatibility mirrors, but storage receives only the V2
+  // roster plus canonical agent references/maps.
+  const persisted = stateV4Persistence().serializeRuntimeState(state);
+  await chrome.storage.local.set({ bridgeState: persisted });
 }
 
 async function saveHistory() {
@@ -1446,123 +1465,156 @@ async function loadState() {
   history = normalizeHistory(bridgeHistory);
   artifactStore = bridgeArtifacts && typeof bridgeArtifacts === "object" ? bridgeArtifacts : {};
 
-  if (bridgeState?.stateVersion === STATE_VERSION) {
-    state = {
-      ...cloneDefaultState(),
-      ...bridgeState,
-      sourceFiles: Array.isArray(bridgeState.sourceFiles) ? bridgeState.sourceFiles : [],
-      sourceDeliveredBySide: {
-        A: false,
-        B: false,
-        C: false,
-        ...(bridgeState.sourceDeliveredBySide || {})
-      },
-      relayArtifacts: Array.isArray(bridgeState.relayArtifacts) ? bridgeState.relayArtifacts : [],
-      activeArtifactIds: Array.isArray(bridgeState.activeArtifactIds)
-        ? bridgeState.activeArtifactIds
-        : (bridgeState.sessionActive && Array.isArray(bridgeState.relayArtifacts) ? bridgeState.relayArtifacts.map(item => item?.id).filter(Boolean) : []),
-      lastSentArtifactIdsBySide: { A: [], B: [], C: [], ...(bridgeState.lastSentArtifactIdsBySide || {}) },
-      lastResponseBySide: bridgeState.lastResponseBySide || {},
-      lastSentBySide: bridgeState.lastSentBySide || {},
-      lastDeliveredSeqBySide: {
-        A: 0,
-        B: 0,
-        C: 0,
-        ...(bridgeState.lastDeliveredSeqBySide || {})
-      },
-      roundStartedAtBySide: { A: null, B: null, C: null, ...(bridgeState.roundStartedAtBySide || {}) },
-      roundNumberBySide: { A: 0, B: 0, C: 0, ...(bridgeState.roundNumberBySide || {}) },
-      lastRoundDurationMsBySide: { A: null, B: null, C: null, ...(bridgeState.lastRoundDurationMsBySide || {}) },
-      lastRoundCompletedAtBySide: { A: null, B: null, C: null, ...(bridgeState.lastRoundCompletedAtBySide || {}) },
-      totalWorkMsBySide: { A: 0, B: 0, C: 0, ...(bridgeState.totalWorkMsBySide || {}) },
-      generationIdBySide: { A: null, B: null, C: null, ...(bridgeState.generationIdBySide || {}) },
-      recoveryAttemptBySide: { A: 0, B: 0, C: 0, ...(bridgeState.recoveryAttemptBySide || {}) },
-      lastProgressAtBySide: { A: null, B: null, C: null, ...(bridgeState.lastProgressAtBySide || {}) },
-      cycleParticipants: Array.isArray(bridgeState.cycleParticipants) ? bridgeState.cycleParticipants.filter(side => SIDES.includes(side)) : [],
-      phasePendingSides: Array.isArray(bridgeState.phasePendingSides) ? bridgeState.phasePendingSides.filter(side => SIDES.includes(side)) : [],
-      phaseSentSides: Array.isArray(bridgeState.phaseSentSides) ? bridgeState.phaseSentSides.filter(side => SIDES.includes(side)) : [],
-      phaseCompletedSides: Array.isArray(bridgeState.phaseCompletedSides) ? bridgeState.phaseCompletedSides.filter(side => SIDES.includes(side)) : [],
-      primaryResponseSeqBySide: { A: null, B: null, C: null, ...(bridgeState.primaryResponseSeqBySide || {}) },
-      reviewResponseSeqBySide: { A: null, B: null, C: null, ...(bridgeState.reviewResponseSeqBySide || {}) },
-      pendingHumanQueue: Array.isArray(bridgeState.pendingHumanQueue) ? bridgeState.pendingHumanQueue : [],
-      pendingMainInterjections: Array.isArray(bridgeState.pendingMainInterjections) ? bridgeState.pendingMainInterjections : [],
-      suppressedHumanRequests: migrateSuppressedHumanRequests(bridgeState),
-      transcript: Array.isArray(bridgeState.transcript) ? bridgeState.transcript : [],
-      log: Array.isArray(bridgeState.log) ? bridgeState.log : []
-    };
-    state.workMode = normalizeWorkMode(state.workMode);
-    state.mainSide = SIDES.includes(state.mainSide) ? state.mainSide : (SIDES.includes(state.startSide) ? state.startSide : "A");
-    if (!isBatchWorkMode(state.workMode)) {
-      state.workPhase = state.workMode === "collaborate" ? "collaborate" : (state.workMode === "mesh" ? "mesh" : "relay");
-      state.phasePendingSides = [];
-      state.phaseSentSides = [];
-      state.phaseCompletedSides = [];
-    } else if (!['primary', 'review'].includes(state.workPhase)) {
-      state.workPhase = 'primary';
-    }
-    // bridgeArtifacts is the durable source of truth. Rebuild the visible Vault
-    // index from it so files survive service-worker/browser restarts and new sessions.
-    state.relayArtifacts = artifactSummariesFromStore();
-    state.activeArtifactIds = (state.activeArtifactIds || []).filter(id => Boolean(artifactStore[id]));
-    try {
-      state.maxTurns = normalizeMaxTurns(state.maxTurns);
-    } catch (_) {
-      state.maxTurns = INFINITE_TURNS;
-    }
-    const migrated = migrateTimerState(state);
-    state.activeSides = migrated.activeSides;
-    state.maxCycles = migrated.maxCycles;
-    state.cycleCount = migrated.cycleCount;
-    state.checkpointEveryNCycles = clampCheckpointEvery(state.checkpointEveryNCycles);
-    state.stuckTimeoutMinutes = clampStuckTimeoutMinutes(state.stuckTimeoutMinutes);
-    if (state.recoveryCheckpoint && typeof state.recoveryCheckpoint === "object") {
-      const text = String(state.recoveryCheckpoint.text || "").slice(0, MAX_CHECKPOINT_CHARS);
-      state.recoveryCheckpoint = text ? { ...state.recoveryCheckpoint, text } : null;
+  const persistence = stateV4Persistence();
+  let hydrated = null;
+  let loadFailure = null;
+
+  try {
+    if (Number(bridgeState?.stateVersion) === STATE_VERSION) {
+      hydrated = persistence.hydratePersistedState(bridgeState);
+    } else if (Number(bridgeState?.stateVersion) === persistence.sourceStateVersion) {
+      // Atomic one-way migration: construct and validate the complete V4
+      // snapshot first, persist it once, and only then replace live state.
+      // If validation or storage fails, the original V3 key is left untouched.
+      const migrated = persistence.migrateV3State(bridgeState);
+      await chrome.storage.local.set({ bridgeState: migrated });
+      hydrated = persistence.hydratePersistedState(migrated);
+    } else if (!bridgeState || Number(bridgeState?.stateVersion || 0) < persistence.sourceStateVersion) {
+      // Very old/no state: preserve the historical low-risk preferences, then
+      // immediately establish the V4 format as the only persisted authority.
+      const fresh = cloneDefaultState();
+      if (bridgeState) {
+        fresh.maxTurns = Number(bridgeState.maxTurns) || fresh.maxTurns;
+        fresh.delayMs = Number(bridgeState.delayMs) || fresh.delayMs;
+      }
+      const persisted = persistence.serializeRuntimeState(fresh);
+      await chrome.storage.local.set({ bridgeState: persisted });
+      hydrated = persistence.hydratePersistedState(persisted);
     } else {
-      state.recoveryCheckpoint = null;
+      throw new Error(
+        `Stored stateVersion ${String(bridgeState?.stateVersion)} is newer than this build supports; refusing to overwrite it.`
+      );
     }
-    try {
-      state.sourceFiles = normalizeSourceFiles(state.sourceFiles);
-    } catch (_) {
-      state.sourceFiles = [];
-      state.sourceDeliveredBySide = { A: false, B: false, C: false };
-    }
-  } else {
-    // Older builds may not have the current three-agent/dashboard state shape.
-    // Preserve a few useful settings, but start with a clean v1.5 session.
-    state = cloneDefaultState();
-    if (bridgeState) {
-      state.maxTurns = Number(bridgeState.maxTurns) || state.maxTurns;
-      state.delayMs = Number(bridgeState.delayMs) || state.delayMs;
-    }
-    state.relayArtifacts = artifactSummariesFromStore();
-    state.activeArtifactIds = [];
-    await saveState();
+  } catch (error) {
+    loadFailure = error;
+    // Fail closed without writing. Build a safe in-memory V4 shell so the
+    // dashboard remains usable and can report the recoverable error, while the
+    // original persisted snapshot remains exactly as it was.
+    const safe = cloneDefaultState();
+    const safePersisted = persistence.serializeRuntimeState(safe);
+    hydrated = persistence.hydratePersistedState(safePersisted);
   }
 
-  await validateSavedBindings();
+  state = {
+    ...cloneDefaultState(),
+    ...hydrated,
+    sourceFiles: Array.isArray(hydrated?.sourceFiles) ? hydrated.sourceFiles : [],
+    sourceDeliveredBySide: {
+      A: false,
+      B: false,
+      C: false,
+      ...(hydrated?.sourceDeliveredBySide || {})
+    },
+    relayArtifacts: Array.isArray(hydrated?.relayArtifacts) ? hydrated.relayArtifacts : [],
+    activeArtifactIds: Array.isArray(hydrated?.activeArtifactIds)
+      ? hydrated.activeArtifactIds
+      : (hydrated?.sessionActive && Array.isArray(hydrated?.relayArtifacts)
+        ? hydrated.relayArtifacts.map(item => item?.id).filter(Boolean)
+        : []),
+    lastSentArtifactIdsBySide: { A: [], B: [], C: [], ...(hydrated?.lastSentArtifactIdsBySide || {}) },
+    lastResponseBySide: hydrated?.lastResponseBySide || {},
+    lastSentBySide: hydrated?.lastSentBySide || {},
+    lastDeliveredSeqBySide: { A: 0, B: 0, C: 0, ...(hydrated?.lastDeliveredSeqBySide || {}) },
+    roundStartedAtBySide: { A: null, B: null, C: null, ...(hydrated?.roundStartedAtBySide || {}) },
+    roundNumberBySide: { A: 0, B: 0, C: 0, ...(hydrated?.roundNumberBySide || {}) },
+    lastRoundDurationMsBySide: { A: null, B: null, C: null, ...(hydrated?.lastRoundDurationMsBySide || {}) },
+    lastRoundCompletedAtBySide: { A: null, B: null, C: null, ...(hydrated?.lastRoundCompletedAtBySide || {}) },
+    totalWorkMsBySide: { A: 0, B: 0, C: 0, ...(hydrated?.totalWorkMsBySide || {}) },
+    generationIdBySide: { A: null, B: null, C: null, ...(hydrated?.generationIdBySide || {}) },
+    recoveryAttemptBySide: { A: 0, B: 0, C: 0, ...(hydrated?.recoveryAttemptBySide || {}) },
+    lastProgressAtBySide: { A: null, B: null, C: null, ...(hydrated?.lastProgressAtBySide || {}) },
+    cycleParticipants: Array.isArray(hydrated?.cycleParticipants) ? hydrated.cycleParticipants.filter(side => SIDES.includes(side)) : [],
+    phasePendingSides: Array.isArray(hydrated?.phasePendingSides) ? hydrated.phasePendingSides.filter(side => SIDES.includes(side)) : [],
+    phaseSentSides: Array.isArray(hydrated?.phaseSentSides) ? hydrated.phaseSentSides.filter(side => SIDES.includes(side)) : [],
+    phaseCompletedSides: Array.isArray(hydrated?.phaseCompletedSides) ? hydrated.phaseCompletedSides.filter(side => SIDES.includes(side)) : [],
+    primaryResponseSeqBySide: { A: null, B: null, C: null, ...(hydrated?.primaryResponseSeqBySide || {}) },
+    reviewResponseSeqBySide: { A: null, B: null, C: null, ...(hydrated?.reviewResponseSeqBySide || {}) },
+    pendingHumanQueue: Array.isArray(hydrated?.pendingHumanQueue) ? hydrated.pendingHumanQueue : [],
+    pendingMainInterjections: Array.isArray(hydrated?.pendingMainInterjections) ? hydrated.pendingMainInterjections : [],
+    suppressedHumanRequests: migrateSuppressedHumanRequests(hydrated),
+    transcript: Array.isArray(hydrated?.transcript) ? hydrated.transcript : [],
+    log: Array.isArray(hydrated?.log) ? hydrated.log : []
+  };
 
-  // Manifest V3 service workers are disposable. When Chrome wakes this worker
-  // back up, proactively reconnect all three page listeners so a saved running
-  // session can continue without the popup having to be opened first.
-  if (state.sessionActive && state.running) {
+  if (loadFailure) {
+    state.sessionActive = false;
+    state.running = false;
+    state.paused = true;
+    state.pauseReason = `Stored AI Bridge state could not be safely loaded: ${String(loadFailure?.message || loadFailure).slice(0, 300)} Stored data was left unchanged.`;
+    appendLog({ time: Date.now(), type: "storage", text: state.pauseReason });
+  }
+
+  state.workMode = normalizeWorkMode(state.workMode);
+  state.mainSide = SIDES.includes(state.mainSide) ? state.mainSide : (SIDES.includes(state.startSide) ? state.startSide : "A");
+  if (!isBatchWorkMode(state.workMode)) {
+    state.workPhase = state.workMode === "collaborate" ? "collaborate" : (state.workMode === "mesh" ? "mesh" : "relay");
+    state.phasePendingSides = [];
+    state.phaseSentSides = [];
+    state.phaseCompletedSides = [];
+  } else if (!["primary", "review"].includes(state.workPhase)) {
+    state.workPhase = "primary";
+  }
+
+  // bridgeArtifacts is the durable source of truth. Rebuild the visible Vault
+  // index from it so files survive service-worker/browser restarts and new sessions.
+  state.relayArtifacts = artifactSummariesFromStore();
+  state.activeArtifactIds = (state.activeArtifactIds || []).filter(id => Boolean(artifactStore[id]));
+  try {
+    state.maxTurns = normalizeMaxTurns(state.maxTurns);
+  } catch (_) {
+    state.maxTurns = INFINITE_TURNS;
+  }
+  const migratedTimer = migrateTimerState(state);
+  state.activeSides = migratedTimer.activeSides;
+  state.maxCycles = migratedTimer.maxCycles;
+  state.cycleCount = migratedTimer.cycleCount;
+  state.checkpointEveryNCycles = clampCheckpointEvery(state.checkpointEveryNCycles);
+  state.stuckTimeoutMinutes = clampStuckTimeoutMinutes(state.stuckTimeoutMinutes);
+  if (state.recoveryCheckpoint && typeof state.recoveryCheckpoint === "object") {
+    const text = String(state.recoveryCheckpoint.text || "").slice(0, MAX_CHECKPOINT_CHARS);
+    state.recoveryCheckpoint = text ? { ...state.recoveryCheckpoint, text } : null;
+  } else {
+    state.recoveryCheckpoint = null;
+  }
+  try {
+    state.sourceFiles = normalizeSourceFiles(state.sourceFiles);
+  } catch (_) {
+    state.sourceFiles = [];
+    state.sourceDeliveredBySide = { A: false, B: false, C: false };
+  }
+
+  if (!loadFailure) await validateSavedBindings();
+
+  // Manifest V3 service workers are disposable. Reconnect the currently live
+  // provider tabs so a saved running session can resume without opening the UI.
+  if (!loadFailure && state.sessionActive && state.running) {
     try {
       await Promise.all(SIDES.map(side => ensureTabListener(tabForSide(side))));
     } catch (err) {
       state.running = false;
       state.paused = true;
-      state.pauseReason = `Automatic reconnect failed: ${err.message}. Rebind the three tabs and press Resume.`;
+      state.pauseReason = `Automatic reconnect failed: ${err.message}. Rebind the provider tabs and press Resume.`;
       await saveState();
     }
   }
 
-  if (state.awaitingHuman && state.pendingHuman) {
+  if (!loadFailure && state.awaitingHuman && state.pendingHuman) {
     await showHumanAttention(state.pendingHuman.requestingSide, state.pendingHuman.prompt);
   } else {
     await clearAttention();
   }
 
-  if (state.sessionActive && state.running && !state.awaitingHuman) {
+  if (!loadFailure && state.sessionActive && state.running && !state.awaitingHuman) {
     await ensureWatchdogAlarm();
   } else {
     await clearWatchdogAlarm();
@@ -3738,9 +3790,9 @@ async function applyIdleCloudSettings(settings) {
   if (state.sessionActive) {
     throw new Error("Stop the active Bridge session before pulling cloud settings into this profile.");
   }
-  state.jobA = settings.jobA;
-  state.jobB = settings.jobB;
-  state.jobC = settings.jobC;
+  writeRosterAgentForSide("A", { job: settings.jobA });
+  writeRosterAgentForSide("B", { job: settings.jobB });
+  writeRosterAgentForSide("C", { job: settings.jobC });
   state.teamRules = settings.teamRules;
   state.workMode = settings.workMode;
   state.startSide = settings.startSide;
