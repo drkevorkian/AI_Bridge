@@ -3108,7 +3108,7 @@ async function forceRelayCapturedResponse(source, targets) {
   };
 }
 
-const CLOUD_SETTINGS_VERSION = 1;
+const CLOUD_SETTINGS_VERSION = 2;
 const CLOUD_SYNC_KEY = "bridgeCloudSettings";
 const CLOUD_SYNC_PREFIX = "bridgeCloudSettings";
 const CLOUD_SYNC_META_KEY = "bridgeCloudSettings.meta";
@@ -3133,12 +3133,26 @@ function clampCloudPane(value) {
   return Math.min(70, Math.max(24, Math.round(n * 10) / 10));
 }
 
+function cloudSettingsV2Contract() {
+  const contract = globalThis.__AI_BRIDGE_CLOUD_SETTINGS_V2__;
+  if (
+    !contract ||
+    contract.version !== CLOUD_SETTINGS_VERSION ||
+    typeof contract.normalizeRosterAndStart !== "function" ||
+    typeof contract.projectToLegacy !== "function"
+  ) {
+    throw new Error("Cloud Settings V2 contract is unavailable.");
+  }
+  return contract;
+}
+
 function sanitizeHistoryForCloud(kind, items, limit) {
   const list = Array.isArray(items) ? items : [];
   if (kind === "jobs") {
+    const cloudV2 = cloudSettingsV2Contract();
     return list.slice(0, limit).map(item => ({
       time: Number(item?.time) || Date.now(),
-      side: SIDES.includes(item?.side) ? item.side : "A",
+      side: cloudV2.isLegacySide(item?.side) ? String(item.side).toUpperCase() : "A",
       label: String(item?.label || "AI").slice(0, 80),
       job: String(item?.job || "").trim().slice(0, 4000)
     })).filter(item => item.job);
@@ -3150,11 +3164,13 @@ function sanitizeHistoryForCloud(kind, items, limit) {
 }
 
 function sanitizeCloudSettings(raw, options = {}) {
-  // Whitelist reconstruction. Anything not copied here — transcripts, Vault
-  // bytes, source files, tab IDs, tokens, live session, recoveryCheckpoint,
-  // OAuth client IDs — is dropped. layout is studio|classic only.
+  // Whitelist reconstruction. Cloud V2 stores only canonical logical-agent
+  // identity/job configuration. Browser tab bindings, transcripts, Vault bytes,
+  // source files, OAuth material, and live execution state are never copied.
   const src = raw && typeof raw === "object" && !Array.isArray(raw) ? raw : {};
   const stamp = options.stamp !== false;
+  const cloudV2 = cloudSettingsV2Contract();
+  const canonical = cloudV2.normalizeRosterAndStart(src);
   let maxTurns = INFINITE_TURNS;
   try { maxTurns = normalizeMaxTurns(src.maxTurns); } catch (_) { maxTurns = INFINITE_TURNS; }
   let maxCycles = maxTurns;
@@ -3168,16 +3184,14 @@ function sanitizeCloudSettings(raw, options = {}) {
     layout: ALLOWED_CLOUD_LAYOUTS.has(src.layout) ? src.layout : "studio",
     paneWidth: clampCloudPane(src.paneWidth),
     workMode: normalizeWorkMode(src.workMode),
-    startSide: SIDES.includes(src.startSide) ? src.startSide : "A",
+    startAgentId: canonical.startAgentId,
+    roster: canonical.roster,
     maxTurns,
     maxCycles,
     checkpointEveryNCycles: clampCheckpointEvery(src.checkpointEveryNCycles),
     stuckTimeoutMinutes: clampStuckTimeoutMinutes(src.stuckTimeoutMinutes),
     delayMs: Math.max(0, Math.min(30000, Number.isFinite(delay) ? delay : 1500)),
     freshOnStart: Boolean(src.freshOnStart),
-    jobA: String(src.jobA || "").trim().slice(0, 4000),
-    jobB: String(src.jobB || "").trim().slice(0, 4000),
-    jobC: String(src.jobC || "").trim().slice(0, 4000),
     teamRules: String(src.teamRules || "").trim().slice(0, 12000),
     history: {
       jobs: sanitizeHistoryForCloud("jobs", src.history?.jobs, 20),
@@ -3192,9 +3206,20 @@ function assertCloudSettingsSafe(settings) {
   if (/(ya29\.|[Aa]ccess[_-]?[Tt]oken|[Rr]efresh[_-]?[Tt]oken|Bearer\s+[A-Za-z0-9._~+/=-]+)/.test(json)) {
     throw new Error("Refusing cloud settings that contain credential material.");
   }
-  for (const key of Object.keys(settings || {})) {
-    if (/token|secret|password|authorization|credential/i.test(key)) {
-      throw new Error("Refusing cloud settings that contain credential fields.");
+
+  const pending = [settings];
+  while (pending.length) {
+    const current = pending.pop();
+    if (!current || typeof current !== "object") continue;
+    if (Array.isArray(current)) {
+      pending.push(...current);
+      continue;
+    }
+    for (const [key, value] of Object.entries(current)) {
+      if (/token|secret|password|authorization|credential/i.test(key)) {
+        throw new Error("Refusing cloud settings that contain credential fields.");
+      }
+      if (value && typeof value === "object") pending.push(value);
     }
   }
 }
@@ -3786,23 +3811,24 @@ async function cloudStatus() {
   };
 }
 
-async function applyIdleCloudSettings(settings) {
+async function applyIdleCloudSettings(settings, { persist = true } = {}) {
   if (state.sessionActive) {
     throw new Error("Stop the active Bridge session before pulling cloud settings into this profile.");
   }
+  const projected = cloudSettingsV2Contract().projectToLegacy(settings);
   const baseCloudJobSides = Number(state?.stateVersion) === 4 && Array.isArray(state?.roster?.agents)
     ? state.roster.agents.map(agent => String(agent?.legacySide || "")).filter(side => ["A", "B", "C"].includes(side))
     : ["A", "B", "C"];
   for (const side of baseCloudJobSides) {
-    writeRosterAgentForSide(side, { job: settings[`job${side}`] });
+    writeRosterAgentForSide(side, { job: projected[`job${side}`] });
   }
   state.teamRules = settings.teamRules;
   state.workMode = settings.workMode;
-  state.startSide = settings.startSide;
-  state.mainSide = settings.startSide;
+  state.startSide = projected.startSide;
+  state.mainSide = projected.startSide;
   state.maxTurns = settings.maxTurns;
   state.delayMs = settings.delayMs;
-  await saveState();
+  if (persist) await saveState();
 }
 
 async function pushCloudSettings(raw) {

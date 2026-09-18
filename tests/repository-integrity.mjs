@@ -99,12 +99,13 @@ for (const requiredModule of [
   "coordinator-mutex-prelude.js", "worker-fetch-security-prelude.js", "artifact-fetch-runtime-hardening.js",
   "update-runtime-hardening.js", "manual-relay-runtime-hardening.js", "coordinator-generation-hardening.js",
   "human-input-runtime-hardening.js", "watchdog-runtime-hardening.js", "reconnect-runtime-hardening.js",
-  "agent-capabilities.js", "roster-v2-migration.js", "state-v4-persistence.js", "roster-state-adapter.js", "execution-key-adapter.js", "coordinator-dynamic-agents.js", "coordinator-dynamic-semantics.js", "provider-health-runtime.js", "viewpoint-runtime.js"
+  "agent-capabilities.js", "cloud-settings-v2.js", "roster-v2-migration.js", "state-v4-persistence.js", "roster-state-adapter.js", "execution-key-adapter.js", "coordinator-dynamic-agents.js", "coordinator-dynamic-semantics.js", "provider-health-runtime.js", "viewpoint-runtime.js"
 ]) assert.ok(wrapper.includes(`importScripts("${requiredModule}")`), `service worker is not loading ${requiredModule}`);
 
 const mutexIndex = wrapper.indexOf('importScripts("coordinator-mutex-prelude.js")');
 const workerFetchIndex = wrapper.indexOf('importScripts("worker-fetch-security-prelude.js")');
 const capabilitiesIndex = wrapper.indexOf('importScripts("agent-capabilities.js")');
+const cloudV2Index = wrapper.indexOf('importScripts("cloud-settings-v2.js")');
 const rosterMigrationIndex = wrapper.indexOf('importScripts("roster-v2-migration.js")');
 const stateV4Index = wrapper.indexOf('importScripts("state-v4-persistence.js")');
 const rosterIndex = wrapper.indexOf('importScripts("roster-state-adapter.js")');
@@ -117,12 +118,13 @@ const helperIndex = wrapper.indexOf('importScripts("completion-runtime-hardening
 assert.ok(mutexIndex >= 0 && mutexIndex < workerFetchIndex, "coordinator mutex must load before worker network guard");
 assert.ok(
   capabilitiesIndex >= 0 &&
-  capabilitiesIndex < rosterMigrationIndex &&
+  capabilitiesIndex < cloudV2Index &&
+  cloudV2Index < rosterMigrationIndex &&
   rosterMigrationIndex < stateV4Index &&
   stateV4Index < rosterIndex &&
   rosterIndex < executionKeyIndex &&
   executionKeyIndex < backgroundIndex,
-  "V4 migration/persistence/roster/execution contracts must load in dependency order before background.js"
+  "cloud/V4 migration/persistence/roster/execution contracts must load in dependency order before background.js"
 );
 assert.ok(workerFetchIndex < backgroundIndex, "worker credential guard must load before background.js");
 assert.ok(rosterIndex < backgroundIndex && backgroundIndex < dynamicAgentIndex,

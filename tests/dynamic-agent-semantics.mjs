@@ -7,6 +7,7 @@ import { fileURLToPath } from "node:url";
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const wrapper = fs.readFileSync(path.join(root, "background-wrapper.js"), "utf8");
 const capsSrc = fs.readFileSync(path.join(root, "agent-capabilities.js"), "utf8");
+const cloudV2Src = fs.readFileSync(path.join(root, "cloud-settings-v2.js"), "utf8");
 const rosterSrc = fs.readFileSync(path.join(root, "roster-state-adapter.js"), "utf8");
 const overlaySrc = fs.readFileSync(path.join(root, "coordinator-dynamic-semantics.js"), "utf8");
 const adapter = fs.readFileSync(path.join(root, "dashboard-dynamic-agents.js"), "utf8");
@@ -112,22 +113,27 @@ function load(agentCount) {
     forceRelayCapturedResponse: async () => ({ ok: true }),
     sanitizeCloudSettings(raw) {
       const src = raw || {};
+      const canonical = context.__AI_BRIDGE_CLOUD_SETTINGS_V2__.normalizeRosterAndStart(src);
       return {
-        startSide: ["A", "B", "C"].includes(src.startSide) ? src.startSide : "A",
-        jobA: String(src.jobA || ""),
-        jobB: String(src.jobB || ""),
-        jobC: String(src.jobC || "")
+        schemaVersion: 2,
+        roster: canonical.roster,
+        startAgentId: canonical.startAgentId
       };
     },
-    applyIdleCloudSettings: async function applyIdle(settings) {
-      context.state.jobA = settings.jobA;
-      context.state.jobB = settings.jobB;
-      context.state.jobC = settings.jobC;
-      context.state.startSide = settings.startSide;
+    applyIdleCloudSettings: async function applyIdle(settings, { persist = true } = {}) {
+      const projected = context.__AI_BRIDGE_CLOUD_SETTINGS_V2__.projectToLegacy(settings);
+      for (const side of context.SIDES.filter(side => ["A", "B", "C"].includes(side))) {
+        context.__AI_BRIDGE_ROSTER_STATE_ADAPTER_V1__.writeAgent(context.state, side, {
+          job: projected[`job${side}`]
+        });
+      }
+      context.state.startSide = projected.startSide;
+      if (persist) await context.saveState();
     }
   });
   context.globalThis = context;
   context.__AI_BRIDGE_AGENT_CAPABILITIES__ = caps;
+  vm.runInContext(cloudV2Src, context, { filename: "cloud-settings-v2.js" });
   vm.runInContext(rosterSrc, context, { filename: "roster-state-adapter.js" });
   context.__AI_BRIDGE_DYNAMIC_AGENTS_V1__ = Object.freeze({
     version: 1,
@@ -190,10 +196,13 @@ const stored = cloud.sanitizeCloudSettings({
   jobD: "Second viewpoint",
   jobE: "Auditor"
 });
-assert.equal(stored.agentCount, 5);
-assert.equal(stored.startSide, "E");
-assert.equal(stored.jobD, "Second viewpoint");
-assert.equal(stored.jobE, "Auditor");
+assert.equal(stored.schemaVersion, 2);
+assert.equal(stored.roster.agents.length, 5);
+assert.equal(stored.startAgentId, "agent-5");
+assert.equal(stored.roster.agents[3].job, "Second viewpoint");
+assert.equal(stored.roster.agents[4].job, "Auditor");
+assert.equal(Object.prototype.hasOwnProperty.call(stored, "agentCount"), false);
+assert.equal(Object.prototype.hasOwnProperty.call(stored, "jobD"), false);
 await cloud.applyIdleCloudSettings(stored);
 assert.equal(cloud.state.agentCount, 5);
 assert.equal(cloud.state.startSide, "E");
@@ -206,6 +215,9 @@ assert.throws(
 );
 
 assert.equal(cloud.__AI_BRIDGE_DYNAMIC_SEMANTICS_V1__.derivedTurnMinimums, true);
+assert.equal(cloud.__AI_BRIDGE_DYNAMIC_SEMANTICS_V1__.cloudSchemaVersion, 2);
+assert.equal(cloud.__AI_BRIDGE_DYNAMIC_SEMANTICS_V1__.cloudCanonicalRosterOnly, true);
+assert.equal(cloud.__AI_BRIDGE_DYNAMIC_SEMANTICS_V1__.cloudImportsSchemaV1, true);
 assert.equal(cloud.__AI_BRIDGE_DYNAMIC_SEMANTICS_V1__.cloudJobWritesThroughRosterAdapter, true);
 assert.equal(cloud.__AI_BRIDGE_DYNAMIC_SEMANTICS_V1__.cloudResizesRosterBeforeJobWrites, true);
 assert.equal(cloud.__AI_BRIDGE_DYNAMIC_SEMANTICS_V1__.cloudSkipsInactiveRosterSlots, true);

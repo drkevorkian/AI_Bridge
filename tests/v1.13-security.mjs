@@ -6,6 +6,8 @@ import vm from "node:vm";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const background = fs.readFileSync(path.join(root, "background.js"), "utf8");
+const capsSrc = fs.readFileSync(path.join(root, "agent-capabilities.js"), "utf8");
+const cloudV2Src = fs.readFileSync(path.join(root, "cloud-settings-v2.js"), "utf8");
 const dashboardJs = fs.readFileSync(path.join(root, "dashboard.js"), "utf8");
 const html = fs.readFileSync(path.join(root, "dashboard.html"), "utf8");
 const css = fs.readFileSync(path.join(root, "dashboard.css"), "utf8");
@@ -127,19 +129,24 @@ const cloudSandbox = {
   WORK_MODES: new Set(["relay", "collaborate", "compete", "parallel", "review", "mesh"]),
   ALLOWED_CLOUD_THEMES: new Set(["blizzard", "ghostwhite", "midnight", "slate", "light", "solarized", "ocean", "terminal"]),
   ALLOWED_CLOUD_LAYOUTS: new Set(["studio", "classic", "focus"]),
-  CLOUD_SETTINGS_VERSION: 1,
+  CLOUD_SETTINGS_VERSION: 2,
   SYNC_ITEM_MAX_CHARS: 7000,
   CLOUD_SYNC_MAX_BYTES: 90000,
   DEFAULT_CHECKPOINT_EVERY: 5,
   DEFAULT_STUCK_MINUTES: 30
 };
-vm.runInNewContext(
+const cloudContext = vm.createContext(cloudSandbox);
+cloudContext.globalThis = cloudContext;
+vm.runInContext(capsSrc, cloudContext, { filename: "agent-capabilities.js" });
+vm.runInContext(cloudV2Src, cloudContext, { filename: "cloud-settings-v2.js" });
+vm.runInContext(
   [
     "function normalizeWorkMode(raw) { const value = String(raw || 'relay').toLowerCase(); return WORK_MODES.has(value) ? value : 'relay'; }",
     "function normalizeMaxTurns(raw) { const value = Number(raw); if (value === -1) return -1; if (!Number.isInteger(value) || value < 1 || value > 10000) throw new Error('bad turns'); return value; }",
     extractFunction(background, "clampCloudPane"),
     extractFunction(background, "clampCheckpointEvery"),
     extractFunction(background, "clampStuckTimeoutMinutes"),
+    extractFunction(background, "cloudSettingsV2Contract"),
     extractFunction(background, "sanitizeHistoryForCloud"),
     extractFunction(background, "sanitizeCloudSettings"),
     extractFunction(background, "assertCloudSettingsSafe"),
@@ -155,7 +162,7 @@ vm.runInNewContext(
     "this.splitCloudSyncChunks = splitCloudSyncChunks;",
     "this.driveUrlAllowed = driveUrlAllowed;"
   ].join("\n"),
-  cloudSandbox
+  cloudContext
 );
 
 const dirty = cloudSandbox.sanitizeCloudSettings({
@@ -184,8 +191,13 @@ const dirty = cloudSandbox.sanitizeCloudSettings({
 assert.equal(dirty.theme, "midnight");
 assert.equal(dirty.paneWidth, 33);
 assert.equal(dirty.workMode, "mesh");
-assert.equal(dirty.startSide, "B");
-assert.equal(dirty.jobA, "Lead");
+assert.equal(dirty.schemaVersion, 2);
+assert.equal(dirty.startAgentId, "agent-2");
+assert.equal(dirty.roster.version, 2);
+assert.equal(dirty.roster.agents.length, 3);
+assert.equal(dirty.roster.agents[0].job, "Lead");
+assert.equal(dirty.startSide, undefined);
+assert.equal(dirty.jobA, undefined);
 assert.equal(dirty.teamRules, "SECURITY FIRST");
 assert.equal(dirty.tabA, undefined);
 assert.equal(dirty.transcript, undefined);
@@ -201,6 +213,14 @@ assert.equal(dirty.generationIdBySide, undefined);
 assert.equal(dirty.history.jobs.length, 1);
 assert.doesNotMatch(JSON.stringify(dirty), /ya29/);
 cloudSandbox.assertCloudSettingsSafe(dirty);
+assert.throws(
+  () => cloudSandbox.assertCloudSettingsSafe({
+    schemaVersion: 2,
+    roster: { version: 2, nextOrdinal: 2, agents: [{ id: "agent-1", ordinal: 1, label: "A", job: "", nested: { accessToken: "hidden" } }] }
+  }),
+  /credential (?:material|fields)/i,
+  "nested credential-like keys must fail closed"
+);
 assert.equal(cloudSandbox.sanitizeCloudSettings({ theme: "not-a-theme", workMode: "explode" }).theme, "blizzard");
 assert.equal(cloudSandbox.sanitizeCloudSettings({ workMode: "explode" }).workMode, "relay");
 
@@ -238,6 +258,9 @@ const fromDrive = cloudSandbox.parseDriveSettingsBody(JSON.stringify({
 }));
 assert.equal(fromDrive.theme, "terminal");
 assert.equal(fromDrive.updatedAt, 222);
+assert.equal(fromDrive.schemaVersion, 2);
+assert.equal(fromDrive.roster.version, 2);
+assert.equal(fromDrive.startAgentId, "agent-1");
 assert.equal(fromDrive.tabA, undefined);
 assert.equal(fromDrive.oauthToken, undefined);
 assert.equal(fromDrive.transcript, undefined);
