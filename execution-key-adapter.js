@@ -18,14 +18,14 @@
 
   function runtimeKeyForOrdinal(ordinal) {
     if (typeof caps.runtimeAgentKeyForOrdinal === "function") {
-      return runtimeKeyForOrdinal(ordinal);
+      return caps.runtimeAgentKeyForOrdinal(ordinal);
     }
     return caps.legacySideForOrdinal(ordinal) || caps.agentIdForOrdinal(ordinal);
   }
 
   function ordinalForRuntimeKey(rawKey) {
     if (typeof caps.ordinalForRuntimeAgentKey === "function") {
-      return ordinalForRuntimeKey(rawKey);
+      return caps.ordinalForRuntimeAgentKey(rawKey);
     }
     const legacyOrdinal = caps.ordinalForLegacySide(rawKey);
     if (legacyOrdinal !== null) return legacyOrdinal;
