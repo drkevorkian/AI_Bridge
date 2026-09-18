@@ -18,6 +18,17 @@ if (
   throw new Error("AI Bridge agent capability contract failed to initialize.");
 }
 
+importScripts("cloud-settings-v2.js");
+if (
+  globalThis.__AI_BRIDGE_CLOUD_SETTINGS_V2__?.version !== 2 ||
+  globalThis.__AI_BRIDGE_CLOUD_SETTINGS_V2__?.importsSchemaV1 !== true ||
+  globalThis.__AI_BRIDGE_CLOUD_SETTINGS_V2__?.emitsSchemaV2Only !== true ||
+  globalThis.__AI_BRIDGE_CLOUD_SETTINGS_V2__?.persistsTabBindings !== false ||
+  globalThis.__AI_BRIDGE_CLOUD_SETTINGS_V2__?.canonicalRosterAuthority !== true
+) {
+  throw new Error("AI Bridge Cloud Settings V2 contract failed to initialize.");
+}
+
 importScripts("roster-v2-migration.js");
 if (
   globalThis.__AI_BRIDGE_ROSTER_V2_MIGRATION_V1__?.version !== 1 ||
