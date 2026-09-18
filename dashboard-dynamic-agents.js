@@ -15,6 +15,7 @@
   const ALL_SIDES = Object.freeze(Array.from(rosterPrelude.sides, side => String(side)));
   const DEFAULT_COUNT = Number(rosterPrelude.defaultVisibleCount) || 3;
   const HEALTH_POLL_MS = 1500;
+  const DYNAMIC_BOOT_TIMEOUT_MS = 5000;
   const cardCache = new Map();
   let activeCount = DEFAULT_COUNT;
   let lastHealth = null;
@@ -22,6 +23,27 @@
   let healthRefreshEpoch = 0;
 
   const byId = id => document.getElementById(id);
+
+  function dynamicTimeout(promise, label, timeoutMs = DYNAMIC_BOOT_TIMEOUT_MS) {
+    let timer = null;
+    const timeout = new Promise((_, reject) => {
+      timer = setTimeout(() => reject(new Error(`${label} timed out after ${timeoutMs} ms.`)), timeoutMs);
+    });
+    return Promise.race([Promise.resolve(promise), timeout]).finally(() => {
+      if (timer !== null) clearTimeout(timer);
+    });
+  }
+
+  function reportDynamicStartupFailure(error) {
+    const message = String(error?.message || error || "Unknown dynamic dashboard failure.");
+    const recommendation = byId("adaptiveRecommendation");
+    if (recommendation) recommendation.textContent = `Provider health unavailable — ${message}`;
+    const status = byId("status");
+    if (status && (!status.textContent || /^Idle\b/.test(status.textContent) || /checking/i.test(status.textContent))) {
+      status.textContent = `Dashboard startup warning: ${message}`;
+    }
+    console.error("AI Bridge dynamic dashboard failed", error);
+  }
 
   function liveSides(count = activeCount) {
     const n = Math.max(1, Math.min(ALL_SIDES.length, Number(count) || DEFAULT_COUNT));
@@ -400,11 +422,11 @@
     // allowed to finish, but must never repaint lastHealth/badges/recommendation
     // after a newer refresh has begun.
     const refreshEpoch = ++healthRefreshEpoch;
-    const adaptive = await chrome.runtime.sendMessage({
+    const adaptive = await dynamicTimeout(chrome.runtime.sendMessage({
       type: "AI_BRIDGE_ADAPTIVE_SELECT",
       force,
       preferredSide: byId("startSide")?.value || "A"
-    });
+    }), "Provider health request");
     if (!adaptive?.ok) throw new Error(adaptive?.error || "Provider health check failed.");
     if (refreshEpoch !== healthRefreshEpoch) return null;
 
@@ -459,7 +481,10 @@
     installSelectedBindingsAugmenter();
     installCloudSettingsAugmenter();
     installStartGuard();
-    const stateResponse = await chrome.runtime.sendMessage({ type: "AI_BRIDGE_GET_STATE", includeSources: false, afterSeq: 0 });
+    const stateResponse = await dynamicTimeout(
+      chrome.runtime.sendMessage({ type: "AI_BRIDGE_GET_STATE", includeSources: false, afterSeq: 0 }),
+      "Dynamic dashboard state request"
+    );
     const bridgeState = stateResponse?.state || null;
     activeCount = Number(bridgeState?.agentCount) || DEFAULT_COUNT;
     renderRoster(activeCount);
@@ -469,9 +494,24 @@
       const label = byId(`labelText${side}`);
       if (label) label.textContent = String(bridgeState?.[`label${side}`] || `AI ${side}`);
     }
-    try { if (typeof refreshTabs === "function") await refreshTabs(); } catch (_) {}
-    await refreshHealth(true);
-    healthTimer = setInterval(() => refreshHealth(false).catch(() => {}), HEALTH_POLL_MS);
+    try {
+      if (typeof refreshTabs === "function") {
+        await dynamicTimeout(refreshTabs(), "Dynamic dashboard tab refresh");
+      }
+    } catch (error) {
+      reportDynamicStartupFailure(error);
+    }
+
+    try {
+      await refreshHealth(true);
+    } catch (error) {
+      reportDynamicStartupFailure(error);
+    }
+
+    healthTimer = setInterval(() => {
+      refreshHealth(false).catch(error => reportDynamicStartupFailure(error));
+    }, HEALTH_POLL_MS);
+
     window.__AI_BRIDGE_DYNAMIC_DASHBOARD_V1__ = Object.freeze({
       version: 1,
       maxAgents: ALL_SIDES.length,
@@ -490,8 +530,8 @@
   }
 
   if (document.readyState === "loading") {
-    window.addEventListener("DOMContentLoaded", () => bootstrap().catch(error => console.error("AI Bridge dynamic dashboard failed", error)), { once: true });
+    window.addEventListener("DOMContentLoaded", () => bootstrap().catch(reportDynamicStartupFailure), { once: true });
   } else {
-    bootstrap().catch(error => console.error("AI Bridge dynamic dashboard failed", error));
+    bootstrap().catch(reportDynamicStartupFailure);
   }
 })();
