@@ -118,6 +118,7 @@ assert.equal(replacedListeners.length, 1);
 const contract = sandbox.__AI_BRIDGE_DYNAMIC_AGENTS_V1__;
 assert.equal(contract.revokesRetiredTabAuthority, true);
 assert.equal(contract.tabRetirementUsesRosterAdapter, true);
+assert.equal(contract.agentCountPrunesRetiredRoutingRefs, true);
 assert.equal(contract.pausesOnBoundTabReplacement, true);
 assert.equal(contract.neverAutoTrustsReplacementTab, true);
 
@@ -132,7 +133,7 @@ assert.equal(Object.prototype.hasOwnProperty.call(state.viewpointIdentityBySide,
 assert.equal(state.running, false);
 assert.equal(state.paused, true);
 assert.match(state.pauseReason, /replaced by Chrome/);
-assert.deepEqual(state.phaseSentSides, ["B"]);
+assert.deepEqual([...state.phaseSentSides], ["B"]);
 assert.equal(Object.prototype.hasOwnProperty.call(state.lastResponseBySide, "A"), false);
 assert.ok(saves.length >= 1);
 assert.match(logs.at(-1).text, /replaced by Chrome/);
