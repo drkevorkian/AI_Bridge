@@ -5,6 +5,7 @@ import { fileURLToPath } from "node:url";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const background = fs.readFileSync(path.join(root, "background.js"), "utf8");
+const bootstrap = fs.readFileSync(path.join(root, "dashboard-bootstrap.js"), "utf8");
 
 assert.match(background, /const STATE_VERSION = 3;/);
 assert.match(background, /RECOVERY_QUARANTINE_MODE = true/);
@@ -36,4 +37,9 @@ assert.match(background, /const key = RECOVERY_QUARANTINE_MODE \? RECOVERY_STATE
 assert.match(background, /const key = RECOVERY_QUARANTINE_MODE \? RECOVERY_HISTORY_KEY : "bridgeHistory"/);
 assert.match(background, /const key = RECOVERY_QUARANTINE_MODE \? RECOVERY_ARTIFACTS_KEY : "bridgeArtifacts"/);
 
-console.log("recovery-quarantine: production storage isolated at startup and write time");
+assert.match(bootstrap, /RECOVERY_QUARANTINE_UI = true/);
+assert.match(bootstrap, /badge\.textContent = "RECOVERY-Q"/);
+assert.match(bootstrap, /production state and dynamic adapters are disabled/);
+assert.match(bootstrap, /if \(!RECOVERY_QUARANTINE_UI && !document\.querySelector/);
+
+console.log("recovery-quarantine: production storage and dynamic startup isolated");
