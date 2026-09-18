@@ -53,6 +53,17 @@ if (
 
 importScripts("background.js");
 
+importScripts("roster-state-adapter.js");
+if (
+  globalThis.__AI_BRIDGE_ROSTER_STATE_ADAPTER_V1__?.version !== 1 ||
+  globalThis.__AI_BRIDGE_ROSTER_STATE_ADAPTER_V1__?.storageAuthority !== "legacy-per-side-fields" ||
+  globalThis.__AI_BRIDGE_ROSTER_STATE_ADAPTER_V1__?.persistsSecondRosterRepresentation !== false ||
+  globalThis.__AI_BRIDGE_ROSTER_STATE_ADAPTER_V1__?.validatesSideKeys !== true ||
+  typeof globalThis.AgentRosterStateAdapter !== "function"
+) {
+  throw new Error("AI Bridge roster-state adapter failed to initialize.");
+}
+
 importScripts("coordinator-dynamic-agents.js");
 if (
   globalThis.__AI_BRIDGE_DYNAMIC_AGENTS_V1__?.version !== 1 ||
