@@ -200,9 +200,17 @@
       if (allowNull) return null;
       throw new Error("Canonical logical-agent reference is required.");
     }
-    const id = String(rawId);
-    const ordinal = caps.ordinalForAgentId(id);
+    const raw = String(rawId);
+    let ordinal = caps.ordinalForAgentId(raw);
+    if (ordinal === null) {
+      // Backward-compatible V4 hydration: some transitional V4 snapshots were
+      // written with legacy runtime refs (A-E) in otherwise-canonical fields.
+      // Accept those only while reading; serializeRuntimeState() always writes
+      // canonical agent-N IDs back out.
+      ordinal = ordinalForRuntimeKey(raw);
+    }
     if (ordinal === null) throw new Error("Persisted state contains a malformed canonical agent ID.");
+    const id = caps.agentIdForOrdinal(ordinal);
     const agent = roster.agents.find(row => row.id === id);
     if (!agent) throw new Error("Persisted state references an agent outside the active roster.");
     return runtimeKeyForOrdinal(ordinal);
@@ -361,6 +369,7 @@
     canonicalizesAgentReferences: true,
     canonicalizesExecutionMaps: true,
     runtimeAgentReferencesDecoupledFromLegacyAliases: true,
+    importsLegacyRuntimeRefsInV4: true,
     noStorageSideEffects: true
   });
 })();
