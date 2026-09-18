@@ -248,9 +248,10 @@
     if (!current?.sessionActive || !ALL_SIDES.includes(side)) return false;
 
     const retiredId = Number(retiredTabId);
-    const boundId = Number(current[`tab${side}`]);
+    const adapter = new rosterState.AgentRosterStateAdapter(current);
+    const boundId = Number(adapter.get(side).tabId);
     if (Number.isInteger(retiredId) && retiredId > 0 && boundId === retiredId) {
-      current[`tab${side}`] = null;
+      adapter.set(side, { tabId: null });
     }
 
     current.generationIdBySide = expandMap(current.generationIdBySide, null);
@@ -290,8 +291,10 @@
     const id = Number(tabId);
     if (!Number.isInteger(id) || id <= 0) return null;
     const current = liveState();
-    for (const side of liveSides(current?.agentCount)) {
-      if (Number(current?.[`tab${side}`]) === id) return side;
+    if (!current) return null;
+    const adapter = new rosterState.AgentRosterStateAdapter(current);
+    for (const side of liveSides(current.agentCount)) {
+      if (Number(adapter.get(side).tabId) === id) return side;
     }
     return null;
   }
@@ -348,6 +351,7 @@
     uniqueTabBinding: true,
     duplicateProviderAgentsEnabled: caps.duplicateProviderAgentsEnabled === true,
     revokesRetiredTabAuthority: true,
+    tabRetirementUsesRosterAdapter: true,
     pausesOnBoundTabReplacement: true,
     neverAutoTrustsReplacementTab: true
   });

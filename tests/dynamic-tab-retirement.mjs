@@ -11,6 +11,7 @@ const source = fs.readFileSync(path.join(root, "coordinator-dynamic-agents.js"),
 const wrapper = fs.readFileSync(path.join(root, "background-wrapper.js"), "utf8");
 
 assert.match(wrapper, /revokesRetiredTabAuthority !== true/);
+assert.match(wrapper, /tabRetirementUsesRosterAdapter !== true/);
 assert.match(wrapper, /pausesOnBoundTabReplacement !== true/);
 assert.match(wrapper, /neverAutoTrustsReplacementTab !== true/);
 
@@ -103,6 +104,7 @@ assert.equal(removedListeners.length, 1);
 assert.equal(replacedListeners.length, 1);
 const contract = sandbox.__AI_BRIDGE_DYNAMIC_AGENTS_V1__;
 assert.equal(contract.revokesRetiredTabAuthority, true);
+assert.equal(contract.tabRetirementUsesRosterAdapter, true);
 assert.equal(contract.pausesOnBoundTabReplacement, true);
 assert.equal(contract.neverAutoTrustsReplacementTab, true);
 
