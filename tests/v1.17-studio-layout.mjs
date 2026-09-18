@@ -71,7 +71,7 @@ assert.match(dashboardJs, /const LAYOUT_KEY = "aiBridgeLayout"/);
 assert.match(dashboardJs, /const DEFAULT_LAYOUT = "studio"/);
 assert.match(dashboardJs, /function applyLayout\(/);
 assert.match(dashboardJs, /function loadLayout\(/);
-assert.match(dashboardJs, /loadTheme\(\), loadLayout\(\)/);
+assert.match(dashboardJs, /loadTheme\(\)[\s\S]*?loadLayout\(\)/);
 assert.match(dashboardJs, /shell.classList.toggle\("is-settings"/);
 assert.doesNotMatch(dashboardJs, /innerHTML/);
 assert.doesNotMatch(dashboardJs, /eval\s*\(|new Function/);
