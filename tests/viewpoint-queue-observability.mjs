@@ -7,6 +7,7 @@ import { fileURLToPath } from "node:url";
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const capsSrc = fs.readFileSync(path.join(root, "agent-capabilities.js"), "utf8");
 const rosterSrc = fs.readFileSync(path.join(root, "roster-state-adapter.js"), "utf8");
+const executionSrc = fs.readFileSync(path.join(root, "execution-key-adapter.js"), "utf8");
 const runtimeSrc = fs.readFileSync(path.join(root, "viewpoint-runtime.js"), "utf8");
 const queueUiSrc = fs.readFileSync(path.join(root, "dashboard-viewpoint-queue.js"), "utf8");
 
