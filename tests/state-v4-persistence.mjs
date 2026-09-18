@@ -33,6 +33,8 @@ assert.equal(api.canonicalizesAgentReferences, true);
 assert.equal(api.canonicalizesExecutionMaps, true);
 assert.equal(api.runtimeAgentReferencesDecoupledFromLegacyAliases, true);
 assert.equal(api.importsLegacyRuntimeRefsInV4, true);
+assert.equal(api.recoversStaleRuntimeRefsInV4, true);
+assert.equal(api.canonicalRosterRemainsStrictDuringRecovery, true);
 assert.equal(api.noStorageSideEffects, true);
 
 const v3 = {
@@ -141,6 +143,53 @@ assert.equal(repairedHybrid.generationIdBySide["agent-1"], "gen-a");
 assert.equal(repairedHybrid.generationIdBySide["agent-4"], "gen-d");
 assert.equal(Object.prototype.hasOwnProperty.call(repairedHybrid.generationIdBySide, "A"), false);
 assert.equal(Object.prototype.hasOwnProperty.call(repairedHybrid.generationIdBySide, "D"), false);
+
+// Stale non-authoritative runtime pointers must not brick dashboard startup.
+// Canonical roster/tab authority remains strict; only runtime refs are repaired.
+const staleRuntimeV4 = {
+  ...migrated,
+  currentSide: "totally-stale",
+  startSide: "agent-999",
+  mainSide: "F",
+  activeSides: ["garbage", "agent-999"],
+  cycleParticipants: ["A", "garbage", "agent-4"],
+  phasePendingSides: ["agent-5", "bad-ref"],
+  phaseSentSides: ["bad-ref"],
+  phaseCompletedSides: ["agent-2"],
+  generationIdBySide: {
+    ["__proto__"]: "blocked",
+    "agent-1": "gen-a",
+    "garbage": "stale"
+  }
+};
+assert.throws(
+  () => api.hydratePersistedState(staleRuntimeV4),
+  /forbidden key/i,
+  "prototype-pollution keys must remain fatal even during runtime-ref recovery"
+);
+
+delete staleRuntimeV4.generationIdBySide["__proto__"];
+const staleHydrated = api.hydratePersistedState(staleRuntimeV4);
+assert.equal(staleHydrated.currentSide, null);
+assert.equal(staleHydrated.startSide, "A");
+assert.equal(staleHydrated.mainSide, "A");
+assert.deepEqual(Array.from(staleHydrated.activeSides), ["A", "B", "C", "D", "E"]);
+assert.deepEqual(Array.from(staleHydrated.cycleParticipants), ["A", "D"]);
+assert.deepEqual(Array.from(staleHydrated.phasePendingSides), ["E"]);
+assert.deepEqual(Array.from(staleHydrated.phaseSentSides), []);
+assert.deepEqual(Array.from(staleHydrated.phaseCompletedSides), ["B"]);
+assert.equal(staleHydrated.generationIdBySide.A, "gen-a");
+assert.equal(Object.prototype.hasOwnProperty.call(staleHydrated.generationIdBySide, "garbage"), false);
+
+const staleRepaired = api.serializeRuntimeState(staleHydrated);
+assert.equal(staleRepaired.currentSide, null);
+assert.equal(staleRepaired.startSide, "agent-1");
+assert.equal(staleRepaired.mainSide, "agent-1");
+assert.deepEqual(Array.from(staleRepaired.activeSides), [
+  "agent-1", "agent-2", "agent-3", "agent-4", "agent-5"
+]);
+assert.equal(staleRepaired.generationIdBySide["agent-1"], "gen-a");
+assert.equal(Object.prototype.hasOwnProperty.call(staleRepaired.generationIdBySide, "garbage"), false);
 
 assert.throws(
   () => api.hydratePersistedState({
