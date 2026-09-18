@@ -63,7 +63,10 @@
 
   function migrateDynamicAgentState(bridgeState) {
     const next = bridgeState && typeof bridgeState === "object" ? bridgeState : {};
-    const count = liveCount(next.agentCount);
+    const rosterCount = Number(next?.stateVersion) === 4 && Array.isArray(next?.roster?.agents)
+      ? next.roster.agents.length
+      : null;
+    const count = liveCount(rosterCount ?? next.agentCount);
     const sides = liveSides(count);
     next.agentCount = count;
     next.activeSides = sides.slice();
@@ -196,8 +199,14 @@
       throw new RangeError(`Agent count must be an integer from 1 to ${caps.maxLogicalAgents}.`);
     }
     const current = liveState() || {};
-    const next = migrateDynamicAgentState({ ...current, agentCount: count });
-    if (current) Object.assign(current, next);
+    const adapter = new rosterState.AgentRosterStateAdapter(current);
+    if (Number(current?.stateVersion) === 4 && Array.isArray(current?.roster?.agents)) {
+      adapter.setCount(count);
+      migrateDynamicAgentState(current);
+    } else {
+      const next = migrateDynamicAgentState({ ...current, agentCount: count });
+      if (current) Object.assign(current, next);
+    }
     assignLiveSides(count);
     if (persist && typeof saveState === "function") await saveState();
     return { agentCount: count, sides: liveSides(count) };
@@ -352,6 +361,7 @@
     duplicateProviderAgentsEnabled: caps.duplicateProviderAgentsEnabled === true,
     revokesRetiredTabAuthority: true,
     tabRetirementUsesRosterAdapter: true,
+    agentCountWritesRosterV2: true,
     pausesOnBoundTabReplacement: true,
     neverAutoTrustsReplacementTab: true
   });
