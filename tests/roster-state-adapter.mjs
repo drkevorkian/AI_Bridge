@@ -11,8 +11,8 @@ const wrapper = fs.readFileSync(path.join(root, "background-wrapper.js"), "utf8"
 
 assert.ok(wrapper.includes('importScripts("roster-state-adapter.js")'));
 assert.ok(
-  wrapper.indexOf('importScripts("background.js")') <
-    wrapper.indexOf('importScripts("roster-state-adapter.js")')
+  wrapper.indexOf('importScripts("roster-state-adapter.js")') <
+    wrapper.indexOf('importScripts("background.js")')
 );
 assert.ok(
   wrapper.indexOf('importScripts("roster-state-adapter.js")') <
@@ -30,7 +30,9 @@ vm.runInContext(rosterSrc, context, { filename: "roster-state-adapter.js" });
 const api = context.__AI_BRIDGE_ROSTER_STATE_ADAPTER_V1__;
 assert.ok(api);
 assert.equal(api.version, 1);
-assert.equal(api.storageAuthority, "legacy-per-side-fields");
+assert.equal(api.storageAuthority, "roster-v2");
+assert.equal(api.legacyProjectionEphemeral, true);
+assert.equal(api.runtimeWritesRosterV2, true);
 assert.equal(api.persistsSecondRosterRepresentation, false);
 assert.equal(api.validatesSideKeys, true);
 assert.deepEqual(Array.from(api.writeFieldAllowlist), ["tabId", "label", "job"]);
@@ -84,11 +86,50 @@ assert.deepEqual(Array.from(snapshot, item => item.side), ["A", "B", "C"]);
 assert.equal(Object.isFrozen(snapshot), true);
 assert.equal(Object.isFrozen(snapshot[0]), true);
 
-// Changing the logical count only changes which existing legacy fields are
-// projected; this adapter never creates a second persisted roster object.
+// V3 remains supported only as a migration compatibility path.
 state.agentCount = 5;
 assert.deepEqual(Array.from(adapter.sides()), ["A", "B", "C", "D", "E"]);
 assert.equal(Object.prototype.hasOwnProperty.call(state, "agents"), false);
 assert.equal(Object.prototype.hasOwnProperty.call(state, "agentRoster"), false);
+
+// V4 writes mutate roster.agents[] first and synchronize legacy fields only as
+// ephemeral mirrors. Duplicate tab IDs are rejected at the adapter boundary.
+const v4 = {
+  stateVersion: 4,
+  agentCount: 3,
+  roster: {
+    version: 2,
+    nextOrdinal: 4,
+    agents: [
+      { id: "agent-1", ordinal: 1, legacySide: "A", label: "Lead", job: "Lead", tabId: 101 },
+      { id: "agent-2", ordinal: 2, legacySide: "B", label: "Back", job: "Backend", tabId: 202 },
+      { id: "agent-3", ordinal: 3, legacySide: "C", label: "Front", job: "Frontend", tabId: 303 }
+    ]
+  }
+};
+const v4Adapter = new context.AgentRosterStateAdapter(v4);
+v4Adapter.ensureLegacyFields();
+assert.equal(v4.tabA, 101);
+assert.equal(v4.labelB, "Back");
+assert.equal(v4.jobC, "Frontend");
+v4Adapter.set("B", { label: "Security", tabId: 404 });
+assert.equal(v4.roster.agents[1].label, "Security");
+assert.equal(v4.roster.agents[1].tabId, 404);
+assert.equal(v4.labelB, "Security");
+assert.equal(v4.tabB, 404);
+assert.throws(() => v4Adapter.set("C", { tabId: 404 }), /different browser tab/i);
+
+v4Adapter.setCount(5);
+assert.equal(v4.roster.agents.length, 5);
+assert.equal(v4.roster.nextOrdinal, 6);
+assert.deepEqual(Array.from(v4Adapter.sides()), ["A", "B", "C", "D", "E"]);
+assert.equal(v4.roster.agents[3].id, "agent-4");
+assert.equal(v4.roster.agents[4].legacySide, "E");
+
+v4Adapter.setCount(2);
+assert.equal(v4.roster.agents.length, 2);
+assert.equal(v4.roster.nextOrdinal, 3);
+assert.equal(v4.tabC, null);
+assert.throws(() => v4Adapter.set("C", { job: "inactive" }), /inactive logical agent/i);
 
 console.log("roster-state-adapter: ok");
