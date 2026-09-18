@@ -70,6 +70,7 @@ if (
   globalThis.__AI_BRIDGE_DYNAMIC_AGENTS_V1__?.uniqueTabBinding !== true ||
   globalThis.__AI_BRIDGE_DYNAMIC_AGENTS_V1__?.duplicateProviderAgentsEnabled !== true ||
   globalThis.__AI_BRIDGE_DYNAMIC_AGENTS_V1__?.revokesRetiredTabAuthority !== true ||
+  globalThis.__AI_BRIDGE_DYNAMIC_AGENTS_V1__?.tabRetirementUsesRosterAdapter !== true ||
   globalThis.__AI_BRIDGE_DYNAMIC_AGENTS_V1__?.pausesOnBoundTabReplacement !== true ||
   globalThis.__AI_BRIDGE_DYNAMIC_AGENTS_V1__?.neverAutoTrustsReplacementTab !== true
 ) {
