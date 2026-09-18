@@ -8,8 +8,12 @@
 
   const caps = globalThis.__AI_BRIDGE_AGENT_CAPABILITIES__;
   const dynamic = globalThis.__AI_BRIDGE_DYNAMIC_AGENTS_V1__;
+  const rosterState = globalThis.__AI_BRIDGE_ROSTER_STATE_ADAPTER_V1__;
   if (!caps || caps.version !== 1 || !dynamic || dynamic.version !== 1) {
     throw new Error("Dynamic-agent semantics require the capability contract and coordinator overlay.");
+  }
+  if (!rosterState || rosterState.version !== 1 || typeof rosterState.writeAgent !== "function") {
+    throw new Error("Dynamic-agent semantics require the roster-state adapter.");
   }
 
   function liveSides() {
@@ -179,7 +183,9 @@
       await baseApply(settings);
       for (const side of ALL_JOB_SIDES) {
         if (typeof settings?.[`job${side}`] === "string") {
-          state[`job${side}`] = String(settings[`job${side}`]).trim().slice(0, 4000);
+          rosterState.writeAgent(state, side, {
+            job: String(settings[`job${side}`]).trim().slice(0, 4000)
+          });
         }
       }
       if (settings && Object.prototype.hasOwnProperty.call(settings, "agentCount") && typeof applyAgentCount === "function") {
@@ -204,6 +210,7 @@
     liveRosterPrompts: true,
     liveRosterMeshTargets: true,
     derivedTurnMinimums: true,
-    cloudJobsThroughE: true
+    cloudJobsThroughE: true,
+    cloudJobWritesThroughRosterAdapter: true
   });
 })();
