@@ -1434,34 +1434,38 @@ function startupTimeout(promise, label, timeoutMs = STARTUP_AUX_TIMEOUT_MS) {
 async function validateSavedBindings() {
   if (!state.sessionActive) return;
 
-  const missing = [];
-  for (const side of SIDES) {
+  const checks = await Promise.all(SIDES.map(async side => {
     const tabId = tabForSide(side);
-    let exists = false;
     try {
-      exists = await startupTimeout(tabExists(tabId), `Validate AI ${side} tab`, STARTUP_BINDING_TIMEOUT_MS);
+      const exists = await startupTimeout(
+        tabExists(tabId),
+        `Validate AI ${side} tab`,
+        STARTUP_BINDING_TIMEOUT_MS
+      );
+      return exists ? null : side;
     } catch (_) {
       // Fail closed. A stalled Chrome tab lookup must never keep stateReady
       // pending forever or preserve an unverified binding.
-      exists = false;
+      return side;
     }
-    if (!exists) missing.push(side);
-  }
+  }));
+  const missing = checks.filter(Boolean);
 
   if (missing.length) {
     state.running = false;
     state.paused = true;
     state.pauseReason = `Reconnect AI ${missing.join(", AI ")} and press Resume.`;
     for (const side of missing) writeRosterAgentForSide(side, { tabId: null });
-    try {
-      await startupTimeout(saveState(), "Persist invalidated startup bindings");
-    } catch (err) {
+
+    // The in-memory authority is already revoked. Persistence is best-effort
+    // background work and must not delay dashboard state readiness.
+    startupTimeout(saveState(), "Persist invalidated startup bindings").catch(err => {
       appendLog({
         time: Date.now(),
         type: "storage",
         text: `Startup binding invalidation is active in memory, but persistence did not complete: ${String(err?.message || err).slice(0, 240)}`
       });
-    }
+    });
   }
 }
 
