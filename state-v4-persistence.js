@@ -62,8 +62,10 @@
 
   function isPlainObject(value) {
     if (!value || typeof value !== "object" || Array.isArray(value)) return false;
-    const proto = Object.getPrototypeOf(value);
-    return proto === Object.prototype || proto === null;
+    // Object.prototype identity is realm-specific (e.g. Node VM tests and
+    // extension worlds). The intrinsic tag safely recognizes ordinary record
+    // objects across realms; cloneData still rejects prototype-pollution keys.
+    return Object.prototype.toString.call(value) === "[object Object]";
   }
 
   function cloneData(value, path = "value") {
