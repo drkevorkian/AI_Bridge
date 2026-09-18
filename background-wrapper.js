@@ -105,6 +105,7 @@ if (
   globalThis.__AI_BRIDGE_DYNAMIC_AGENTS_V1__?.revokesRetiredTabAuthority !== true ||
   globalThis.__AI_BRIDGE_DYNAMIC_AGENTS_V1__?.tabRetirementUsesRosterAdapter !== true ||
   globalThis.__AI_BRIDGE_DYNAMIC_AGENTS_V1__?.agentCountWritesRosterV2 !== true ||
+  globalThis.__AI_BRIDGE_DYNAMIC_AGENTS_V1__?.agentCountPrunesRetiredRoutingRefs !== true ||
   globalThis.__AI_BRIDGE_DYNAMIC_AGENTS_V1__?.pausesOnBoundTabReplacement !== true ||
   globalThis.__AI_BRIDGE_DYNAMIC_AGENTS_V1__?.neverAutoTrustsReplacementTab !== true
 ) {
@@ -117,6 +118,7 @@ if (
   globalThis.__AI_BRIDGE_DYNAMIC_RESTART_HYDRATION_V1__?.restoresPersistedMainSide !== true ||
   globalThis.__AI_BRIDGE_DYNAMIC_RESTART_HYDRATION_V1__?.restoresPersistedPhaseLists !== true ||
   globalThis.__AI_BRIDGE_DYNAMIC_RESTART_HYDRATION_V1__?.restoresPersistedCycleParticipants !== true ||
+  globalThis.__AI_BRIDGE_DYNAMIC_RESTART_HYDRATION_V1__?.hydratesCanonicalStateV4BeforeRestore !== true ||
   globalThis.__AI_BRIDGE_DYNAMIC_RESTART_HYDRATION_V1__?.restoresServiceWorkerQueue !== false
 ) {
   throw new Error("AI Bridge dynamic restart hydration failed to initialize.");
