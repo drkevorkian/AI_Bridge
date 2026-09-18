@@ -11,11 +11,15 @@
 
   const caps = globalThis.__AI_BRIDGE_AGENT_CAPABILITIES__;
   const dynamic = globalThis.__AI_BRIDGE_DYNAMIC_AGENTS_V1__;
+  const rosterState = globalThis.__AI_BRIDGE_ROSTER_STATE_ADAPTER_V1__;
   if (!caps || caps.version !== 1) {
     throw new Error("Provider health requires the agent capability contract.");
   }
   if (!dynamic || dynamic.version !== 1 || dynamic.uniqueTabBinding !== true) {
     throw new Error("Provider health requires the dynamic-agent coordinator.");
+  }
+  if (!rosterState || rosterState.version !== 1 || typeof rosterState.readAgent !== "function") {
+    throw new Error("Provider health requires the roster-state adapter.");
   }
 
   const STATUSES = Object.freeze([
@@ -50,10 +54,12 @@
     return [...caps.sideIdsForCount(count)];
   }
 
+  function rosterAgent(side, current) {
+    return rosterState.readAgent(current, side);
+  }
+
   function tabIdFor(side, current) {
-    const raw = current[`tab${side}`];
-    const id = Number(raw);
-    return Number.isInteger(id) && id > 0 ? id : null;
+    return rosterAgent(side, current).tabId;
   }
 
   // The short probe cache is safe only while all coordinator fields that can
@@ -114,7 +120,7 @@
   function emptyReport(side, current, extras) {
     return {
       side,
-      label: String(current[`label${side}`] || `AI ${side}`),
+      label: rosterAgent(side, current).label,
       tabId: tabIdFor(side, current),
       status: "UNASSIGNED",
       providerId: null,
@@ -215,7 +221,7 @@
 
     return {
       side,
-      label: String(current[`label${side}`] || `AI ${side}`),
+      label: rosterAgent(side, current).label,
       tabId,
       status: "READY",
       providerId: family.id,
@@ -453,6 +459,7 @@
     tabLifecycleInvalidatesProbeCache: true,
     rejectsUnstableInflightProbes: true,
     publicHealthRedactsSensitiveIdentity: true,
+    readsRosterThroughAdapter: true,
     mutatesRouting: false,
     sendsProviderPrompts: false,
     probeActiveAgents,
