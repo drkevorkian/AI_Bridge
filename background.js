@@ -1412,7 +1412,7 @@ async function validateSavedBindings() {
     state.running = false;
     state.paused = true;
     state.pauseReason = `Reconnect AI ${missing.join(", AI ")} and press Resume.`;
-    for (const side of missing) state[`tab${side}`] = null;
+    for (const side of missing) writeRosterAgentForSide(side, { tabId: null });
     await saveState();
   }
 }
@@ -1585,6 +1585,38 @@ function rosterAgentForSide(side) {
     label: String(state[`label${side}`] || `AI ${side}`),
     job: String(state[`job${side}`] || "")
   };
+}
+
+function writeRosterAgentForSide(side, patch = {}) {
+  const normalizedSide = String(side || "").toUpperCase();
+  const roster = globalThis.__AI_BRIDGE_ROSTER_STATE_ADAPTER_V1__;
+  if (roster?.version === 1 && typeof roster.writeAgent === "function") {
+    return roster.writeAgent(state, normalizedSide, patch);
+  }
+
+  // Startup-only compatibility path before roster-state-adapter.js is loaded.
+  // Keep this fail-closed to known v1.17.1 logical sides and the same field
+  // allowlist as the adapter so pre-adapter code cannot become a mutation bypass.
+  if (!/^[A-E]$/.test(normalizedSide)) {
+    throw new RangeError("Unknown logical agent side.");
+  }
+  if (Object.prototype.hasOwnProperty.call(patch, "tabId")) {
+    const rawTabId = patch.tabId;
+    if (rawTabId === null || rawTabId === undefined || rawTabId === "") {
+      state[`tab${normalizedSide}`] = null;
+    } else {
+      const tabId = Number(rawTabId);
+      if (!Number.isInteger(tabId) || tabId <= 0) throw new RangeError("tabId must be a positive integer or null.");
+      state[`tab${normalizedSide}`] = tabId;
+    }
+  }
+  if (Object.prototype.hasOwnProperty.call(patch, "label")) {
+    state[`label${normalizedSide}`] = String(patch.label ?? "");
+  }
+  if (Object.prototype.hasOwnProperty.call(patch, "job")) {
+    state[`job${normalizedSide}`] = String(patch.job ?? "");
+  }
+  return rosterAgentForSide(normalizedSide);
 }
 
 function tabForSide(side) {
@@ -4414,7 +4446,7 @@ chrome.tabs.onRemoved.addListener(async tabId => {
   const side = sideForTab(tabId);
   if (!side) return;
 
-  state[`tab${side}`] = null;
+  writeRosterAgentForSide(side, { tabId: null });
   if (isBatchWorkMode() && state.phasePendingSides.includes(side)) {
     state.phaseSentSides = state.phaseSentSides.filter(item => item !== side);
     delete state.lastResponseBySide[side];
