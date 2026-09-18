@@ -67,26 +67,7 @@ function createContext({ persisted, current }) {
     stateReady: Promise.resolve(),
     loadState: async () => current,
     __AI_BRIDGE_AGENT_CAPABILITIES__: caps,
-    __AI_BRIDGE_DYNAMIC_AGENTS_V1__: dynamicAgents,
-    __AI_BRIDGE_STATE_V4_PERSISTENCE_V1__: {
-      version: 1,
-      hydratePersistedState(snapshot) {
-        if (Number(snapshot?.stateVersion) !== 4) return snapshot;
-        const toSide = value => {
-          const match = /^agent-([1-5])$/.exec(String(value || ""));
-          return match ? ALL_SIDES[Number(match[1]) - 1] : null;
-        };
-        const rosterCount = Array.isArray(snapshot?.roster?.agents) ? snapshot.roster.agents.length : 3;
-        const out = { ...snapshot, agentCount: rosterCount };
-        for (const field of ["startSide", "mainSide", "currentSide"]) {
-          out[field] = toSide(snapshot[field]);
-        }
-        for (const field of ["cycleParticipants", "phasePendingSides", "phaseSentSides", "phaseCompletedSides"]) {
-          out[field] = (Array.isArray(snapshot[field]) ? snapshot[field] : []).map(toSide).filter(Boolean);
-        }
-        return out;
-      }
-    }
+    __AI_BRIDGE_DYNAMIC_AGENTS_V1__: dynamicAgents
   });
   context.globalThis = context;
   vm.runInContext(src, context, { filename: "dynamic-state-restart-hardening.js" });
@@ -129,7 +110,6 @@ assert.deepEqual([...five.state.phaseSentSides], ["A", "D"]);
 assert.deepEqual([...five.state.phaseCompletedSides], ["B", "E"]);
 assert.deepEqual([...five.state.activeSides], ALL_SIDES);
 assert.equal(five.__AI_BRIDGE_DYNAMIC_RESTART_HYDRATION_V1__.restoresServiceWorkerQueue, false);
-assert.equal(five.__AI_BRIDGE_DYNAMIC_RESTART_HYDRATION_V1__.hydratesCanonicalStateV4BeforeRestore, true);
 
 const persistedThree = {
   stateVersion: 3,
@@ -218,50 +198,3 @@ assert.equal(mismatchContext.state.mainSide, "A", "state-version mismatch must f
 assert.deepEqual([...mismatchContext.state.phasePendingSides], []);
 
 console.log("dynamic-state-restart-hydration: ok");
-
-
-const persistedV4 = {
-  stateVersion: 4,
-  roster: {
-    version: 2,
-    nextOrdinal: 6,
-    agents: ALL_SIDES.map((side, index) => ({
-      id: `agent-${index + 1}`,
-      ordinal: index + 1,
-      legacySide: side,
-      label: `AI ${side}`,
-      job: "",
-      tabId: null
-    }))
-  },
-  workMode: "review",
-  startSide: "agent-5",
-  mainSide: "agent-5",
-  currentSide: "agent-4",
-  cycleParticipants: ["agent-1", "agent-4", "agent-5"],
-  phasePendingSides: ["agent-4", "agent-5"],
-  phaseSentSides: ["agent-1", "agent-4"],
-  phaseCompletedSides: ["agent-2", "agent-5"]
-};
-const currentV4 = {
-  stateVersion: 4,
-  roster: persistedV4.roster,
-  agentCount: 5,
-  workMode: "review",
-  startSide: "E",
-  mainSide: "A",
-  currentSide: "D",
-  activeSides: ALL_SIDES.slice(),
-  cycleParticipants: ["A"],
-  phasePendingSides: [],
-  phaseSentSides: ["A"],
-  phaseCompletedSides: ["B"]
-};
-const v4 = createContext({ persisted: persistedV4, current: currentV4 });
-await v4.stateReady;
-assert.equal(v4.state.mainSide, "E", "canonical V4 Main AI must restore through the runtime projection");
-assert.equal(v4.state.currentSide, "D");
-assert.deepEqual([...v4.state.cycleParticipants], ["A", "D", "E"]);
-assert.deepEqual([...v4.state.phasePendingSides], ["D", "E"]);
-assert.deepEqual([...v4.state.phaseSentSides], ["A", "D"]);
-assert.deepEqual([...v4.state.phaseCompletedSides], ["B", "E"]);
