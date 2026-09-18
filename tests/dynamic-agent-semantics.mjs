@@ -182,6 +182,15 @@ const meshProtocol = mesh.bridgeCommandProtocolText();
 assert.match(meshProtocol, /SEND TO: AI D/);
 assert.match(meshProtocol, /SEND TO: AI E/);
 assert.equal(mesh.__AI_BRIDGE_DYNAMIC_SEMANTICS_V1__.liveRosterMeshTargets, true);
+assert.equal(mesh.__AI_BRIDGE_DYNAMIC_SEMANTICS_V1__.meshTargetsUseLiveRuntimeKeys, true);
+
+mesh.SIDES.splice(0, mesh.SIDES.length, "A", "agent-6");
+assert.equal(mesh.resolveCommandTarget("agent-6", "A"), "agent-6",
+  "Direct Mesh should accept a canonical F+ runtime key when it is present in the live roster");
+assert.equal(mesh.resolveCommandTarget("AI agent-6", "A"), "agent-6",
+  "Direct Mesh should accept the explicit AI agent-N form");
+assert.equal(mesh.resolveCommandTarget("agent-6", "agent-6"), null,
+  "Direct Mesh must reject F+ self-targets");
 
 const threeMesh = load(3);
 threeMesh.state.workMode = "mesh";
