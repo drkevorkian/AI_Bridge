@@ -36,6 +36,7 @@
     card.dataset.side = side;
     card.dataset.agentId = agentIdForOrdinal(ordinal);
     card.dataset.ordinal = String(ordinal);
+    card.setAttribute("role", "listitem");
     card.hidden = ordinal > DEFAULT_VISIBLE_COUNT;
 
     const topline = document.createElement("div");
