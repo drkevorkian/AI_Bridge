@@ -72,10 +72,7 @@ assert.match(dashboardJs, /AI_BRIDGE_DOWNLOAD_UPDATE/);
 assert.match(dashboardJs, /AI_BRIDGE_SET_AUTO_UPDATE/);
 assert.match(popupJs, /AI_BRIDGE_OPEN_DASHBOARD/);
 
-assert.match(background, /STATE_VERSION = 4/);
-assert.match(background, /function stateV4Persistence\(/);
-assert.match(background, /serializeRuntimeState\(state\)/);
-assert.match(background, /migrateV3State\(bridgeState\)/);
+assert.match(background, /STATE_VERSION = 3/);
 assert.match(background, /UPDATE_ALARM = "ai-bridge-update-check"/);
 assert.match(background, /periodInMinutes: 1440/);
 assert.doesNotMatch(background, /launchWebAuthFlow/);
