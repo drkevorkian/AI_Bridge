@@ -73,6 +73,24 @@
     return SIDE_ALPHABET.indexOf(side) + 1;
   }
 
+  // Runtime map keys preserve A-E for compatibility, while ordinals above the
+  // legacy alias window use their canonical machine IDs directly. This helper
+  // is intentionally independent from MAX_LOGICAL_AGENTS so F+ identity can be
+  // normalized before the active-capacity gate is raised.
+  function runtimeAgentKeyForOrdinal(rawOrdinal) {
+    const ordinal = Number(rawOrdinal);
+    if (!Number.isSafeInteger(ordinal) || ordinal < 1) {
+      throw new RangeError("Agent ordinal must be a positive safe integer.");
+    }
+    return legacySideForOrdinal(ordinal) || agentIdForOrdinal(ordinal);
+  }
+
+  function ordinalForRuntimeAgentKey(rawKey) {
+    const legacyOrdinal = ordinalForLegacySide(rawKey);
+    if (legacyOrdinal !== null) return legacyOrdinal;
+    return ordinalForAgentId(rawKey);
+  }
+
   function parseAgentCount(raw) {
     if (raw === null || raw === undefined || raw === "") return null;
     const value = Number(raw);
@@ -266,6 +284,8 @@
     isCanonicalAgentId,
     legacySideForOrdinal,
     ordinalForLegacySide,
+    runtimeAgentKeyForOrdinal,
+    ordinalForRuntimeAgentKey,
     providerFamilyForUrl,
     isSupportedProviderUrl,
     conversationIdentity,

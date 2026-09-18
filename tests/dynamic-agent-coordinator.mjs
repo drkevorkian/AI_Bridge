@@ -111,10 +111,37 @@ await assert.rejects(
   /distinct conversation threads|share chatgpt::https:\/\/chatgpt\.com\/c\/one/i
 );
 
-const shrinking = loadOverlay({ agentCount: 5, currentSide: "E", startSide: "E", mainSide: "E" });
+const shrinking = loadOverlay({
+  stateVersion: 4,
+  agentCount: 5,
+  roster: {
+    version: 2,
+    nextOrdinal: 6,
+    agents: ["A", "B", "C", "D", "E"].map((side, index) => ({
+      id: `agent-${index + 1}`,
+      ordinal: index + 1,
+      legacySide: side,
+      label: `AI ${side}`,
+      job: "",
+      tabId: null
+    }))
+  },
+  currentSide: "E",
+  startSide: "E",
+  mainSide: "E",
+  cycleParticipants: ["A", "D", "E"],
+  phasePendingSides: ["B", "D", "E"],
+  phaseSentSides: ["A", "E"],
+  phaseCompletedSides: ["C", "D"]
+});
 await shrinking.applyAgentCount(2, { persist: false });
 same(Array.from(shrinking.SIDES), ["A", "B"]);
 assert.equal(shrinking.state.startSide, "A");
+assert.equal(shrinking.state.roster.agents.length, 2);
+same(shrinking.state.cycleParticipants, ["A"]);
+same(shrinking.state.phasePendingSides, ["B"]);
+same(shrinking.state.phaseSentSides, ["A"]);
+same(shrinking.state.phaseCompletedSides, []);
 same(shrinking.sanitizeForceRelaySides(["A", "C", "E", "A"]), ["A"]);
 
 const frozen = loadOverlay({ tabA: 11, tabB: 22, tabC: 33, agentCount: 3 }, { freezeSides: true });
@@ -145,4 +172,5 @@ assert.equal(legacy.nextSide("D"), "A");
 
 assert.equal(migrated.__AI_BRIDGE_DYNAMIC_AGENTS_V1__.uniqueTabBinding, true);
 assert.equal(migrated.__AI_BRIDGE_DYNAMIC_AGENTS_V1__.duplicateProviderAgentsEnabled, true);
+assert.equal(migrated.__AI_BRIDGE_DYNAMIC_AGENTS_V1__.agentCountPrunesRetiredRoutingRefs, true);
 console.log("dynamic-agent-coordinator: ok");

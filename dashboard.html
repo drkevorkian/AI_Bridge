@@ -63,62 +63,7 @@
       <section class="panel-section team-section studio-slot-team">
         <div class="section-heading"><span>Team</span><span class="muted">A → B → C</span></div>
 
-        <article class="agent-card agent-a">
-          <div class="agent-topline">
-            <div class="agent-identity">
-              <strong>AI A</strong>
-              <div class="agent-timers">
-                <span id="timerTotalA" class="round-timer idle" title="Total working time for this LLM in the current session">Total 0s</span>
-                <span id="timerCurrentA" class="round-timer idle" title="Current turn timer for this LLM">Current —</span>
-              </div>
-            </div>
-            <div class="agent-actions">
-              <button id="newChatA" class="tiny ghost" type="button">New chat</button>
-              <button id="resendA" class="tiny ghost" disabled>Resend</button>
-              <button id="useLastA" class="tiny ghost" type="button" disabled>Use last reply</button>
-            </div>
-          </div>
-          <select id="tabA" aria-label="AI A tab"></select>
-          <textarea id="jobA" rows="3" placeholder="AI A job / responsibility"></textarea>
-        </article>
-
-        <article class="agent-card agent-b">
-          <div class="agent-topline">
-            <div class="agent-identity">
-              <strong>AI B</strong>
-              <div class="agent-timers">
-                <span id="timerTotalB" class="round-timer idle" title="Total working time for this LLM in the current session">Total 0s</span>
-                <span id="timerCurrentB" class="round-timer idle" title="Current turn timer for this LLM">Current —</span>
-              </div>
-            </div>
-            <div class="agent-actions">
-              <button id="newChatB" class="tiny ghost" type="button">New chat</button>
-              <button id="resendB" class="tiny ghost" disabled>Resend</button>
-              <button id="useLastB" class="tiny ghost" type="button" disabled>Use last reply</button>
-            </div>
-          </div>
-          <select id="tabB" aria-label="AI B tab"></select>
-          <textarea id="jobB" rows="3" placeholder="AI B job / responsibility"></textarea>
-        </article>
-
-        <article class="agent-card agent-c">
-          <div class="agent-topline">
-            <div class="agent-identity">
-              <strong>AI C</strong>
-              <div class="agent-timers">
-                <span id="timerTotalC" class="round-timer idle" title="Total working time for this LLM in the current session">Total 0s</span>
-                <span id="timerCurrentC" class="round-timer idle" title="Current turn timer for this LLM">Current —</span>
-              </div>
-            </div>
-            <div class="agent-actions">
-              <button id="newChatC" class="tiny ghost" type="button">New chat</button>
-              <button id="resendC" class="tiny ghost" disabled>Resend</button>
-              <button id="useLastC" class="tiny ghost" type="button" disabled>Use last reply</button>
-            </div>
-          </div>
-          <select id="tabC" aria-label="AI C tab"></select>
-          <textarea id="jobC" rows="3" placeholder="AI C job / responsibility"></textarea>
-        </article>
+        <div id="agentRosterHost" class="agent-roster-host" role="list" aria-label="AI agent roster"></div>
 
         <div class="manual-relay-panel">
           <div class="section-heading">
@@ -128,17 +73,9 @@
           <p class="field-help">If an AI finished on its tab but the bridge never picked that up, re-read the visible reply and send it to any combination of A, B, and C.</p>
           <div class="manual-relay-row">
             <span class="manual-relay-label">From</span>
-            <div class="manual-relay-from" role="group" aria-label="Source AI">
-              <button id="forceFromA" class="layout-chip active" type="button" aria-pressed="true">A</button>
-              <button id="forceFromB" class="layout-chip" type="button" aria-pressed="false">B</button>
-              <button id="forceFromC" class="layout-chip" type="button" aria-pressed="false">C</button>
-            </div>
+            <div class="manual-relay-from" role="group" aria-label="Source AI"></div>
             <span class="manual-relay-label">To</span>
-            <div class="manual-relay-to" role="group" aria-label="Destination AIs">
-              <label class="check-line"><input id="forceToA" type="checkbox"> A</label>
-              <label class="check-line"><input id="forceToB" type="checkbox" checked> B</label>
-              <label class="check-line"><input id="forceToC" type="checkbox" checked> C</label>
-            </div>
+            <div class="manual-relay-to" role="group" aria-label="Destination AIs"></div>
             <button id="forceRelayBtn" class="tiny" type="button" disabled>Re-read and send</button>
           </div>
         </div>
@@ -435,6 +372,7 @@
       <div id="humanModalQueue" class="field-help"></div>
     </section>
   </div>
+  <script src="dashboard-roster-prelude.js"></script>
   <script src="dashboard.js"></script>
   <script src="dashboard-release.js"></script>
 </body>

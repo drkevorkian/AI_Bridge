@@ -63,10 +63,27 @@
 
   function migrateDynamicAgentState(bridgeState) {
     const next = bridgeState && typeof bridgeState === "object" ? bridgeState : {};
-    const count = liveCount(next.agentCount);
+    const rosterCount = Number(next?.stateVersion) === 4 && Array.isArray(next?.roster?.agents)
+      ? next.roster.agents.length
+      : null;
+    const count = liveCount(rosterCount ?? next.agentCount);
     const sides = liveSides(count);
     next.agentCount = count;
     next.activeSides = sides.slice();
+
+    const sanitizeSideList = raw => {
+      const out = [];
+      for (const item of (Array.isArray(raw) ? raw : [])) {
+        const side = String(item || "").toUpperCase();
+        if (sides.includes(side) && !out.includes(side)) out.push(side);
+      }
+      return out;
+    };
+    next.cycleParticipants = sanitizeSideList(next.cycleParticipants);
+    next.phasePendingSides = sanitizeSideList(next.phasePendingSides);
+    next.phaseSentSides = sanitizeSideList(next.phaseSentSides);
+    next.phaseCompletedSides = sanitizeSideList(next.phaseCompletedSides);
+
     new rosterState.AgentRosterStateAdapter(next).ensureLegacyFields();
     next.sourceDeliveredBySide = expandMap(next.sourceDeliveredBySide, false);
     next.lastSentArtifactIdsBySide = expandMap(next.lastSentArtifactIdsBySide, []);
@@ -196,8 +213,14 @@
       throw new RangeError(`Agent count must be an integer from 1 to ${caps.maxLogicalAgents}.`);
     }
     const current = liveState() || {};
-    const next = migrateDynamicAgentState({ ...current, agentCount: count });
-    if (current) Object.assign(current, next);
+    const adapter = new rosterState.AgentRosterStateAdapter(current);
+    if (Number(current?.stateVersion) === 4 && Array.isArray(current?.roster?.agents)) {
+      adapter.setCount(count);
+      migrateDynamicAgentState(current);
+    } else {
+      const next = migrateDynamicAgentState({ ...current, agentCount: count });
+      if (current) Object.assign(current, next);
+    }
     assignLiveSides(count);
     if (persist && typeof saveState === "function") await saveState();
     return { agentCount: count, sides: liveSides(count) };
@@ -352,6 +375,8 @@
     duplicateProviderAgentsEnabled: caps.duplicateProviderAgentsEnabled === true,
     revokesRetiredTabAuthority: true,
     tabRetirementUsesRosterAdapter: true,
+    agentCountWritesRosterV2: true,
+    agentCountPrunesRetiredRoutingRefs: true,
     pausesOnBoundTabReplacement: true,
     neverAutoTrustsReplacementTab: true
   });
