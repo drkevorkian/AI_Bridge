@@ -9,11 +9,15 @@
   const caps = globalThis.__AI_BRIDGE_AGENT_CAPABILITIES__;
   const dynamic = globalThis.__AI_BRIDGE_DYNAMIC_AGENTS_V1__;
   const rosterState = globalThis.__AI_BRIDGE_ROSTER_STATE_ADAPTER_V1__;
+  const cloudV2 = globalThis.__AI_BRIDGE_CLOUD_SETTINGS_V2__;
   if (!caps || caps.version !== 1 || !dynamic || dynamic.version !== 1) {
     throw new Error("Dynamic-agent semantics require the capability contract and coordinator overlay.");
   }
   if (!rosterState || rosterState.version !== 1 || typeof rosterState.writeAgent !== "function") {
     throw new Error("Dynamic-agent semantics require the roster-state adapter.");
+  }
+  if (!cloudV2 || cloudV2.version !== 2 || typeof cloudV2.projectToLegacy !== "function") {
+    throw new Error("Dynamic-agent semantics require Cloud Settings V2.");
   }
 
   function liveSides() {
@@ -160,52 +164,30 @@
     };
   }
 
-  if (typeof sanitizeCloudSettings === "function") {
-    const baseSanitize = sanitizeCloudSettings;
-    sanitizeCloudSettings = function dynamicSanitizeCloudSettings(raw, options = {}) {
-      const next = baseSanitize(raw, options);
-      const src = raw && typeof raw === "object" && !Array.isArray(raw) ? raw : {};
-      const parsedCount = caps.parseAgentCount(src.agentCount);
-      next.agentCount = parsedCount === null ? caps.defaultAgentCount : parsedCount;
-      const storedSides = [...caps.sideIdsForCount(next.agentCount)];
-      const requestedStart = String(src.startSide || next.startSide || "A").toUpperCase();
-      next.startSide = storedSides.includes(requestedStart) ? requestedStart : storedSides[0];
-      for (const side of ALL_JOB_SIDES) {
-        next[`job${side}`] = String(src[`job${side}`] || next[`job${side}`] || "").trim().slice(0, 4000);
-      }
-      return next;
-    };
-  }
-
   if (typeof applyIdleCloudSettings === "function") {
     const baseApply = applyIdleCloudSettings;
     applyIdleCloudSettings = async function dynamicApplyIdleCloudSettings(settings) {
-      // Resize first so job writes target the intended active roster. This
-      // prevents V4 cloud pulls from partially applying A-C and then failing on
-      // inactive D/E (or on B/C for a one-agent roster).
-      if (settings && Object.prototype.hasOwnProperty.call(settings, "agentCount") && typeof applyAgentCount === "function") {
-        try {
-          await applyAgentCount(settings.agentCount, { persist: false });
-        } catch (_) {
-          // Leave the current idle roster if the stored count is invalid.
-        }
+      const projected = cloudV2.projectToLegacy(settings);
+
+      // Cloud V2 is already validated. Resize before job writes so the roster
+      // shape and every job update commit together, with no inactive-slot write.
+      if (typeof applyAgentCount === "function") {
+        await applyAgentCount(projected.agentCount, { persist: false });
       }
 
-      await baseApply(settings);
+      await baseApply(settings, { persist: false });
       const active = new Set(liveSides());
       for (const side of ALL_JOB_SIDES) {
         if (!active.has(side)) continue;
-        if (typeof settings?.[`job${side}`] === "string") {
-          rosterState.writeAgent(state, side, {
-            job: String(settings[`job${side}`]).trim().slice(0, 4000)
-          });
-        }
+        rosterState.writeAgent(state, side, {
+          job: String(projected[`job${side}`] || "").trim().slice(0, 4000)
+        });
       }
+
       const sides = liveSides();
-      const start = String(settings?.startSide || "").toUpperCase();
-      if (sides.includes(start)) {
-        state.startSide = start;
-        state.mainSide = start;
+      if (sides.includes(projected.startSide)) {
+        state.startSide = projected.startSide;
+        state.mainSide = projected.startSide;
       }
       if (typeof saveState === "function") await saveState();
     };
@@ -217,6 +199,9 @@
     liveRosterMeshTargets: true,
     derivedTurnMinimums: true,
     cloudJobsThroughE: true,
+    cloudSchemaVersion: 2,
+    cloudCanonicalRosterOnly: true,
+    cloudImportsSchemaV1: true,
     cloudJobWritesThroughRosterAdapter: true,
     cloudResizesRosterBeforeJobWrites: true,
     cloudSkipsInactiveRosterSlots: true
