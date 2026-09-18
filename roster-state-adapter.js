@@ -194,7 +194,7 @@
         input.tabId !== "" &&
         next.tabId === null
       ) {
-        throw new TypeError(`AI ${side} tabId must be a positive integer or null.`);
+        throw new TypeError(`AI ${runtimeKey} tabId must be a positive integer or null.`);
       }
 
       const agents = state.roster.agents.map((agent, i) => i === index ? next : agent);
