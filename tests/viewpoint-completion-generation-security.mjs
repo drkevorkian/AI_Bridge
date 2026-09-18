@@ -27,6 +27,11 @@ const sandbox = vm.createContext({
   Boolean,
   Object,
   globalThis: null,
+  __AI_BRIDGE_EXECUTION_KEY_ADAPTER_V1__: {
+    version: 1,
+    read() { return undefined; },
+    write(_state, _mapName, _agentRef, value) { return value; }
+  },
   generationMatches(expectedId, incomingId) {
     const expected = String(expectedId || "");
     if (!expected) return true;
