@@ -26,7 +26,11 @@ assert.equal(caps.agentIdForOrdinal(27), "agent-27");
 assert.equal(caps.agentIdForOrdinal(Number.MAX_SAFE_INTEGER), `agent-${Number.MAX_SAFE_INTEGER}`);
 
 for (const bad of [0, -1, 1.5, NaN, Infinity, Number.MAX_SAFE_INTEGER + 1, "abc", null, undefined]) {
-  assert.throws(() => caps.agentIdForOrdinal(bad), RangeError);
+  assert.throws(
+    () => caps.agentIdForOrdinal(bad),
+    error => error?.name === "RangeError" && /positive safe integer/.test(String(error?.message || "")),
+    `invalid ordinal should fail closed: ${String(bad)}`
+  );
 }
 
 assert.equal(caps.ordinalForAgentId("agent-1"), 1);
