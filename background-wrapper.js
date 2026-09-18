@@ -18,63 +18,12 @@ if (
   throw new Error("AI Bridge agent capability contract failed to initialize.");
 }
 
-importScripts("cloud-settings-v2.js");
-if (
-  globalThis.__AI_BRIDGE_CLOUD_SETTINGS_V2__?.version !== 2 ||
-  globalThis.__AI_BRIDGE_CLOUD_SETTINGS_V2__?.importsSchemaV1 !== true ||
-  globalThis.__AI_BRIDGE_CLOUD_SETTINGS_V2__?.emitsSchemaV2Only !== true ||
-  globalThis.__AI_BRIDGE_CLOUD_SETTINGS_V2__?.persistsTabBindings !== false ||
-  globalThis.__AI_BRIDGE_CLOUD_SETTINGS_V2__?.canonicalRosterAuthority !== true
-) {
-  throw new Error("AI Bridge Cloud Settings V2 contract failed to initialize.");
-}
-
-importScripts("roster-v2-migration.js");
-if (
-  globalThis.__AI_BRIDGE_ROSTER_V2_MIGRATION_V1__?.version !== 1 ||
-  globalThis.__AI_BRIDGE_ROSTER_V2_MIGRATION_V1__?.targetStateVersion !== 4 ||
-  globalThis.__AI_BRIDGE_ROSTER_V2_MIGRATION_V1__?.noPersistenceSideEffects !== true
-) {
-  throw new Error("AI Bridge Roster V2 migration contract failed to initialize.");
-}
-
-importScripts("state-v4-persistence.js");
-if (
-  globalThis.__AI_BRIDGE_STATE_V4_PERSISTENCE_V1__?.version !== 1 ||
-  globalThis.__AI_BRIDGE_STATE_V4_PERSISTENCE_V1__?.targetStateVersion !== 4 ||
-  globalThis.__AI_BRIDGE_STATE_V4_PERSISTENCE_V1__?.persistsLegacyRosterFields !== false ||
-  globalThis.__AI_BRIDGE_STATE_V4_PERSISTENCE_V1__?.canonicalizesAgentReferences !== true ||
-  globalThis.__AI_BRIDGE_STATE_V4_PERSISTENCE_V1__?.canonicalizesExecutionMaps !== true ||
-  globalThis.__AI_BRIDGE_STATE_V4_PERSISTENCE_V1__?.runtimeAgentReferencesDecoupledFromLegacyAliases !== true ||
-  globalThis.__AI_BRIDGE_STATE_V4_PERSISTENCE_V1__?.importsLegacyRuntimeRefsInV4 !== true ||
-  globalThis.__AI_BRIDGE_STATE_V4_PERSISTENCE_V1__?.recoversStaleRuntimeRefsInV4 !== true ||
-  globalThis.__AI_BRIDGE_STATE_V4_PERSISTENCE_V1__?.canonicalRosterRemainsStrictDuringRecovery !== true ||
-  globalThis.__AI_BRIDGE_STATE_V4_PERSISTENCE_V1__?.noStorageSideEffects !== true
-) {
-  throw new Error("AI Bridge State V4 persistence contract failed to initialize.");
-}
-
-importScripts("roster-state-adapter.js");
-if (
-  globalThis.__AI_BRIDGE_ROSTER_STATE_ADAPTER_V1__?.version !== 1 ||
-  globalThis.__AI_BRIDGE_ROSTER_STATE_ADAPTER_V1__?.storageAuthority !== "roster-v2" ||
-  globalThis.__AI_BRIDGE_ROSTER_STATE_ADAPTER_V1__?.legacyProjectionEphemeral !== true ||
-  globalThis.__AI_BRIDGE_ROSTER_STATE_ADAPTER_V1__?.runtimeWritesRosterV2 !== true ||
-  globalThis.__AI_BRIDGE_ROSTER_STATE_ADAPTER_V1__?.persistsSecondRosterRepresentation !== false ||
-  globalThis.__AI_BRIDGE_ROSTER_STATE_ADAPTER_V1__?.validatesSideKeys !== true ||
-  globalThis.__AI_BRIDGE_ROSTER_STATE_ADAPTER_V1__?.runtimeAgentReferences !== true ||
-  typeof globalThis.AgentRosterStateAdapter !== "function"
-) {
-  throw new Error("AI Bridge roster-state adapter failed to initialize.");
-}
-
 importScripts("execution-key-adapter.js");
 if (
   globalThis.__AI_BRIDGE_EXECUTION_KEY_ADAPTER_V1__?.version !== 1 ||
   globalThis.__AI_BRIDGE_EXECUTION_KEY_ADAPTER_V1__?.persistsSecondExecutionMapRepresentation !== false ||
   globalThis.__AI_BRIDGE_EXECUTION_KEY_ADAPTER_V1__?.legacyExecutionKeyCompatibility !== true ||
-  globalThis.__AI_BRIDGE_EXECUTION_KEY_ADAPTER_V1__?.canonicalFPlusExecutionKeys !== true ||
-  globalThis.__AI_BRIDGE_EXECUTION_KEY_ADAPTER_V1__?.activeFPlusStillCapacityGated !== true
+  globalThis.__AI_BRIDGE_EXECUTION_KEY_ADAPTER_V1__?.canonicalFPlusFailsClosedUntilRosterV2Cutover !== true
 ) {
   throw new Error("AI Bridge execution-key adapter failed to initialize.");
 }
@@ -114,6 +63,17 @@ if (
 
 importScripts("background.js");
 
+importScripts("roster-state-adapter.js");
+if (
+  globalThis.__AI_BRIDGE_ROSTER_STATE_ADAPTER_V1__?.version !== 1 ||
+  globalThis.__AI_BRIDGE_ROSTER_STATE_ADAPTER_V1__?.storageAuthority !== "legacy-per-side-fields" ||
+  globalThis.__AI_BRIDGE_ROSTER_STATE_ADAPTER_V1__?.persistsSecondRosterRepresentation !== false ||
+  globalThis.__AI_BRIDGE_ROSTER_STATE_ADAPTER_V1__?.validatesSideKeys !== true ||
+  typeof globalThis.AgentRosterStateAdapter !== "function"
+) {
+  throw new Error("AI Bridge roster-state adapter failed to initialize.");
+}
+
 importScripts("coordinator-dynamic-agents.js");
 if (
   globalThis.__AI_BRIDGE_DYNAMIC_AGENTS_V1__?.version !== 1 ||
@@ -121,8 +81,6 @@ if (
   globalThis.__AI_BRIDGE_DYNAMIC_AGENTS_V1__?.duplicateProviderAgentsEnabled !== true ||
   globalThis.__AI_BRIDGE_DYNAMIC_AGENTS_V1__?.revokesRetiredTabAuthority !== true ||
   globalThis.__AI_BRIDGE_DYNAMIC_AGENTS_V1__?.tabRetirementUsesRosterAdapter !== true ||
-  globalThis.__AI_BRIDGE_DYNAMIC_AGENTS_V1__?.agentCountWritesRosterV2 !== true ||
-  globalThis.__AI_BRIDGE_DYNAMIC_AGENTS_V1__?.agentCountPrunesRetiredRoutingRefs !== true ||
   globalThis.__AI_BRIDGE_DYNAMIC_AGENTS_V1__?.pausesOnBoundTabReplacement !== true ||
   globalThis.__AI_BRIDGE_DYNAMIC_AGENTS_V1__?.neverAutoTrustsReplacementTab !== true
 ) {
@@ -135,7 +93,6 @@ if (
   globalThis.__AI_BRIDGE_DYNAMIC_RESTART_HYDRATION_V1__?.restoresPersistedMainSide !== true ||
   globalThis.__AI_BRIDGE_DYNAMIC_RESTART_HYDRATION_V1__?.restoresPersistedPhaseLists !== true ||
   globalThis.__AI_BRIDGE_DYNAMIC_RESTART_HYDRATION_V1__?.restoresPersistedCycleParticipants !== true ||
-  globalThis.__AI_BRIDGE_DYNAMIC_RESTART_HYDRATION_V1__?.hydratesCanonicalStateV4BeforeRestore !== true ||
   globalThis.__AI_BRIDGE_DYNAMIC_RESTART_HYDRATION_V1__?.restoresServiceWorkerQueue !== false
 ) {
   throw new Error("AI Bridge dynamic restart hydration failed to initialize.");

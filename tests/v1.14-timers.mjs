@@ -8,7 +8,6 @@ const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const background = fs.readFileSync(path.join(root, "background.js"), "utf8");
 const generationHardening = fs.readFileSync(path.join(root, "coordinator-generation-hardening.js"), "utf8");
 const html = fs.readFileSync(path.join(root, "dashboard.html"), "utf8");
-const rosterPrelude = fs.readFileSync(path.join(root, "dashboard-roster-prelude.js"), "utf8");
 const dashboardJs = fs.readFileSync(path.join(root, "dashboard.js"), "utf8");
 const content = fs.readFileSync(path.join(root, "content.js"), "utf8");
 const manifest = JSON.parse(fs.readFileSync(path.join(root, "manifest.json"), "utf8"));
@@ -34,11 +33,10 @@ assert.ok(manifest.permissions.includes("alarms"));
 assert.match(html, /id="maxCycles"/);
 assert.match(html, /id="checkpointEveryNCycles"/);
 assert.match(html, /id="stuckTimeoutMinutes"/);
-assert.match(html, /id="agentRosterHost"/);
-assert.match(rosterPrelude, /"timerTotal" \+ side/);
-assert.match(rosterPrelude, /"timerCurrent" \+ side/);
-assert.match(rosterPrelude, /Total working time for this LLM in the current session/);
-assert.match(rosterPrelude, /Current turn timer for this LLM/);
+for (const side of ["A", "B", "C"]) {
+  assert.match(html, new RegExp(`id="timerTotal${side}"`));
+  assert.match(html, new RegExp(`id="timerCurrent${side}"`));
+}
 assert.match(dashboardJs, /timerTotal\$\{side\}/);
 assert.match(content, /AI_BRIDGE_GENERATION_STATUS/);
 assert.match(content, /AI_BRIDGE_STOP_GENERATION/);

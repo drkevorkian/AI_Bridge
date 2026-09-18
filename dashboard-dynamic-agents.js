@@ -1,21 +1,9 @@
 (() => {
   "use strict";
 
-  const rosterPrelude = globalThis.__AI_BRIDGE_ROSTER_UI_PRELUDE_V1__;
-  if (
-    !rosterPrelude ||
-    rosterPrelude.version !== 1 ||
-    rosterPrelude.generatedBeforeLegacyHandlers !== true ||
-    rosterPrelude.canonicalAgentMetadata !== true ||
-    !Array.isArray(rosterPrelude.sides)
-  ) {
-    throw new Error("Dynamic dashboard requires the generated roster prelude.");
-  }
-
-  const ALL_SIDES = Object.freeze(Array.from(rosterPrelude.sides, side => String(side)));
-  const DEFAULT_COUNT = Number(rosterPrelude.defaultVisibleCount) || 3;
+  const ALL_SIDES = Object.freeze(["A", "B", "C", "D", "E"]);
+  const DEFAULT_COUNT = 3;
   const HEALTH_POLL_MS = 1500;
-  const DYNAMIC_BOOT_TIMEOUT_MS = 5000;
   const cardCache = new Map();
   let activeCount = DEFAULT_COUNT;
   let lastHealth = null;
@@ -23,27 +11,6 @@
   let healthRefreshEpoch = 0;
 
   const byId = id => document.getElementById(id);
-
-  function dynamicTimeout(promise, label, timeoutMs = DYNAMIC_BOOT_TIMEOUT_MS) {
-    let timer = null;
-    const timeout = new Promise((_, reject) => {
-      timer = setTimeout(() => reject(new Error(`${label} timed out after ${timeoutMs} ms.`)), timeoutMs);
-    });
-    return Promise.race([Promise.resolve(promise), timeout]).finally(() => {
-      if (timer !== null) clearTimeout(timer);
-    });
-  }
-
-  function reportDynamicStartupFailure(error) {
-    const message = String(error?.message || error || "Unknown dynamic dashboard failure.");
-    const recommendation = byId("adaptiveRecommendation");
-    if (recommendation) recommendation.textContent = `Provider health unavailable — ${message}`;
-    const status = byId("status");
-    if (status && (!status.textContent || /^Idle\b/.test(status.textContent) || /checking/i.test(status.textContent))) {
-      status.textContent = `Dashboard startup warning: ${message}`;
-    }
-    console.error("AI Bridge dynamic dashboard failed", error);
-  }
 
   function liveSides(count = activeCount) {
     const n = Math.max(1, Math.min(ALL_SIDES.length, Number(count) || DEFAULT_COUNT));
@@ -106,13 +73,69 @@
     return badge;
   }
 
+  function createExtendedCard(side) {
+    const card = document.createElement("article");
+    card.className = `agent-card agent-${side.toLowerCase()}`;
+    card.dataset.side = side;
+
+    const topline = document.createElement("div");
+    topline.className = "agent-topline";
+    const identity = document.createElement("div");
+    identity.className = "agent-identity";
+    const title = document.createElement("strong");
+    title.id = `labelText${side}`;
+    title.textContent = `AI ${side}`;
+    identity.appendChild(title);
+
+    const timers = document.createElement("div");
+    timers.className = "agent-timers";
+    for (const spec of [
+      [`timerTotal${side}`, "Total 0s", "Total working time for this LLM in the current session"],
+      [`timerCurrent${side}`, "Current —", "Current turn timer for this LLM"]
+    ]) {
+      const timer = document.createElement("span");
+      timer.id = spec[0];
+      timer.className = "round-timer idle";
+      timer.textContent = spec[1];
+      timer.title = spec[2];
+      timers.appendChild(timer);
+    }
+    identity.append(timers, createStatusBadge(side));
+
+    const actions = document.createElement("div");
+    actions.className = "agent-actions";
+    for (const [prefix, text, disabled] of [
+      ["newChat", "New chat", false],
+      ["resend", "Resend", true],
+      ["useLast", "Use last reply", true]
+    ]) {
+      const button = document.createElement("button");
+      button.id = `${prefix}${side}`;
+      button.type = "button";
+      button.className = "tiny ghost";
+      button.textContent = text;
+      button.disabled = disabled;
+      actions.appendChild(button);
+    }
+    topline.append(identity, actions);
+
+    const tab = document.createElement("select");
+    tab.id = `tab${side}`;
+    tab.setAttribute("aria-label", `AI ${side} tab`);
+    const job = document.createElement("textarea");
+    job.id = `job${side}`;
+    job.rows = 3;
+    job.placeholder = `AI ${side} job / responsibility`;
+    card.append(topline, tab, job);
+    return card;
+  }
+
   function attachExtendedListeners(side) {
     if (!new Set(["D", "E"]).has(side)) return;
     const tab = byId(`tab${side}`);
     const newChat = byId(`newChat${side}`);
     const resendButton = byId(`resend${side}`);
     const useLast = byId(`useLast${side}`);
-    const forceFrom = byId(`forceFrom${side}`);
     if (tab && !tab.dataset.dynamicBound) {
       tab.dataset.dynamicBound = "true";
       tab.addEventListener("change", () => {
@@ -133,12 +156,6 @@
         try { if (typeof resend === "function") resend(side); } catch (_) {}
       });
     }
-    if (forceFrom && !forceFrom.dataset.dynamicBound) {
-      forceFrom.dataset.dynamicBound = "true";
-      forceFrom.addEventListener("click", () => {
-        try { if (typeof setForceSource === "function") setForceSource(side); } catch (_) {}
-      });
-    }
     if (useLast && !useLast.dataset.dynamicBound) {
       useLast.dataset.dynamicBound = "true";
       useLast.addEventListener("click", () => {
@@ -150,26 +167,55 @@
     }
   }
 
+  function ensureManualRelayControls(side) {
+    const fromHost = document.querySelector(".manual-relay-from");
+    const toHost = document.querySelector(".manual-relay-to");
+    if (!fromHost || !toHost) return;
+    let from = byId(`forceFrom${side}`);
+    if (!from) {
+      from = document.createElement("button");
+      from.id = `forceFrom${side}`;
+      from.className = "layout-chip";
+      from.type = "button";
+      from.textContent = side;
+      from.setAttribute("aria-pressed", "false");
+      from.addEventListener("click", () => {
+        try { if (typeof setForceSource === "function") setForceSource(side); } catch (_) {}
+      });
+      fromHost.appendChild(from);
+    }
+    let to = byId(`forceTo${side}`);
+    if (!to) {
+      const label = document.createElement("label");
+      label.className = "check-line";
+      to = document.createElement("input");
+      to.id = `forceTo${side}`;
+      to.type = "checkbox";
+      label.append(to, document.createTextNode(` ${side}`));
+      toHost.appendChild(label);
+    }
+  }
+
   function ensureCards() {
-    const host = byId("agentRosterHost");
-    if (!host) return false;
-
-    for (const side of ALL_SIDES) {
-      const card = host.querySelector(`.agent-${side.toLowerCase()}`);
-      if (!card) {
-        throw new Error(`Generated roster is missing AI ${side}.`);
-      }
-      const ordinal = ALL_SIDES.indexOf(side) + 1;
-      const expectedAgentId = `agent-${ordinal}`;
-      if (card.dataset.agentId !== expectedAgentId) {
-        throw new Error(`Generated roster identity mismatch for AI ${side}.`);
-      }
-
+    const team = document.querySelector(".team-section");
+    const relayPanel = document.querySelector(".manual-relay-panel");
+    if (!team || !relayPanel) return false;
+    for (const side of ["A", "B", "C"]) {
+      const card = document.querySelector(`.agent-${side.toLowerCase()}`);
+      if (!card) continue;
       card.dataset.side = side;
       cardCache.set(side, card);
       ensureThreadBadge(card, side);
       ensureHealthBadge(card, side);
-      if (ordinal > DEFAULT_COUNT) attachExtendedListeners(side);
+    }
+    for (const side of ["D", "E"]) {
+      let card = cardCache.get(side) || document.querySelector(`.agent-${side.toLowerCase()}`);
+      if (!card) card = createExtendedCard(side);
+      cardCache.set(side, card);
+      if (!card.isConnected) team.insertBefore(card, relayPanel);
+      ensureThreadBadge(card, side);
+      ensureManualRelayControls(side);
+      attachExtendedListeners(side);
     }
     return true;
   }
@@ -290,31 +336,11 @@
         const wrappedApply = function dynamicApplyCloudSettingsToForm(settings) {
           baseApply(settings);
           if (!settings || typeof settings !== "object") return;
-
-          const canonicalAgents = Number(settings.schemaVersion) === 2 && Array.isArray(settings?.roster?.agents)
-            ? settings.roster.agents
-            : null;
-          const count = canonicalAgents ? canonicalAgents.length : Number(settings.agentCount);
+          const count = Number(settings.agentCount);
           if (Number.isInteger(count)) renderRoster(count);
-
-          if (canonicalAgents) {
-            canonicalAgents.forEach((agent, index) => {
-              const side = ALL_SIDES[index];
-              if (!side || String(agent?.id || "") !== `agent-${index + 1}`) return;
-              const job = byId(`job${side}`);
-              if (job) job.value = String(agent?.job || "");
-            });
-            const startMatch = /^agent-([1-5])$/.exec(String(settings.startAgentId || ""));
-            if (startMatch) {
-              const startSide = ALL_SIDES[Number(startMatch[1]) - 1];
-              const startSelect = byId("startSide");
-              if (startSide && startSelect) startSelect.value = startSide;
-            }
-          } else {
-            for (const side of ALL_SIDES) {
-              const job = byId(`job${side}`);
-              if (job && typeof settings[`job${side}`] === "string") job.value = settings[`job${side}`];
-            }
+          for (const side of ALL_SIDES) {
+            const job = byId(`job${side}`);
+            if (job && typeof settings[`job${side}`] === "string") job.value = settings[`job${side}`];
           }
         };
         wrappedApply.__aiBridgeDynamic = true;
@@ -422,11 +448,11 @@
     // allowed to finish, but must never repaint lastHealth/badges/recommendation
     // after a newer refresh has begun.
     const refreshEpoch = ++healthRefreshEpoch;
-    const adaptive = await dynamicTimeout(chrome.runtime.sendMessage({
+    const adaptive = await chrome.runtime.sendMessage({
       type: "AI_BRIDGE_ADAPTIVE_SELECT",
       force,
       preferredSide: byId("startSide")?.value || "A"
-    }), "Provider health request");
+    });
     if (!adaptive?.ok) throw new Error(adaptive?.error || "Provider health check failed.");
     if (refreshEpoch !== healthRefreshEpoch) return null;
 
@@ -481,10 +507,7 @@
     installSelectedBindingsAugmenter();
     installCloudSettingsAugmenter();
     installStartGuard();
-    const stateResponse = await dynamicTimeout(
-      chrome.runtime.sendMessage({ type: "AI_BRIDGE_GET_STATE", includeSources: false, afterSeq: 0 }),
-      "Dynamic dashboard state request"
-    );
+    const stateResponse = await chrome.runtime.sendMessage({ type: "AI_BRIDGE_GET_STATE", includeSources: false, afterSeq: 0 });
     const bridgeState = stateResponse?.state || null;
     activeCount = Number(bridgeState?.agentCount) || DEFAULT_COUNT;
     renderRoster(activeCount);
@@ -494,29 +517,12 @@
       const label = byId(`labelText${side}`);
       if (label) label.textContent = String(bridgeState?.[`label${side}`] || `AI ${side}`);
     }
-    try {
-      if (typeof refreshTabs === "function") {
-        await dynamicTimeout(refreshTabs(), "Dynamic dashboard tab refresh");
-      }
-    } catch (error) {
-      reportDynamicStartupFailure(error);
-    }
-
-    try {
-      await refreshHealth(true);
-    } catch (error) {
-      reportDynamicStartupFailure(error);
-    }
-
-    healthTimer = setInterval(() => {
-      refreshHealth(false).catch(error => reportDynamicStartupFailure(error));
-    }, HEALTH_POLL_MS);
-
+    try { if (typeof refreshTabs === "function") await refreshTabs(); } catch (_) {}
+    await refreshHealth(true);
+    healthTimer = setInterval(() => refreshHealth(false).catch(() => {}), HEALTH_POLL_MS);
     window.__AI_BRIDGE_DYNAMIC_DASHBOARD_V1__ = Object.freeze({
       version: 1,
       maxAgents: ALL_SIDES.length,
-      generatedRosterUi: true,
-      canonicalAgentMetadata: true,
       duplicateProviderAgentsEnabled: true,
       threadBadges: true,
       duplicateThreadStartBlock: true,
@@ -530,8 +536,8 @@
   }
 
   if (document.readyState === "loading") {
-    window.addEventListener("DOMContentLoaded", () => bootstrap().catch(reportDynamicStartupFailure), { once: true });
+    window.addEventListener("DOMContentLoaded", () => bootstrap().catch(error => console.error("AI Bridge dynamic dashboard failed", error)), { once: true });
   } else {
-    bootstrap().catch(reportDynamicStartupFailure);
+    bootstrap().catch(error => console.error("AI Bridge dynamic dashboard failed", error));
   }
 })();

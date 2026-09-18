@@ -1058,25 +1058,13 @@ function updateStatus(s) {
   }
 }
 
-const DASHBOARD_MESSAGE_TIMEOUT_MS = 5000;
-
-function dashboardTimeout(promise, label, timeoutMs = DASHBOARD_MESSAGE_TIMEOUT_MS) {
-  let timer = null;
-  const timeout = new Promise((_, reject) => {
-    timer = setTimeout(() => reject(new Error(`${label} timed out after ${timeoutMs} ms.`)), timeoutMs);
-  });
-  return Promise.race([Promise.resolve(promise), timeout]).finally(() => {
-    if (timer !== null) clearTimeout(timer);
-  });
-}
-
 async function refreshState() {
   try {
-    const res = await dashboardTimeout(chrome.runtime.sendMessage({
+    const res = await chrome.runtime.sendMessage({
       type: "AI_BRIDGE_GET_STATE",
       includeSources: !hydrated,
       afterSeq: renderedSeq
-    }), "Bridge state request");
+    });
     const s = res?.state;
     if (!s) return;
     latestState = s;
@@ -1865,22 +1853,9 @@ window.addEventListener("hashchange", () => showDashboardView(dashboardViewFromH
 showDashboardView(dashboardViewFromHash());
 
 initPaneSplitter();
-const initialDashboardLoads = Promise.all([
-  loadTheme(),
-  loadLayout(),
-  loadPaneWidth(),
-  loadFreshOnStart(),
-  loadTabs({ preserve: false })
-]);
-dashboardTimeout(initialDashboardLoads, "Dashboard initialization").then(async () => {
+Promise.all([loadTheme(), loadLayout(), loadPaneWidth(), loadFreshOnStart(), loadTabs({ preserve: false })]).then(async () => {
   await refreshState();
   await refreshCloudStatus();
-}).catch(async err => {
-  $("status").textContent = `Dashboard initialization warning: ${err.message}`;
-  // State retrieval is intentionally attempted even if tab/theme initialization
-  // stalls, so one Chrome API cannot leave the dashboard looking permanently
-  // "loading".
-  await refreshState();
 });
 setInterval(refreshState, 750);
 setInterval(() => updateRoundTimers(latestState), 100);

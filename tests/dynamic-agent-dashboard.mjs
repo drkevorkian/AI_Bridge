@@ -7,16 +7,13 @@ const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const read = file => fs.readFileSync(path.join(root, file), "utf8");
 
 const bootstrap = read("dashboard-bootstrap.js");
-const prelude = read("dashboard-roster-prelude.js");
 const dynamic = read("dashboard-dynamic-agents.js");
 const css = read("dashboard-dynamic-agents.css");
 const dashboard = read("dashboard.js");
 
 assert.match(bootstrap, /dashboard-dynamic-agents\.js/);
 assert.match(bootstrap, /dynamicAgentAdapter:\s*true/);
-assert.match(prelude, /MAX_COMPAT_AGENTS = 5/);
-assert.match(dynamic, /__AI_BRIDGE_ROSTER_UI_PRELUDE_V1__/);
-assert.match(dynamic, /Array\.from\(rosterPrelude\.sides/);
+assert.match(dynamic, /\["A", "B", "C", "D", "E"\]/);
 assert.match(dynamic, /AI_BRIDGE_SET_AGENT_COUNT/);
 assert.match(dynamic, /AI_BRIDGE_ADAPTIVE_SELECT/);
 assert.doesNotMatch(dynamic, /type:\s*"AI_BRIDGE_PROVIDER_HEALTH"/,
@@ -42,17 +39,15 @@ assert.doesNotMatch(dynamic, /chrome\.runtime\.sendMessage\s*=\s*/,
 assert.match(dynamic, /addEventListener\("click", event => \{/);
 assert.match(dynamic, /stopImmediatePropagation\(\)/,
   "start guard should block unhealthy sessions before the legacy click handler runs");
-assert.match(dynamic, /generatedRosterUi:\s*true/);
-assert.match(dynamic, /canonicalAgentMetadata:\s*true/);
 assert.match(dynamic, /duplicateProviderAgentsEnabled:\s*true/,
   "dashboard diagnostics must reflect active same-provider viewpoint mode");
-assert.match(prelude, /forceFrom" \+ side/);
-assert.match(prelude, /forceTo" \+ side/);
-assert.match(prelude, /newChat/);
-assert.match(prelude, /resend/);
-assert.match(prelude, /useLast/);
-assert.match(prelude, /timerTotal/);
-assert.match(prelude, /timerCurrent/);
+assert.match(dynamic, /forceFrom\$\{side\}/);
+assert.match(dynamic, /forceTo\$\{side\}/);
+assert.match(dynamic, /newChat\$\{side\}/);
+assert.match(dynamic, /resend\$\{side\}/);
+assert.match(dynamic, /useLast\$\{side\}/);
+assert.match(dynamic, /timerTotal\$\{side\}/);
+assert.match(dynamic, /timerCurrent\$\{side\}/);
 
 // Slice 27 deliberately returns side:null when no provider is READY. The
 // dashboard must preserve that fail-closed result instead of visually

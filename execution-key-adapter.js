@@ -16,22 +16,6 @@
     throw new Error("Execution-key adapter requires the logical-agent capability contract.");
   }
 
-  function runtimeKeyForOrdinal(ordinal) {
-    if (typeof caps.runtimeAgentKeyForOrdinal === "function") {
-      return caps.runtimeAgentKeyForOrdinal(ordinal);
-    }
-    return caps.legacySideForOrdinal(ordinal) || caps.agentIdForOrdinal(ordinal);
-  }
-
-  function ordinalForRuntimeKey(rawKey) {
-    if (typeof caps.ordinalForRuntimeAgentKey === "function") {
-      return caps.ordinalForRuntimeAgentKey(rawKey);
-    }
-    const legacyOrdinal = caps.ordinalForLegacySide(rawKey);
-    if (legacyOrdinal !== null) return legacyOrdinal;
-    return caps.ordinalForAgentId(rawKey);
-  }
-
   const ALLOWED_MAPS = Object.freeze(new Set([
     "generationIdBySide",
     "viewpointIdentityBySide",
@@ -64,18 +48,24 @@
 
     const canonicalOrdinal = caps.ordinalForAgentId(rawRef);
     if (canonicalOrdinal !== null) {
-      return runtimeKeyForOrdinal(canonicalOrdinal);
+      const side = caps.legacySideForOrdinal(canonicalOrdinal);
+      if (!side) {
+        throw new RangeError(
+          "Canonical agent is not representable in the current A-E execution-state compatibility layer."
+        );
+      }
+      return side;
     }
 
     const legacyOrdinal = caps.ordinalForLegacySide(rawRef);
-    if (legacyOrdinal !== null) return runtimeKeyForOrdinal(legacyOrdinal);
+    if (legacyOrdinal !== null) return caps.legacySideForOrdinal(legacyOrdinal);
 
     throw new RangeError("Unknown logical-agent reference.");
   }
 
   function canonicalAgentIdForExecutionKey(rawKey) {
-    const ordinal = ordinalForRuntimeKey(rawKey);
-    if (ordinal === null) throw new RangeError("Unknown execution-state key.");
+    const ordinal = caps.ordinalForLegacySide(rawKey);
+    if (ordinal === null) throw new RangeError("Unknown legacy execution-state key.");
     return caps.agentIdForOrdinal(ordinal);
   }
 
@@ -129,7 +119,6 @@
     allowedMaps: Object.freeze(Array.from(ALLOWED_MAPS)),
     persistsSecondExecutionMapRepresentation: false,
     legacyExecutionKeyCompatibility: true,
-    canonicalFPlusExecutionKeys: true,
-    activeFPlusStillCapacityGated: true
+    canonicalFPlusFailsClosedUntilRosterV2Cutover: true
   });
 })();
