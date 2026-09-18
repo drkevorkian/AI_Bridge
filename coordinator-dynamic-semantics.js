@@ -9,15 +9,11 @@
   const caps = globalThis.__AI_BRIDGE_AGENT_CAPABILITIES__;
   const dynamic = globalThis.__AI_BRIDGE_DYNAMIC_AGENTS_V1__;
   const rosterState = globalThis.__AI_BRIDGE_ROSTER_STATE_ADAPTER_V1__;
-  const cloudV2 = globalThis.__AI_BRIDGE_CLOUD_SETTINGS_V2__;
   if (!caps || caps.version !== 1 || !dynamic || dynamic.version !== 1) {
     throw new Error("Dynamic-agent semantics require the capability contract and coordinator overlay.");
   }
   if (!rosterState || rosterState.version !== 1 || typeof rosterState.writeAgent !== "function") {
     throw new Error("Dynamic-agent semantics require the roster-state adapter.");
-  }
-  if (!cloudV2 || cloudV2.version !== 2 || typeof cloudV2.projectToLegacy !== "function") {
-    throw new Error("Dynamic-agent semantics require Cloud Settings V2.");
   }
 
   function liveSides() {
@@ -107,31 +103,20 @@
     };
   }
 
-  // Explicit Mesh routing resolves against the live roster instead of a fixed
-  // A-E regex. A-E aliases remain valid while future canonical runtime keys
-  // such as agent-6 can participate without changing this parser again.
+  // The legacy Direct Mesh parser explicitly matches only [A-C] even though its
+  // label-based path already consults the live SIDES array. Intercept only the
+  // explicit side token so AI D/E work without replacing custom-label routing.
   if (typeof resolveCommandTarget === "function") {
     const baseResolveCommandTarget = resolveCommandTarget;
     resolveCommandTarget = function dynamicResolveCommandTarget(raw, fromSide = null) {
       const token = typeof normalizeTargetToken === "function"
         ? normalizeTargetToken(raw)
         : String(raw || "").trim().toLowerCase();
-      const sides = liveSides();
-      for (const side of sides) {
-        const normalizedSide = String(side).toLowerCase();
-        const canonicalOrdinal = typeof caps.ordinalForRuntimeAgentKey === "function"
-          ? caps.ordinalForRuntimeAgentKey(String(side))
-          : (caps.ordinalForLegacySide(String(side)) ?? caps.ordinalForAgentId(String(side)));
-        const canonicalId = canonicalOrdinal == null ? null : caps.agentIdForOrdinal(canonicalOrdinal);
-        const explicitTokens = new Set([
-          normalizedSide,
-          `ai ${normalizedSide}`,
-          `ai-${normalizedSide}`,
-          `ai:${normalizedSide}`,
-          canonicalId ? canonicalId.toLowerCase() : ""
-        ].filter(Boolean));
-        if (!explicitTokens.has(token)) continue;
-        if (side === fromSide) return null;
+      const match = token.match(/(?:^|\b)ai\s*[-:]?\s*([a-e])(?:\b|$)/i) || token.match(/^([a-e])$/i);
+      if (match) {
+        const side = String(match[1]).toUpperCase();
+        const sides = liveSides();
+        if (!sides.includes(side) || side === fromSide) return null;
         return side;
       }
       return baseResolveCommandTarget(raw, fromSide);
@@ -175,30 +160,46 @@
     };
   }
 
+  if (typeof sanitizeCloudSettings === "function") {
+    const baseSanitize = sanitizeCloudSettings;
+    sanitizeCloudSettings = function dynamicSanitizeCloudSettings(raw, options = {}) {
+      const next = baseSanitize(raw, options);
+      const src = raw && typeof raw === "object" && !Array.isArray(raw) ? raw : {};
+      const parsedCount = caps.parseAgentCount(src.agentCount);
+      next.agentCount = parsedCount === null ? caps.defaultAgentCount : parsedCount;
+      const storedSides = [...caps.sideIdsForCount(next.agentCount)];
+      const requestedStart = String(src.startSide || next.startSide || "A").toUpperCase();
+      next.startSide = storedSides.includes(requestedStart) ? requestedStart : storedSides[0];
+      for (const side of ALL_JOB_SIDES) {
+        next[`job${side}`] = String(src[`job${side}`] || next[`job${side}`] || "").trim().slice(0, 4000);
+      }
+      return next;
+    };
+  }
+
   if (typeof applyIdleCloudSettings === "function") {
     const baseApply = applyIdleCloudSettings;
     applyIdleCloudSettings = async function dynamicApplyIdleCloudSettings(settings) {
-      const projected = cloudV2.projectToLegacy(settings);
-
-      // Cloud V2 is already validated. Resize before job writes so the roster
-      // shape and every job update commit together, with no inactive-slot write.
-      if (typeof applyAgentCount === "function") {
-        await applyAgentCount(projected.agentCount, { persist: false });
-      }
-
-      await baseApply(settings, { persist: false });
-      const active = new Set(liveSides());
+      await baseApply(settings);
       for (const side of ALL_JOB_SIDES) {
-        if (!active.has(side)) continue;
-        rosterState.writeAgent(state, side, {
-          job: String(projected[`job${side}`] || "").trim().slice(0, 4000)
-        });
+        if (typeof settings?.[`job${side}`] === "string") {
+          rosterState.writeAgent(state, side, {
+            job: String(settings[`job${side}`]).trim().slice(0, 4000)
+          });
+        }
       }
-
+      if (settings && Object.prototype.hasOwnProperty.call(settings, "agentCount") && typeof applyAgentCount === "function") {
+        try {
+          await applyAgentCount(settings.agentCount, { persist: false });
+        } catch (_) {
+          // Leave the current idle roster if the stored count is invalid.
+        }
+      }
       const sides = liveSides();
-      if (sides.includes(projected.startSide)) {
-        state.startSide = projected.startSide;
-        state.mainSide = projected.startSide;
+      const start = String(settings?.startSide || "").toUpperCase();
+      if (sides.includes(start)) {
+        state.startSide = start;
+        state.mainSide = start;
       }
       if (typeof saveState === "function") await saveState();
     };
@@ -208,14 +209,8 @@
     version: 2,
     liveRosterPrompts: true,
     liveRosterMeshTargets: true,
-    meshTargetsUseLiveRuntimeKeys: true,
     derivedTurnMinimums: true,
     cloudJobsThroughE: true,
-    cloudSchemaVersion: 2,
-    cloudCanonicalRosterOnly: true,
-    cloudImportsSchemaV1: true,
-    cloudJobWritesThroughRosterAdapter: true,
-    cloudResizesRosterBeforeJobWrites: true,
-    cloudSkipsInactiveRosterSlots: true
+    cloudJobWritesThroughRosterAdapter: true
   });
 })();
