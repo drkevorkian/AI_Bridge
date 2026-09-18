@@ -1570,8 +1570,25 @@ async function loadState() {
   try { await ensureUpdateAlarm(); } catch (_) {}
 }
 
+function rosterAgentForSide(side) {
+  // background.js is imported before roster-state-adapter.js so state can be
+  // created first. During that narrow bootstrap window retain the v1.17.1
+  // legacy read path; after wrapper bootstrap all roster reads delegate through
+  // the validated adapter.
+  const roster = globalThis.__AI_BRIDGE_ROSTER_STATE_ADAPTER_V1__;
+  if (roster?.version === 1 && typeof roster.readAgent === "function") {
+    return roster.readAgent(state, side);
+  }
+  return {
+    side: String(side || "").toUpperCase(),
+    tabId: state[`tab${side}`] ?? null,
+    label: String(state[`label${side}`] || `AI ${side}`),
+    job: String(state[`job${side}`] || "")
+  };
+}
+
 function tabForSide(side) {
-  return state[`tab${side}`] ?? null;
+  return rosterAgentForSide(side).tabId;
 }
 
 function sideForTab(tabId) {
@@ -1605,11 +1622,11 @@ function requireExtensionPage(sender, action) {
 }
 
 function labelForSide(side) {
-  return state[`label${side}`] || `AI ${side}`;
+  return rosterAgentForSide(side).label;
 }
 
 function jobForSide(side) {
-  return String(state[`job${side}`] || "").trim() || "General collaborator: help solve the objective while respecting the other assigned roles.";
+  return String(rosterAgentForSide(side).job || "").trim() || "General collaborator: help solve the objective while respecting the other assigned roles.";
 }
 
 function nextSide(side) {
