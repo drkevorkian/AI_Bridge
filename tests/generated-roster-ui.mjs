@@ -36,5 +36,9 @@ assert.match(dynamic, /canonicalAgentMetadata:\s*true/);
 assert.doesNotMatch(dynamic, /function createExtendedCard\(/,
   "dynamic adapter must not maintain a second card construction path");
 assert.match(dynamic, /Generated roster identity mismatch/);
+assert.match(dynamic, /const forceFrom = byId\(`forceFrom\$\{side\}`\)/);
+assert.match(dynamic, /forceFrom\.addEventListener\("click", \(\) => \{/);
+assert.match(dynamic, /setForceSource\(side\)/,
+  "generated D/E manual-source controls must select their own source");
 
 console.log("generated-roster-ui: pre-dashboard canonical roster generation ok");
