@@ -87,6 +87,7 @@ function load(tabs, sendDelayMs = 15) {
   });
   context.globalThis = context;
   vm.runInContext(capsSrc, context, { filename: "agent-capabilities.js" });
+  vm.runInContext(executionSrc, context, { filename: "execution-key-adapter.js" });
   vm.runInContext(rosterSrc, context, { filename: "roster-state-adapter.js" });
   context.__AI_BRIDGE_DYNAMIC_AGENTS_V1__ = Object.freeze({ version: 1, liveSides: () => Object.keys(tabs) });
   vm.runInContext(runtimeSrc, context, { filename: "viewpoint-runtime.js" });
