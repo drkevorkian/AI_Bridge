@@ -6,6 +6,7 @@ import { fileURLToPath } from "node:url";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const contentPrelude = fs.readFileSync(path.join(root, "content-runtime-prelude.js"), "utf8");
+const execution = fs.readFileSync(path.join(root, "execution-key-adapter.js"), "utf8");
 const watchdog = fs.readFileSync(path.join(root, "watchdog-runtime-hardening.js"), "utf8");
 const wrapper = fs.readFileSync(path.join(root, "background-wrapper.js"), "utf8");
 
@@ -44,6 +45,19 @@ const state = {
 const pauses = [];
 const caps = {
   version: 1,
+  ordinalForAgentId(id) {
+    const match = /^agent-([1-9][0-9]*)$/.exec(String(id || ""));
+    return match ? Number(match[1]) : null;
+  },
+  ordinalForLegacySide(side) {
+    const value = String(side || "").toUpperCase();
+    return /^[A-E]$/.test(value) ? value.charCodeAt(0) - 64 : null;
+  },
+  legacySideForOrdinal(ordinal) {
+    const n = Number(ordinal);
+    return Number.isInteger(n) && n >= 1 && n <= 5 ? String.fromCharCode(64 + n) : null;
+  },
+  agentIdForOrdinal(ordinal) { return `agent-${Number(ordinal)}`; },
   conversationIdentity({ side, tabId, url }) {
     try {
       const parsed = new URL(String(url || ""));
@@ -105,6 +119,7 @@ const sandbox = {
 };
 sandbox.globalThis = sandbox;
 vm.createContext(sandbox);
+vm.runInContext(execution, sandbox, { filename: "execution-key-adapter.js" });
 vm.runInContext(watchdog, sandbox, { filename: "watchdog-runtime-hardening.js" });
 
 const result = await sandbox.runWatchdogTick(Date.now());
