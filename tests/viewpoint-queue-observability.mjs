@@ -6,6 +6,7 @@ import { fileURLToPath } from "node:url";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const capsSrc = fs.readFileSync(path.join(root, "agent-capabilities.js"), "utf8");
+const rosterSrc = fs.readFileSync(path.join(root, "roster-state-adapter.js"), "utf8");
 const runtimeSrc = fs.readFileSync(path.join(root, "viewpoint-runtime.js"), "utf8");
 const queueUiSrc = fs.readFileSync(path.join(root, "dashboard-viewpoint-queue.js"), "utf8");
 
@@ -39,11 +40,14 @@ function load(tabs, sendDelayMs = 15) {
   const order = [];
   let activeSends = 0;
   let maxConcurrent = 0;
+  const state = { transcript: [], nextSeq: 1 };
+  for (const [side, row] of Object.entries(tabs)) state[`tab${side}`] = row?.id || null;
+
   const context = vm.createContext({
     URL, console, Object, Array, Number, String, Boolean, Set, Map, Promise, Error, Date,
     setTimeout, clearTimeout,
     SIDES: Object.keys(tabs),
-    state: { transcript: [], nextSeq: 1 },
+    state,
     tabForSide(side) { return tabs[side]?.id || 0; },
     requireExtensionPage(sender) {
       if (!String(sender?.url || "").startsWith("chrome-extension://bridge/")) {
@@ -82,6 +86,7 @@ function load(tabs, sendDelayMs = 15) {
   });
   context.globalThis = context;
   vm.runInContext(capsSrc, context, { filename: "agent-capabilities.js" });
+  vm.runInContext(rosterSrc, context, { filename: "roster-state-adapter.js" });
   context.__AI_BRIDGE_DYNAMIC_AGENTS_V1__ = Object.freeze({ version: 1, liveSides: () => Object.keys(tabs) });
   vm.runInContext(runtimeSrc, context, { filename: "viewpoint-runtime.js" });
   context.__tabs = tabs;
@@ -91,7 +96,10 @@ function load(tabs, sendDelayMs = 15) {
   context.__maxConcurrent = () => maxConcurrent;
   context.__removeTab = tabId => {
     for (const [side, row] of Object.entries(tabs)) {
-      if (row?.id === tabId) delete tabs[side];
+      if (row?.id === tabId) {
+        delete tabs[side];
+        context.state[`tab${side}`] = null;
+      }
     }
     for (const listener of tabRemovedListeners) listener(tabId, { isWindowClosing: false });
   };
