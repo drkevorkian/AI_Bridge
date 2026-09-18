@@ -154,6 +154,7 @@ if (
   globalThis.__AI_BRIDGE_VIEWPOINT_RUNTIME_V1__?.queueTelemetryEphemeral !== true ||
   globalThis.__AI_BRIDGE_VIEWPOINT_RUNTIME_V1__?.queueTelemetryContainsSensitiveIdentity !== false ||
   globalThis.__AI_BRIDGE_VIEWPOINT_RUNTIME_V1__?.readsRosterThroughAdapter !== true ||
+  globalThis.__AI_BRIDGE_VIEWPOINT_RUNTIME_V1__?.canonicalExecutionMapAccess !== true ||
   globalThis.__AI_BRIDGE_VIEWPOINT_RUNTIME_V1__?.enablesDuplicateProviders !== true
 ) {
   throw new Error("AI Bridge viewpoint runtime failed to initialize.");
@@ -219,7 +220,8 @@ if (
   globalThis.__AI_BRIDGE_GENERATION_SECURITY__?.preventsSequentialReplayWindow !== true ||
   globalThis.__AI_BRIDGE_GENERATION_SECURITY__?.preventsRestartGenerationResurrection !== true ||
   globalThis.__AI_BRIDGE_GENERATION_SECURITY__?.requiresAutomaticResponsePageIdentity !== true ||
-  globalThis.__AI_BRIDGE_GENERATION_SECURITY__?.rejectsCrossThreadSpaResponseBeforeConsumption !== true
+  globalThis.__AI_BRIDGE_GENERATION_SECURITY__?.rejectsCrossThreadSpaResponseBeforeConsumption !== true ||
+  globalThis.__AI_BRIDGE_GENERATION_SECURITY__?.canonicalExecutionMapAccess !== true
 ) {
   throw new Error("AI Bridge generation hardening failed to initialize.");
 }
@@ -234,7 +236,8 @@ if (
   globalThis.__AI_BRIDGE_WATCHDOG_SECURITY__?.mutatesActiveSides !== false ||
   globalThis.__AI_BRIDGE_WATCHDOG_SECURITY__?.generationStatusCarriesPageIdentity !== true ||
   globalThis.__AI_BRIDGE_WATCHDOG_SECURITY__?.revokesMismatchedConversationBeforeTimeout !== true ||
-  globalThis.__AI_BRIDGE_WATCHDOG_SECURITY__?.neverAutoTrustsNavigatedConversation !== true
+  globalThis.__AI_BRIDGE_WATCHDOG_SECURITY__?.neverAutoTrustsNavigatedConversation !== true ||
+  globalThis.__AI_BRIDGE_WATCHDOG_SECURITY__?.canonicalExecutionMapAccess !== true
 ) {
   throw new Error("AI Bridge watchdog hardening failed to initialize.");
 }
