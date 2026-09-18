@@ -7,6 +7,7 @@ import { fileURLToPath } from "node:url";
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const healthSrc = fs.readFileSync(path.join(root, "provider-health-runtime.js"), "utf8");
 const capsSrc = fs.readFileSync(path.join(root, "agent-capabilities.js"), "utf8");
+const rosterSrc = fs.readFileSync(path.join(root, "roster-state-adapter.js"), "utf8");
 const wrapper = fs.readFileSync(path.join(root, "background-wrapper.js"), "utf8");
 
 const listeners = [];
@@ -48,6 +49,7 @@ const context = vm.createContext({
 });
 context.globalThis = context;
 vm.runInContext(capsSrc, context, { filename: "agent-capabilities.js" });
+vm.runInContext(rosterSrc, context, { filename: "roster-state-adapter.js" });
 context.__AI_BRIDGE_DYNAMIC_AGENTS_V1__ = Object.freeze({
   version: 1,
   uniqueTabBinding: true,
@@ -93,6 +95,7 @@ assert.equal(Object.prototype.hasOwnProperty.call(adaptiveReply.health.bySide.A,
 assert.equal(adaptiveReply.health.bySide.A.threadPath, "/c/secret-thread");
 
 assert.equal(context.__AI_BRIDGE_PROVIDER_HEALTH_V1__.publicHealthRedactsSensitiveIdentity, true);
+assert.equal(context.__AI_BRIDGE_PROVIDER_HEALTH_V1__.readsRosterThroughAdapter, true);
 assert.match(
   wrapper,
   /__AI_BRIDGE_PROVIDER_HEALTH_V1__\?\.publicHealthRedactsSensitiveIdentity\s*!==\s*true/,
