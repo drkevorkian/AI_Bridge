@@ -61,7 +61,19 @@ for (const bad of ["F", "AA", "", "__proto__", "constructor", 1, null]) {
   assert.equal(caps.ordinalForLegacySide(bad), null);
 }
 
-// Slice 75 must not raise runtime capacity or mutate legacy side support.
+assert.equal(caps.runtimeAgentKeyForOrdinal(1), "A");
+assert.equal(caps.runtimeAgentKeyForOrdinal(5), "E");
+assert.equal(caps.runtimeAgentKeyForOrdinal(6), "agent-6");
+assert.equal(caps.runtimeAgentKeyForOrdinal(27), "agent-27");
+assert.equal(caps.ordinalForRuntimeAgentKey("A"), 1);
+assert.equal(caps.ordinalForRuntimeAgentKey("e"), 5);
+assert.equal(caps.ordinalForRuntimeAgentKey("agent-6"), 6);
+assert.equal(caps.ordinalForRuntimeAgentKey("agent-27"), 27);
+for (const bad of ["F", "AA", "", "__proto__", "constructor", "agent-0", "agent-01"]) {
+  assert.equal(caps.ordinalForRuntimeAgentKey(bad), null);
+}
+
+// Slice 81A must not raise runtime capacity or mutate legacy side support.
 assert.equal(caps.maxLogicalAgents, 5);
 assert.deepEqual(Array.from(caps.supportedAgentSides), ["A", "B", "C", "D", "E"]);
 assert.equal(caps.parseAgentCount(6), null);
