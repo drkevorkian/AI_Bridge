@@ -33,7 +33,45 @@
 
   const SIDE_ALPHABET = Object.freeze("ABCDEFGHIJKLMNOPQRSTUVWXYZ".split(""));
   const SUPPORTED_AGENT_SIDES = Object.freeze(SIDE_ALPHABET.slice(0, MAX_LOGICAL_AGENTS));
+  const LEGACY_ALIAS_LIMIT = 5;
+  const CANONICAL_AGENT_ID_PATTERN = /^agent-([1-9][0-9]*)$/;
   const DUPLICATE_PROVIDER_AGENTS_ENABLED = true;
+
+  // Canonical logical-agent identity is intentionally independent from the
+  // current five-slot runtime ceiling. Stable IDs therefore keep working for
+  // ordinals above E even before persistence/UI support for F+ is enabled.
+  function agentIdForOrdinal(rawOrdinal) {
+    const ordinal = Number(rawOrdinal);
+    if (!Number.isSafeInteger(ordinal) || ordinal < 1) {
+      throw new RangeError("Agent ordinal must be a positive safe integer.");
+    }
+    return `agent-${ordinal}`;
+  }
+
+  function ordinalForAgentId(rawId) {
+    if (typeof rawId !== "string") return null;
+    const match = CANONICAL_AGENT_ID_PATTERN.exec(rawId);
+    if (!match) return null;
+    const ordinal = Number(match[1]);
+    return Number.isSafeInteger(ordinal) && ordinal >= 1 ? ordinal : null;
+  }
+
+  function isCanonicalAgentId(rawId) {
+    return ordinalForAgentId(rawId) !== null;
+  }
+
+  function legacySideForOrdinal(rawOrdinal) {
+    const ordinal = Number(rawOrdinal);
+    if (!Number.isSafeInteger(ordinal) || ordinal < 1 || ordinal > LEGACY_ALIAS_LIMIT) return null;
+    return SIDE_ALPHABET[ordinal - 1] || null;
+  }
+
+  function ordinalForLegacySide(rawSide) {
+    if (typeof rawSide !== "string") return null;
+    const side = rawSide.toUpperCase();
+    if (!/^[A-E]$/.test(side)) return null;
+    return SIDE_ALPHABET.indexOf(side) + 1;
+  }
 
   function parseAgentCount(raw) {
     if (raw === null || raw === undefined || raw === "") return null;
@@ -217,10 +255,17 @@
     maxLogicalAgents: MAX_LOGICAL_AGENTS,
     maxUniqueProviderAgents: MAX_UNIQUE_PROVIDER_AGENTS,
     supportedAgentSides: SUPPORTED_AGENT_SIDES,
+    legacyAliasLimit: LEGACY_ALIAS_LIMIT,
+    canonicalAgentIdPattern: CANONICAL_AGENT_ID_PATTERN,
     providerFamilies: PROVIDER_FAMILIES,
     parseAgentCount,
     normalizeAgentCount,
     sideIdsForCount,
+    agentIdForOrdinal,
+    ordinalForAgentId,
+    isCanonicalAgentId,
+    legacySideForOrdinal,
+    ordinalForLegacySide,
     providerFamilyForUrl,
     isSupportedProviderUrl,
     conversationIdentity,
@@ -230,6 +275,8 @@
     uniqueTabBindingNeverRelaxed: true,
     distinctThreadRequiredWhenSameFamily: true,
     serializeSameFamilySends: true,
+    stableMachineAgentIds: true,
+    canonicalAgentIdVersion: 1,
     duplicateProviderAgentsEnabled: DUPLICATE_PROVIDER_AGENTS_ENABLED
   });
 })();
