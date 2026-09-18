@@ -7,6 +7,7 @@ import { fileURLToPath } from "node:url";
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const wrapper = fs.readFileSync(path.join(root, "background-wrapper.js"), "utf8");
 const capsSrc = fs.readFileSync(path.join(root, "agent-capabilities.js"), "utf8");
+const rosterSrc = fs.readFileSync(path.join(root, "roster-state-adapter.js"), "utf8");
 const overlaySrc = fs.readFileSync(path.join(root, "coordinator-dynamic-semantics.js"), "utf8");
 const adapter = fs.readFileSync(path.join(root, "dashboard-dynamic-agents.js"), "utf8");
 const background = fs.readFileSync(path.join(root, "background.js"), "utf8");
@@ -127,6 +128,7 @@ function load(agentCount) {
   });
   context.globalThis = context;
   context.__AI_BRIDGE_AGENT_CAPABILITIES__ = caps;
+  vm.runInContext(rosterSrc, context, { filename: "roster-state-adapter.js" });
   context.__AI_BRIDGE_DYNAMIC_AGENTS_V1__ = Object.freeze({
     version: 1,
     liveSides: () => [...context.SIDES],
@@ -204,4 +206,5 @@ assert.throws(
 );
 
 assert.equal(cloud.__AI_BRIDGE_DYNAMIC_SEMANTICS_V1__.derivedTurnMinimums, true);
+assert.equal(cloud.__AI_BRIDGE_DYNAMIC_SEMANTICS_V1__.cloudJobWritesThroughRosterAdapter, true);
 console.log("dynamic-agent-semantics: ok");
