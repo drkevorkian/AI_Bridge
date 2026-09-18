@@ -104,6 +104,19 @@ let state = { ...DEFAULT_STATE };
 let history = { ...DEFAULT_HISTORY, jobs: [], commands: [], rules: [] };
 let artifactStore = {};
 let responseCommitQueue = Promise.resolve();
+
+const EARLY_STARTUP_TIMEOUT_MS = 5000;
+
+function earlyStartupTimeout(promise, label, timeoutMs = EARLY_STARTUP_TIMEOUT_MS) {
+  let timer = null;
+  const timeout = new Promise((_, reject) => {
+    timer = setTimeout(() => reject(new Error(`${label} timed out during service-worker startup.`)), timeoutMs);
+  });
+  return Promise.race([Promise.resolve(promise), timeout]).finally(() => {
+    if (timer !== null) clearTimeout(timer);
+  });
+}
+
 let stateReady = loadState();
 
 async function lockStorageToExtensionPages() {
@@ -113,14 +126,20 @@ async function lockStorageToExtensionPages() {
   const trusted = { accessLevel: "TRUSTED_CONTEXTS" };
   try {
     if (chrome.storage?.local?.setAccessLevel) {
-      await chrome.storage.local.setAccessLevel(trusted);
+      await earlyStartupTimeout(
+        chrome.storage.local.setAccessLevel(trusted),
+        "Lock chrome.storage.local access"
+      );
     }
   } catch (err) {
     console.warn("AI Bridge could not lock chrome.storage.local", err);
   }
   try {
     if (chrome.storage?.sync?.setAccessLevel) {
-      await chrome.storage.sync.setAccessLevel(trusted);
+      await earlyStartupTimeout(
+        chrome.storage.sync.setAccessLevel(trusted),
+        "Lock chrome.storage.sync access"
+      );
     }
   } catch (err) {
     console.warn("AI Bridge could not lock chrome.storage.sync", err);
@@ -1540,15 +1559,32 @@ async function loadState() {
   // Lock storage before the first read so a compromised provider page cannot
   // enumerate transcripts, Vault bytes, or synced settings via chrome.storage.
   await lockStorageToExtensionPages();
-  const { bridgeState, bridgeHistory, bridgeArtifacts } = await chrome.storage.local.get(["bridgeState", "bridgeHistory", "bridgeArtifacts"]);
+
+  let bridgeState;
+  let bridgeHistory;
+  let bridgeArtifacts;
+  let initialStorageFailure = null;
+  try {
+    ({ bridgeState, bridgeHistory, bridgeArtifacts } = await earlyStartupTimeout(
+      chrome.storage.local.get(["bridgeState", "bridgeHistory", "bridgeArtifacts"]),
+      "Read AI Bridge local storage"
+    ));
+  } catch (error) {
+    initialStorageFailure = error;
+    bridgeState = undefined;
+    bridgeHistory = undefined;
+    bridgeArtifacts = undefined;
+  }
+
   history = normalizeHistory(bridgeHistory);
   artifactStore = bridgeArtifacts && typeof bridgeArtifacts === "object" ? bridgeArtifacts : {};
 
   const persistence = stateV4Persistence();
   let hydrated = null;
-  let loadFailure = null;
+  let loadFailure = initialStorageFailure;
 
   try {
+    if (initialStorageFailure) throw initialStorageFailure;
     if (Number(bridgeState?.stateVersion) === STATE_VERSION) {
       hydrated = persistence.hydratePersistedState(bridgeState);
     } else if (Number(bridgeState?.stateVersion) === persistence.sourceStateVersion) {
@@ -4075,7 +4111,7 @@ async function setAutoCheckUpdates(enabled) {
 
 chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   (async () => {
-    await stateReady;
+    await earlyStartupTimeout(stateReady, "AI Bridge state readiness", 6000);
 
     if (!msg || typeof msg.type !== "string") throw new Error("Malformed AI Bridge message.");
     if (!isExtensionPageSender(sender) && !CONTENT_SCRIPT_MESSAGE_TYPES.has(msg.type)) {
