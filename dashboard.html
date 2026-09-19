@@ -68,7 +68,7 @@
 
         <article id="agentCardA" class="agent-card agent-a">
           <div class="agent-topline">
-            <div class="agent-identity"><strong>AI A</strong><span id="timerA" class="round-timer idle" title="Extension-measured prompt-to-response time">No round yet</span></div>
+            <div class="agent-identity"><strong>AI A</strong><div class="agent-timers"><span id="timerTotalA" class="round-timer idle" title="Total working time for this AI in the current session">Total 0s</span><span id="timerCurrentA" class="round-timer idle" title="Current AI turn timer">Current —</span></div></div>
             <div class="agent-actions">
               <button id="newChatA" class="tiny ghost" type="button">New chat</button>
               <button id="resendA" class="tiny ghost" disabled>Resend</button>
@@ -80,7 +80,7 @@
 
         <article id="agentCardB" class="agent-card agent-b">
           <div class="agent-topline">
-            <div class="agent-identity"><strong>AI B</strong><span id="timerB" class="round-timer idle" title="Extension-measured prompt-to-response time">No round yet</span></div>
+            <div class="agent-identity"><strong>AI B</strong><div class="agent-timers"><span id="timerTotalB" class="round-timer idle" title="Total working time for this AI in the current session">Total 0s</span><span id="timerCurrentB" class="round-timer idle" title="Current AI turn timer">Current —</span></div></div>
             <div class="agent-actions">
               <button id="newChatB" class="tiny ghost" type="button">New chat</button>
               <button id="resendB" class="tiny ghost" disabled>Resend</button>
@@ -92,7 +92,7 @@
 
         <article id="agentCardC" class="agent-card agent-c">
           <div class="agent-topline">
-            <div class="agent-identity"><strong>AI C</strong><span id="timerC" class="round-timer idle" title="Extension-measured prompt-to-response time">No round yet</span></div>
+            <div class="agent-identity"><strong>AI C</strong><div class="agent-timers"><span id="timerTotalC" class="round-timer idle" title="Total working time for this AI in the current session">Total 0s</span><span id="timerCurrentC" class="round-timer idle" title="Current AI turn timer">Current —</span></div></div>
             <div class="agent-actions">
               <button id="newChatC" class="tiny ghost" type="button">New chat</button>
               <button id="resendC" class="tiny ghost" disabled>Resend</button>
@@ -104,7 +104,7 @@
 
         <article id="agentCardD" class="agent-card agent-d" hidden>
           <div class="agent-topline">
-            <div class="agent-identity"><strong>AI D</strong><span id="timerD" class="round-timer idle" title="Extension-measured prompt-to-response time">No round yet</span></div>
+            <div class="agent-identity"><strong>AI D</strong><div class="agent-timers"><span id="timerTotalD" class="round-timer idle" title="Total working time for this AI in the current session">Total 0s</span><span id="timerCurrentD" class="round-timer idle" title="Current AI turn timer">Current —</span></div></div>
             <div class="agent-actions">
               <button id="newChatD" class="tiny ghost" type="button">New chat</button>
               <button id="resendD" class="tiny ghost" disabled>Resend</button>
@@ -116,7 +116,7 @@
 
         <article id="agentCardE" class="agent-card agent-e" hidden>
           <div class="agent-topline">
-            <div class="agent-identity"><strong>AI E</strong><span id="timerE" class="round-timer idle" title="Extension-measured prompt-to-response time">No round yet</span></div>
+            <div class="agent-identity"><strong>AI E</strong><div class="agent-timers"><span id="timerTotalE" class="round-timer idle" title="Total working time for this AI in the current session">Total 0s</span><span id="timerCurrentE" class="round-timer idle" title="Current AI turn timer">Current —</span></div></div>
             <div class="agent-actions">
               <button id="newChatE" class="tiny ghost" type="button">New chat</button>
               <button id="resendE" class="tiny ghost" disabled>Resend</button>
@@ -125,6 +125,34 @@
           <select id="tabE" aria-label="AI E tab"></select>
           <textarea id="jobE" rows="3" placeholder="AI E job / responsibility"></textarea>
         </article>
+
+        <div class="manual-relay-panel">
+          <div class="section-heading">
+            <span>Manual relay</span>
+            <span class="muted">recover a missed response</span>
+          </div>
+          <p class="field-help">Pause the bridge, choose the AI whose visible reply was missed, then send that recovered reply to one or more active teammates.</p>
+          <div class="manual-relay-row">
+            <span class="manual-relay-label">From</span>
+            <div class="manual-relay-from" role="group" aria-label="Source AI">
+              <button id="forceFromA" class="layout-chip active" type="button" aria-pressed="true">A</button>
+              <button id="forceFromB" class="layout-chip" type="button" aria-pressed="false">B</button>
+              <button id="forceFromC" class="layout-chip" type="button" aria-pressed="false">C</button>
+              <button id="forceFromD" class="layout-chip" type="button" aria-pressed="false">D</button>
+              <button id="forceFromE" class="layout-chip" type="button" aria-pressed="false">E</button>
+            </div>
+            <span class="manual-relay-label">To</span>
+            <div class="manual-relay-to" role="group" aria-label="Destination AIs">
+              <label class="check-line"><input id="forceToA" type="checkbox"> A</label>
+              <label class="check-line"><input id="forceToB" type="checkbox" checked> B</label>
+              <label class="check-line"><input id="forceToC" type="checkbox" checked> C</label>
+              <label class="check-line"><input id="forceToD" type="checkbox"> D</label>
+              <label class="check-line"><input id="forceToE" type="checkbox"> E</label>
+            </div>
+            <button id="forceRelayBtn" class="tiny" type="button" disabled>Re-read and send</button>
+          </div>
+          <div id="manualRelayStatus" class="field-help"></div>
+        </div>
 
         <div class="history-block">
           <div class="history-heading">
@@ -180,6 +208,13 @@
           </select>
           <div class="field-help">This is the Main AI for the run. Human interjections wait for this model and are delivered with its next group turn.</div>
         </div>
+
+        <div class="history-heading">
+          <label for="teamRules">Team rules</label>
+          <button id="applyTeamRules" class="tiny ghost" type="button">Apply to all members</button>
+        </div>
+        <textarea id="teamRules" rows="5" maxlength="12000" placeholder="Standing rules every active teammate must follow..."></textarea>
+        <div class="field-help">These rules are included on later AI turns. They can be updated during a saved or running session without changing the roster.</div>
 
         <label for="prompt">Primary objective</label>
         <textarea id="prompt" rows="7" placeholder="Define the objective shared by all active agents..."></textarea>
@@ -248,6 +283,8 @@
         <div class="field-help">Safe delivery: your note is queued now, but it is not injected into the currently queued model. It is sent with the Main AI's next group turn, then becomes shared context for later teammates.</div>
       </section>
     </aside>
+
+    <div id="paneSplitter" class="pane-splitter" role="separator" aria-orientation="vertical" aria-valuemin="24" aria-valuemax="70" aria-valuenow="36" tabindex="0" title="Drag to resize the control pane"></div>
 
     <main class="workspace">
       <header class="workspace-header">
