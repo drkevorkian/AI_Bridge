@@ -37,6 +37,8 @@ jobs:
           node --check background.js
           node --check content.js
           node --check dashboard.js
+          node --check dashboard-layouts.js
+          node --check settings.js
           node --check popup.js
           node --check tests/repository-integrity.mjs
       - name: Repository integrity

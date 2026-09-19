@@ -71,6 +71,7 @@ function setAgentCountUI(raw, { persist = false } = {}) {
   updateWorkModeUI();
   refreshStartLabels();
   if (latestState) renderHistory(latestState.history);
+  updateManualRelayUI();
   if (persist) chrome.storage.local.set({ [AGENT_COUNT_KEY]: count }).catch(() => {});
   return count;
 }
@@ -290,6 +291,7 @@ function hydrateFromState(s) {
     if (s[`job${side}`]) $(`job${side}`).value = s[`job${side}`];
   }
   if (s.initialPrompt) $("prompt").value = s.initialPrompt;
+  if (typeof s.teamRules === "string") $("teamRules").value = s.teamRules;
   if (s.startSide && SIDES.includes(s.startSide)) $("startSide").value = s.startSide;
   if (s.workMode && WORK_MODE_INFO[s.workMode]) $("workMode").value = s.workMode;
   updateWorkModeUI();
@@ -415,23 +417,31 @@ function formatRoundDuration(ms, live = false) {
 function updateRoundTimers(s = latestState) {
   const now = Date.now();
   for (const side of SIDES) {
-    const node = $(`timer${side}`);
-    if (!node) continue;
+    const totalNode = $(`timerTotal${side}`);
+    const currentNode = $(`timerCurrent${side}`);
+    if (!totalNode || !currentNode) continue;
     const startedAt = Number(s?.roundStartedAtBySide?.[side]);
     const roundNumber = Math.max(0, Number(s?.roundNumberBySide?.[side]) || 0);
     const lastDuration = Number(s?.lastRoundDurationMsBySide?.[side]);
+    const storedTotal = Math.max(0, Number(s?.totalWorkMsBySide?.[side]) || 0);
     const active = Boolean(s?.sessionActive && Number.isFinite(startedAt) && startedAt > 0);
-    node.classList.toggle("active", active);
-    node.classList.toggle("idle", !active);
+    const liveMs = active ? Math.max(0, now - startedAt) : 0;
+
+    totalNode.textContent = `Total ${formatRoundDuration(storedTotal + liveMs, active)}`;
+    totalNode.classList.toggle("active", active);
+    totalNode.classList.toggle("idle", !active);
+
+    currentNode.classList.toggle("active", active);
+    currentNode.classList.toggle("idle", !active);
     if (active) {
-      node.textContent = `R${roundNumber} · ${formatRoundDuration(now - startedAt, true)}`;
-      node.title = `Round ${roundNumber} active · extension timer started when the prompt was submitted`;
+      currentNode.textContent = `Current R${roundNumber} · ${formatRoundDuration(liveMs, true)}`;
+      currentNode.title = `Round ${roundNumber} active · extension timer started when the prompt was submitted`;
     } else if (roundNumber > 0 && Number.isFinite(lastDuration) && lastDuration >= 0) {
-      node.textContent = `R${roundNumber} · ${formatRoundDuration(lastDuration)}`;
-      node.title = `Last completed round ${roundNumber} · extension-measured prompt-to-final-response time`;
+      currentNode.textContent = `Last R${roundNumber} · ${formatRoundDuration(lastDuration)}`;
+      currentNode.title = `Last completed round ${roundNumber} · extension-measured prompt-to-final-response time`;
     } else {
-      node.textContent = "No round yet";
-      node.title = "No extension-measured round has completed yet";
+      currentNode.textContent = "Current —";
+      currentNode.title = "No extension-measured round has completed yet";
     }
   }
 }
@@ -747,6 +757,9 @@ function updateControls(s) {
   $("freshOnStart").disabled = Boolean(s.sessionActive);
   $("agentCount").disabled = Boolean(s.sessionActive);
   $("workMode").disabled = Boolean(s.sessionActive);
+  $("teamRules").disabled = false;
+  $("applyTeamRules").disabled = false;
+  $("forceRelayBtn").disabled = !s.sessionActive || s.running || s.awaitingHuman || selectedManualRelayTargets().length === 0;
   $("sendInterject").disabled = !s.sessionActive || s.awaitingHuman;
   $("interjectText").disabled = !s.sessionActive || s.awaitingHuman;
   $("interjectNow").disabled = !s.sessionActive || s.awaitingHuman;
@@ -827,6 +840,32 @@ function validateActiveTabs() {
   if (ids.some(id => !id)) return `Choose ${SIDES.length} supported AI tab${SIDES.length === 1 ? "" : "s"}.`;
   if (new Set(ids).size !== ids.length) return "Each logical AI must use a different browser tab. Multiple tabs from the same LLM are allowed.";
   return null;
+}
+
+let manualRelaySource = "A";
+
+function updateManualRelayUI() {
+  if (!SIDES.includes(manualRelaySource)) manualRelaySource = SIDES[0];
+  for (const side of ALL_SIDES) {
+    const active = SIDES.includes(side);
+    const from = $(`forceFrom${side}`);
+    const to = $(`forceTo${side}`);
+    if (from) {
+      from.hidden = !active;
+      from.disabled = !active;
+      from.classList.toggle("active", active && side === manualRelaySource);
+      from.setAttribute("aria-pressed", String(active && side === manualRelaySource));
+    }
+    if (to) {
+      to.closest("label").hidden = !active;
+      to.disabled = !active || side === manualRelaySource;
+      if (!active || side === manualRelaySource) to.checked = false;
+    }
+  }
+}
+
+function selectedManualRelayTargets() {
+  return SIDES.filter(side => side !== manualRelaySource && $(`forceTo${side}`)?.checked);
 }
 
 function validateMaxTurns() {
@@ -946,6 +985,7 @@ $("start").addEventListener("click", async () => {
       agentCount: SIDES.length,
       startSide: $("startSide").value,
       workMode: selectedWorkMode(),
+      teamRules: $("teamRules").value.trim(),
       initialPrompt,
       sourceFiles: selectedSourceFiles.map(file => ({ path: file.path, size: file.size, content: file.content })),
       freshChats: $("freshOnStart").checked,
@@ -957,6 +997,52 @@ $("start").addEventListener("click", async () => {
     await refreshState();
   } catch (err) {
     $("status").textContent = `Start failed: ${err.message}`;
+  }
+});
+
+$("applyTeamRules").addEventListener("click", async () => {
+  const rules = $("teamRules").value.trim();
+  if (rules.length > 12000) {
+    $("status").textContent = "Team rules are limited to 12,000 characters.";
+    return;
+  }
+  try {
+    const res = await chrome.runtime.sendMessage({ type: "AI_BRIDGE_UPDATE_RULES", rules });
+    if (!res?.ok) throw new Error(res?.error || "Could not update team rules");
+    $("status").textContent = rules ? "Team rules applied to all active AI roles." : "Team rules cleared.";
+    await refreshState();
+  } catch (err) {
+    $("status").textContent = `Team rules update failed: ${err.message}`;
+  }
+});
+
+for (const side of ALL_SIDES) {
+  $(`forceFrom${side}`).addEventListener("click", () => {
+    if (!SIDES.includes(side)) return;
+    manualRelaySource = side;
+    updateManualRelayUI();
+    if (latestState) updateControls(latestState);
+  });
+  $(`forceTo${side}`).addEventListener("change", () => {
+    if (latestState) updateControls(latestState);
+  });
+}
+
+$("forceRelayBtn").addEventListener("click", async () => {
+  const targetSides = selectedManualRelayTargets();
+  if (!targetSides.length) return;
+  $("manualRelayStatus").textContent = `Reading AI ${manualRelaySource}'s last visible reply…`;
+  try {
+    const res = await chrome.runtime.sendMessage({
+      type: "AI_BRIDGE_MANUAL_RELAY",
+      sourceSide: manualRelaySource,
+      targetSides
+    });
+    if (!res?.ok) throw new Error(res?.error || "Manual relay failed");
+    $("manualRelayStatus").textContent = `Recovered AI ${manualRelaySource} and sent it to ${res.targetSides.map(side => "AI " + side).join(", ")}.`;
+    await refreshState();
+  } catch (err) {
+    $("manualRelayStatus").textContent = `Manual relay failed: ${err.message}`;
   }
 });
 

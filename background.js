@@ -4,7 +4,7 @@ const MIN_AGENT_COUNT = 1;
 const MAX_AGENT_COUNT = ALL_SIDES.length;
 const SIDES = ALL_SIDES.slice(0, DEFAULT_AGENT_COUNT);
 const STATE_VERSION = 3;
-const CONTENT_VERSION = "1.16";
+const CONTENT_VERSION = "1.18.0";
 const WORK_MODES = new Set(["relay", "collaborate", "compete", "parallel", "review", "mesh"]);
 const INFINITE_TURNS = -1;
 const MIN_FINITE_TURNS = 1;
@@ -54,6 +54,7 @@ const DEFAULT_STATE = {
   jobC: "",
   jobD: "",
   jobE: "",
+  teamRules: "",
 
   currentSide: null,
   startSide: "A",
@@ -85,6 +86,7 @@ const DEFAULT_STATE = {
   roundNumberBySide: { A: 0, B: 0, C: 0, D: 0, E: 0 },
   lastRoundDurationMsBySide: { A: null, B: null, C: null, D: null, E: null },
   lastRoundCompletedAtBySide: { A: null, B: null, C: null, D: null, E: null },
+  totalWorkMsBySide: { A: 0, B: 0, C: 0, D: 0, E: 0 },
 
   awaitingHuman: false,
   pendingHuman: null,
@@ -115,6 +117,7 @@ function cloneDefaultState() {
     roundNumberBySide: { A: 0, B: 0, C: 0, D: 0, E: 0 },
     lastRoundDurationMsBySide: { A: null, B: null, C: null, D: null, E: null },
     lastRoundCompletedAtBySide: { A: null, B: null, C: null, D: null, E: null },
+    totalWorkMsBySide: { A: 0, B: 0, C: 0, D: 0, E: 0 },
     phasePendingSides: [],
     phaseSentSides: [],
     phaseCompletedSides: [],
@@ -876,6 +879,7 @@ async function loadState() {
       roundNumberBySide: { A: 0, B: 0, C: 0, D: 0, E: 0, ...(bridgeState.roundNumberBySide || {}) },
       lastRoundDurationMsBySide: { A: null, B: null, C: null, D: null, E: null, ...(bridgeState.lastRoundDurationMsBySide || {}) },
       lastRoundCompletedAtBySide: { A: null, B: null, C: null, D: null, E: null, ...(bridgeState.lastRoundCompletedAtBySide || {}) },
+      totalWorkMsBySide: { A: 0, B: 0, C: 0, D: 0, E: 0, ...(bridgeState.totalWorkMsBySide || {}) },
       phasePendingSides: Array.isArray(bridgeState.phasePendingSides) ? bridgeState.phasePendingSides.filter(side => SIDES.includes(side)) : [],
       phaseSentSides: Array.isArray(bridgeState.phaseSentSides) ? bridgeState.phaseSentSides.filter(side => SIDES.includes(side)) : [],
       phaseCompletedSides: Array.isArray(bridgeState.phaseCompletedSides) ? bridgeState.phaseCompletedSides.filter(side => SIDES.includes(side)) : [],
@@ -1085,6 +1089,12 @@ function teamContext(side) {
     "",
     "TEAM ROSTER:",
     roster,
+    ...(String(state.teamRules || "").trim() ? [
+      "",
+      "TEAM RULES (ALL MEMBERS):",
+      "These standing rules bind every teammate regardless of assigned job or role.",
+      String(state.teamRules || "").trim()
+    ] : []),
     "",
     "WORKING RULES:",
     "- Do your assigned job first. Do not silently take over another agent's job unless it is necessary to unblock the team.",
@@ -1229,6 +1239,8 @@ function completeRoundTimer(side, completedAt = Date.now()) {
   state.roundStartedAtBySide[side] = null;
   state.lastRoundDurationMsBySide[side] = durationMs;
   state.lastRoundCompletedAtBySide[side] = safeEnd;
+  state.totalWorkMsBySide = { A: 0, B: 0, C: 0, D: 0, E: 0, ...(state.totalWorkMsBySide || {}) };
+  state.totalWorkMsBySide[side] = Math.max(0, Number(state.totalWorkMsBySide[side]) || 0) + durationMs;
   return { roundNumber, durationMs, completedAt: safeEnd };
 }
 
@@ -2083,6 +2095,24 @@ async function handleCompletedResponse(side, text, { relay = true, artifacts = [
 
 chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   (async () => {
+    if (msg.type === "AI_BRIDGE_POWER_SET") {
+      await aiBridgeApplyKeepAwake(Boolean(msg.enabled));
+      sendResponse({ ok: true, enabled: Boolean(msg.enabled) });
+      return;
+    }
+
+    if (msg.type === "AI_BRIDGE_AUTO_UPDATE_SET") {
+      await aiBridgeConfigureUpdateAlarm(Boolean(msg.enabled));
+      sendResponse({ ok: true, enabled: Boolean(msg.enabled) });
+      return;
+    }
+
+    if (msg.type === "AI_BRIDGE_SETTINGS_OPEN") {
+      const tab = await chrome.tabs.create({ url: chrome.runtime.getURL("settings.html") });
+      sendResponse({ ok: true, tabId: tab.id });
+      return;
+    }
+
     await stateReady;
 
     if (msg.type === "AI_BRIDGE_GET_STATE") {
@@ -2177,6 +2207,8 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
       fresh.delayMs = Math.max(0, Math.min(30000, Number.isFinite(requestedDelay) ? requestedDelay : 1500));
       fresh.initialPrompt = String(msg.initialPrompt || "").trim();
       if (!fresh.initialPrompt) throw new Error("Enter an initial objective or prompt.");
+      fresh.teamRules = String(msg.teamRules || "").trim();
+      if (fresh.teamRules.length > 12000) throw new Error("Team rules are limited to 12,000 characters.");
       fresh.sourceFiles = normalizeSourceFiles(msg.sourceFiles);
       fresh.sourceDeliveredBySide = { A: false, B: false, C: false, D: false, E: false };
 
@@ -2224,6 +2256,60 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
       recordSessionHistory(state);
       await saveHistory();
       sendResponse({ ok: true });
+      return;
+    }
+
+    if (msg.type === "AI_BRIDGE_UPDATE_RULES") {
+      const rules = String(msg.rules || "").trim();
+      if (rules.length > 12000) throw new Error("Team rules are limited to 12,000 characters.");
+      const changed = rules !== String(state.teamRules || "").trim();
+      state.teamRules = rules;
+      if (changed && state.sessionActive) {
+        recordTranscript("human", { text: rules || "(Team rules cleared)", teamRulesUpdate: true });
+      }
+      await saveState();
+      sendResponse({ ok: true, rules: state.teamRules });
+      return;
+    }
+
+    if (msg.type === "AI_BRIDGE_MANUAL_RELAY") {
+      if (!state.sessionActive) throw new Error("Start a session first.");
+      if (state.running) throw new Error("Pause the session before using Manual Relay.");
+      if (state.awaitingHuman) throw new Error("Resolve the pending human-input request before Manual Relay.");
+      const sourceSide = String(msg.sourceSide || "").toUpperCase();
+      const targetSides = [...new Set((Array.isArray(msg.targetSides) ? msg.targetSides : [])
+        .map(side => String(side || "").toUpperCase()))]
+        .filter(side => SIDES.includes(side) && side !== sourceSide);
+      if (!SIDES.includes(sourceSide)) throw new Error("Choose an active source AI.");
+      if (!targetSides.length) throw new Error("Choose at least one active destination AI.");
+      const sourceTab = tabForSide(sourceSide);
+      if (!sourceTab) throw new Error(`AI ${sourceSide} has no bound tab.`);
+      const recovered = await chrome.tabs.sendMessage(sourceTab, { type: "AI_BRIDGE_READ_LAST_RESPONSE" });
+      const recoveredText = String(recovered?.text || "").trim();
+      if (!recovered?.ok || !recoveredText) throw new Error(recovered?.error || `Could not read AI ${sourceSide}'s last visible response.`);
+      if (recovered.active) throw new Error(`AI ${sourceSide} still appears to be generating.`);
+
+      recordTranscript("response", { side: sourceSide, text: recoveredText, manualRelay: true });
+      const deliveredSeq = latestSeq();
+      for (const targetSide of targetSides) {
+        const manualMessage = [
+          teamContext(targetSide),
+          "",
+          "MANUAL RELAY RECOVERY:",
+          `The human controller recovered the following completed response from AI ${sourceSide} (${labelForSide(sourceSide)}).`,
+          "Treat it as shared teammate context and continue from your assigned job.",
+          "",
+          `--- AI ${sourceSide} RECOVERED RESPONSE ---`,
+          recoveredText,
+          `--- END AI ${sourceSide} RESPONSE ---`
+        ].join("\n");
+        await sendToSide(targetSide, manualMessage, { deliveredSeq });
+      }
+      state.running = false;
+      state.paused = true;
+      state.pauseReason = `Manual relay sent AI ${sourceSide}'s recovered response to ${targetSides.map(side => "AI " + side).join(", ")}. Resume when ready.`;
+      await saveState();
+      sendResponse({ ok: true, sourceSide, targetSides });
       return;
     }
 
@@ -2476,3 +2562,69 @@ chrome.tabs.onRemoved.addListener(async tabId => {
   appendLog({ time: Date.now(), type: "system", text: state.pauseReason });
   await saveState();
 });
+
+/* v1.18 Settings services -------------------------------------------------
+ * Intentionally isolated from bridge routing/state. No timers or loops here.
+ */
+const AI_BRIDGE_KEEP_AWAKE_KEY = "aiBridgeKeepAwake";
+const AI_BRIDGE_AUTO_UPDATE_KEY = "aiBridgeAutoCheckUpdates";
+const AI_BRIDGE_UPDATE_ALARM = "ai-bridge-daily-update";
+const AI_BRIDGE_UPDATE_MANIFEST = "https://raw.githubusercontent.com/drkevorkian/AI_Bridge/main/manifest.json";
+
+function aiBridgeVersionParts(value) {
+  return String(value || "0").split(".").map(part => Number(part) || 0);
+}
+
+function aiBridgeIsNewerVersion(candidate, installed) {
+  const a = aiBridgeVersionParts(candidate);
+  const b = aiBridgeVersionParts(installed);
+  for (let i = 0; i < Math.max(a.length, b.length); i++) {
+    const av = a[i] || 0;
+    const bv = b[i] || 0;
+    if (av !== bv) return av > bv;
+  }
+  return false;
+}
+
+async function aiBridgeApplyKeepAwake(enabled) {
+  if (enabled) chrome.power.requestKeepAwake("system");
+  else chrome.power.releaseKeepAwake();
+  await chrome.storage.local.set({ [AI_BRIDGE_KEEP_AWAKE_KEY]: Boolean(enabled) });
+}
+
+async function aiBridgeConfigureUpdateAlarm(enabled) {
+  await chrome.alarms.clear(AI_BRIDGE_UPDATE_ALARM);
+  if (enabled) {
+    chrome.alarms.create(AI_BRIDGE_UPDATE_ALARM, { delayInMinutes: 1, periodInMinutes: 1440 });
+  }
+  await chrome.storage.local.set({ [AI_BRIDGE_AUTO_UPDATE_KEY]: Boolean(enabled) });
+}
+
+async function aiBridgeCheckForUpdateNotification() {
+  const response = await fetch(AI_BRIDGE_UPDATE_MANIFEST, { cache: "no-store" });
+  if (!response.ok) throw new Error("Update manifest request failed.");
+  const remote = await response.json();
+  const installed = chrome.runtime.getManifest().version;
+  if (aiBridgeIsNewerVersion(remote.version, installed)) {
+    await chrome.notifications.create("ai-bridge-update", {
+      type: "basic",
+      iconUrl: "icon128.png",
+      title: "AI Bridge update available",
+      message: `Version ${remote.version} is available. Open Settings to download it.`
+    });
+  }
+}
+
+chrome.alarms.onAlarm.addListener(alarm => {
+  if (alarm.name !== AI_BRIDGE_UPDATE_ALARM) return;
+  aiBridgeCheckForUpdateNotification().catch(error => console.warn("AI Bridge update check failed", error));
+});
+
+chrome.storage.local.get([AI_BRIDGE_KEEP_AWAKE_KEY, AI_BRIDGE_AUTO_UPDATE_KEY]).then(values => {
+  if (values[AI_BRIDGE_KEEP_AWAKE_KEY] === true) chrome.power.requestKeepAwake("system");
+  if (values[AI_BRIDGE_AUTO_UPDATE_KEY] === true) {
+    chrome.alarms.get(AI_BRIDGE_UPDATE_ALARM).then(existing => {
+      if (!existing) chrome.alarms.create(AI_BRIDGE_UPDATE_ALARM, { delayInMinutes: 1, periodInMinutes: 1440 });
+    });
+  }
+}).catch(error => console.warn("AI Bridge settings bootstrap failed", error));
