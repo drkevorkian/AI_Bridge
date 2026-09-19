@@ -4086,12 +4086,12 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
       const previousAgentCount = normalizeAgentCount(previousState?.agentCount, DEFAULT_AGENT_COUNT);
       const fresh = cloneDefaultState();
       fresh.agentCount = normalizeAgentCount(msg.agentCount, DEFAULT_AGENT_COUNT);
-      setActiveAgentCount(fresh.agentCount);
-      fresh.activeSides = [...SIDES];
+      const requestedSides = ALL_SIDES.slice(0, fresh.agentCount);
+      fresh.activeSides = [...requestedSides];
       fresh.sessionActive = true;
       fresh.running = false;
       fresh.paused = false;
-      fresh.startSide = SIDES.includes(msg.startSide) ? msg.startSide : SIDES[0];
+      fresh.startSide = requestedSides.includes(msg.startSide) ? msg.startSide : requestedSides[0];
       fresh.mainSide = fresh.startSide;
       fresh.pendingMainInterjections = [];
       fresh.workMode = normalizeWorkMode(msg.workMode);
@@ -4100,7 +4100,7 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
       fresh.maxTurns = normalizeMaxTurns(msg.maxCycles ?? msg.maxTurns);
       fresh.maxCycles = fresh.maxTurns;
       fresh.cycleCount = 0;
-      fresh.activeSides = normalizeActiveSides(msg.activeSides || SIDES);
+      fresh.activeSides = [...requestedSides];
       fresh.cycleParticipants = [];
       fresh.checkpointEveryNCycles = clampCheckpointEvery(msg.checkpointEveryNCycles);
       fresh.stuckTimeoutMinutes = clampStuckTimeoutMinutes(msg.stuckTimeoutMinutes);
@@ -4116,7 +4116,7 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
       fresh.sourceFiles = normalizeSourceFiles(msg.sourceFiles);
       fresh.sourceDeliveredBySide = { A: false, B: false, C: false, D: false, E: false };
 
-      for (const side of SIDES) {
+      for (const side of requestedSides) {
         fresh[`tab${side}`] = Number(msg[`tab${side}`]);
         fresh[`label${side}`] = String(msg[`label${side}`] || `AI ${side}`);
         fresh[`job${side}`] = String(msg[`job${side}`] || "").trim();
@@ -4125,6 +4125,7 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
       // Preserve the durable Vault index while starting a clean routing session.
       fresh.relayArtifacts = artifactSummariesFromStore();
       fresh.activeArtifactIds = [];
+      setActiveAgentCount(fresh.agentCount);
       state = fresh;
       try {
         await bindTabsFromMessage(msg);
