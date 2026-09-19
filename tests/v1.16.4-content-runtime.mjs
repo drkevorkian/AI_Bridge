@@ -44,7 +44,7 @@ context.setInterval = function(callback, delay) {
 vm.createContext(context);
 vm.runInContext(source, context, { filename: "content-runtime-prelude.js" });
 
-assert.equal(context.__AI_BRIDGE_CONTENT_RUNTIME_PRELUDE__.version, "1.17.1");
+assert.equal(context.__AI_BRIDGE_CONTENT_RUNTIME_PRELUDE__.version, "1.18.0");
 assert.equal(context.__AI_BRIDGE_CONTENT_RUNTIME_PRELUDE__.sendIdempotency, true);
 assert.equal(context.__AI_BRIDGE_CONTENT_RUNTIME_PRELUDE__.promptEchoFilter, true);
 assert.equal(context.__AI_BRIDGE_CONTENT_RUNTIME_PRELUDE__.providerSendAcknowledgement, true);
@@ -55,8 +55,8 @@ context.chrome.runtime.onMessage.addListener((_message, _sender, sendResponse) =
 });
 let pong = null;
 registered({ type: "AI_BRIDGE_PING" }, {}, value => { pong = value; });
-assert.equal(pong.version, "1.17.1");
-assert.equal(pong.runtimeVersion, "1.17.1");
+assert.equal(pong.version, "1.18.0");
+assert.equal(pong.runtimeVersion, "1.18.0");
 
 function monitor() {}
 const timer = context.setInterval(monitor, 650);
