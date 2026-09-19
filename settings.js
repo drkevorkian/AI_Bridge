@@ -2,6 +2,7 @@ const $ = id => document.getElementById(id);
 const THEME_KEY = "aiBridgeTheme";
 const LAYOUT_KEY = "aiBridgeLayout";
 const AGENT_COUNT_KEY = "aiBridgeAgentCount";
+const PANE_WIDTH_KEY = "aiBridgeControlPaneWidth";
 const AUTO_UPDATE_KEY = "aiBridgeAutoCheckUpdates";
 const KEEP_AWAKE_KEY = "aiBridgeKeepAwake";
 const GOOGLE_CLIENT_KEY = "aiBridgeGoogleClientId";
@@ -28,14 +29,16 @@ async function setTheme(theme){const chosen=applyTheme(theme);await chrome.stora
 async function setLayout(layout){const chosen=LAYOUTS.has(layout)?layout:"studio";$("settingsLayout").value=chosen;await chrome.storage.local.set({[LAYOUT_KEY]:chosen})}
 
 async function portableSettings(){
-  const local=await chrome.storage.local.get([THEME_KEY,LAYOUT_KEY,AGENT_COUNT_KEY,"bridgeState"]);
+  const local=await chrome.storage.local.get([THEME_KEY,LAYOUT_KEY,AGENT_COUNT_KEY,PANE_WIDTH_KEY,"bridgeState"]);
   const s=local.bridgeState||{};
   const jobs={}; for(const side of ["A","B","C","D","E"]) jobs["job"+side]=String(s["job"+side]||"");
   return {
     schema:1, savedAt:Date.now(),
     theme:THEMES.has(local[THEME_KEY])?local[THEME_KEY]:"blizzard",
     layout:LAYOUTS.has(local[LAYOUT_KEY])?local[LAYOUT_KEY]:"studio",
+    paneWidth:Math.min(70,Math.max(24,Number(local[PANE_WIDTH_KEY])||36)),
     agentCount:Number(local[AGENT_COUNT_KEY]||s.agentCount||3),
+    teamRules:String(s.teamRules||"").slice(0,12000),
     workMode:String(s.workMode||"relay"), startSide:String(s.startSide||"A"),
     maxTurns:Number.isInteger(Number(s.maxTurns))?Number(s.maxTurns):-1,
     delayMs:Number.isFinite(Number(s.delayMs))?Number(s.delayMs):1500,
@@ -47,6 +50,7 @@ async function applyPortableSettings(p){
   const writes={};
   if(THEMES.has(p.theme)) writes[THEME_KEY]=p.theme;
   if(LAYOUTS.has(p.layout)) writes[LAYOUT_KEY]=p.layout;
+  if(Number.isFinite(Number(p.paneWidth))) writes[PANE_WIDTH_KEY]=Math.min(70,Math.max(24,Number(p.paneWidth)));
   if(Number.isInteger(Number(p.agentCount))&&Number(p.agentCount)>=1&&Number(p.agentCount)<=5) writes[AGENT_COUNT_KEY]=Number(p.agentCount);
   await chrome.storage.local.set(writes);
   const {bridgeState}=await chrome.storage.local.get("bridgeState");
@@ -56,11 +60,16 @@ async function applyPortableSettings(p){
     if(["A","B","C","D","E"].includes(p.startSide)) next.startSide=p.startSide;
     if(Number.isInteger(Number(p.maxTurns))&&Number(p.maxTurns)>=-1&&Number(p.maxTurns)<=10000) next.maxTurns=Number(p.maxTurns);
     if(Number.isFinite(Number(p.delayMs))&&Number(p.delayMs)>=0&&Number(p.delayMs)<=30000) next.delayMs=Number(p.delayMs);
+    if(typeof p.teamRules==="string") next.teamRules=p.teamRules.slice(0,12000);
     for(const side of ["A","B","C","D","E"]) if(typeof p["job"+side]==="string") next["job"+side]=p["job"+side].slice(0,12000);
     await chrome.storage.local.set({bridgeState:next});
   }
   applyTheme(p.theme);
   $("settingsLayout").value=LAYOUTS.has(p.layout)?p.layout:"studio";
+  if(Number.isFinite(Number(p.paneWidth))){
+    const width=Math.min(70,Math.max(24,Number(p.paneWidth)));
+    $("paneWidth").value=String(width); $("paneWidthValue").textContent=Math.round(width)+"%";
+  }
 }
 async function syncPush(){const payload=await portableSettings();await chrome.storage.sync.set({[SYNC_KEY]:payload});$("syncStatus").textContent="Synced";show("syncNotice","Settings pushed to Chrome Sync.")}
 async function syncPull(){const obj=await chrome.storage.sync.get(SYNC_KEY);if(!obj[SYNC_KEY])throw new Error("No Chrome Sync settings were found.");await applyPortableSettings(obj[SYNC_KEY]);$("syncStatus").textContent="Synced";show("syncNotice","Newest Chrome Sync settings applied.")}
@@ -135,8 +144,9 @@ async function checkUpdates(){
 }
 async function init(){
   const manifest=chrome.runtime.getManifest();$("installedVersion").textContent="v"+manifest.version;$("updateVersion").textContent="Installed v"+manifest.version;
-  const local=await chrome.storage.local.get([THEME_KEY,LAYOUT_KEY,AUTO_UPDATE_KEY,KEEP_AWAKE_KEY,GOOGLE_CLIENT_KEY]);
+  const local=await chrome.storage.local.get([THEME_KEY,LAYOUT_KEY,PANE_WIDTH_KEY,AUTO_UPDATE_KEY,KEEP_AWAKE_KEY,GOOGLE_CLIENT_KEY]);
   applyTheme(local[THEME_KEY]);$("settingsLayout").value=LAYOUTS.has(local[LAYOUT_KEY])?local[LAYOUT_KEY]:"studio";
+  const paneWidth=Math.min(70,Math.max(24,Number(local[PANE_WIDTH_KEY])||36));$("paneWidth").value=String(paneWidth);$("paneWidthValue").textContent=Math.round(paneWidth)+"%";
   $("autoCheckUpdates").checked=local[AUTO_UPDATE_KEY]===true;$("keepAwake").checked=local[KEEP_AWAKE_KEY]===true;$("googleClientId").value=local[GOOGLE_CLIENT_KEY]||"";
   $("extensionId").textContent=chrome.runtime.id;$("redirectUri").textContent=chrome.identity.getRedirectURL("google");
   const sess=await chrome.storage.session.get(GOOGLE_TOKEN_KEY);$("googleStatus").textContent=sess[GOOGLE_TOKEN_KEY]?.accessToken?"Linked for this Chrome session":"Not linked";
@@ -145,6 +155,8 @@ function guarded(fn,notice){return async()=>{try{await fn()}catch(e){show(notice
 
 $("settingsTheme").addEventListener("change",e=>setTheme(e.target.value));
 $("settingsLayout").addEventListener("change",e=>setLayout(e.target.value));
+$("paneWidth").addEventListener("input",e=>{$("paneWidthValue").textContent=e.target.value+"%";});
+$("paneWidth").addEventListener("change",async e=>{const width=Math.min(70,Math.max(24,Number(e.target.value)||36));await chrome.storage.local.set({[PANE_WIDTH_KEY]:width});});
 $("openDashboard").addEventListener("click",()=>chrome.tabs.create({url:chrome.runtime.getURL("dashboard.html")}));
 $("syncPush").addEventListener("click",guarded(syncPush,"syncNotice"));$("syncPull").addEventListener("click",guarded(syncPull,"syncNotice"));
 $("saveGoogleClientId").addEventListener("click",guarded(async()=>{const v=$("googleClientId").value.trim();if(v&&!/^[A-Za-z0-9._-]+\.apps\.googleusercontent\.com$/.test(v))throw new Error("That does not look like a Google OAuth client ID.");await chrome.storage.local.set({[GOOGLE_CLIENT_KEY]:v});show("googleNotice","OAuth client ID saved locally.");},"googleNotice"));
