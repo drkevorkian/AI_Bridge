@@ -1220,7 +1220,7 @@ async function openFreshChats(sides) {
   if (latestState?.sessionActive) return;
   const chosen = Array.isArray(sides) ? sides : SIDES;
   const tabError = validateActiveTabs();
-  if (chosen.length === 3 && tabError) {
+  if (chosen.length === SIDES.length && tabError) {
     $("status").textContent = tabError;
     return;
   }
@@ -1230,7 +1230,7 @@ async function openFreshChats(sides) {
     const button = chosen.length === 1 ? $(`newChat${side}`) : null;
     if (button) { oldLabels.set(button, button.textContent); button.textContent = "Opening…"; button.disabled = true; }
   }
-  if (chosen.length === 3) { oldLabels.set($("newAllChats"), $("newAllChats").textContent); $("newAllChats").textContent = "Opening…"; $("newAllChats").disabled = true; }
+  if (chosen.length === SIDES.length) { oldLabels.set($("newAllChats"), $("newAllChats").textContent); $("newAllChats").textContent = "Opening…"; $("newAllChats").disabled = true; }
 
   try {
     const payload = { type: "AI_BRIDGE_NEW_CHATS", sides: chosen };
@@ -1274,7 +1274,7 @@ $("applyTeamRules")?.addEventListener("click", async () => {
     });
     if (!res?.ok) throw new Error(res?.error || "Could not apply team rules");
     $("status").textContent = res.live
-      ? "Team rules applied. Every later A/B/C turn will receive them, regardless of job."
+      ? "Team rules applied. Every later active-AI turn will receive them, regardless of job."
       : "Team rules saved. They will bind every member when you Start.";
     await refreshState();
   } catch (err) {
@@ -1285,11 +1285,26 @@ $("applyTeamRules")?.addEventListener("click", async () => {
   }
 });
 
-for (const side of SIDES) {
-  $(`tab${side}`).addEventListener("change", () => { refreshStartLabels(); if (latestState) updateControls(latestState); });
-  $(`newChat${side}`).addEventListener("click", () => openFreshChats([side]));
+for (const side of ALL_SIDES) {
+  $(`tab${side}`)?.addEventListener("change", () => { refreshStartLabels(); if (latestState) updateControls(latestState); });
+  $(`newChat${side}`)?.addEventListener("click", () => openFreshChats([side]));
 }
-$("newAllChats").addEventListener("click", () => openFreshChats(SIDES));
+$("newAllChats").addEventListener("click", () => openFreshChats([...SIDES]));
+$("agentCount")?.addEventListener("change", async event => {
+  if (latestState?.sessionActive) {
+    event.target.value = String(latestState.agentCount || SIDES.length);
+    return;
+  }
+  const requested = normalizeAgentCount(event.target.value);
+  if (tabsById.size && requested > tabsById.size) {
+    $("status").textContent = `Only ${tabsById.size} supported AI tab${tabsById.size === 1 ? "" : "s"} are open.`;
+    event.target.value = String(SIDES.length);
+    return;
+  }
+  setAgentCountUI(requested, { persist: true });
+  await loadTabs({ preserve: true });
+  if (latestState) updateControls(latestState);
+});
 $("workMode").addEventListener("change", () => {
   updateWorkModeUI();
   $("maxCycles").classList.remove("validation-error");
@@ -1316,16 +1331,18 @@ $("start").addEventListener("click", async () => {
   const initialPrompt = $("prompt").value.trim();
   if (!initialPrompt) return $("status").textContent = "Enter a primary objective or initial prompt.";
 
-  $("status").textContent = "Starting three-AI session…";
+  $("status").textContent = `Starting ${SIDES.length}-AI session…`;
   try {
+    const jobs = {};
+    for (const side of SIDES) jobs[`job${side}`] = $(`job${side}`)?.value.trim() || "";
     const res = await chrome.runtime.sendMessage({
       type: "AI_BRIDGE_START",
       ...selectedBindings(),
+      ...jobs,
+      agentCount: SIDES.length,
+      activeSides: [...SIDES],
       startSide: $("startSide").value,
       workMode: selectedWorkMode(),
-      jobA: $("jobA").value.trim(),
-      jobB: $("jobB").value.trim(),
-      jobC: $("jobC").value.trim(),
       teamRules: $("teamRules").value.trim(),
       initialPrompt,
       sourceFiles: selectedSourceFiles.map(file => ({ path: file.path, size: file.size, content: file.content })),
@@ -1352,7 +1369,7 @@ $("pause").addEventListener("click", async () => {
 
 $("resume").addEventListener("click", async () => {
   const tabError = validateActiveTabs();
-  if (tabError) return $("status").textContent = `${tabError}\nTo resume, bind all three roles to open AI tabs.`;
+  if (tabError) return $("status").textContent = `${tabError}\nTo resume, bind every active AI role to an open supported tab.`;
 
   $("status").textContent = "Restoring saved session…";
   try {
@@ -1388,7 +1405,7 @@ async function resend(side) {
     await refreshState();
   }
 }
-for (const side of SIDES) $(`resend${side}`).addEventListener("click", () => resend(side));
+for (const side of ALL_SIDES) $(`resend${side}`)?.addEventListener("click", () => resend(side));
 
 function selectedForceSource() {
   return SIDES.find(side => $(`forceFrom${side}`)?.classList.contains("active")) || "A";
@@ -1413,7 +1430,7 @@ function setForceSource(side) {
   }
 }
 
-for (const side of SIDES) {
+for (const side of ALL_SIDES) {
   $(`forceFrom${side}`)?.addEventListener("click", () => setForceSource(side));
   $(`useLast${side}`)?.addEventListener("click", () => {
     setForceSource(side);
@@ -1649,6 +1666,7 @@ function applyCloudSettingsToForm(settings) {
   if (settings.theme) applyTheme(settings.theme);
   if (settings.layout) applyLayout(settings.layout);
   if (settings.paneWidth != null) applyPaneWidth(settings.paneWidth);
+  if (settings.agentCount != null) setAgentCountUI(settings.agentCount, { persist: true });
   if ($("freshOnStart")) $("freshOnStart").checked = settings.freshOnStart !== false;
   if ($("workMode") && WORK_MODE_INFO[settings.workMode]) $("workMode").value = settings.workMode;
   if ($("startSide") && SIDES.includes(settings.startSide)) $("startSide").value = settings.startSide;
@@ -1656,9 +1674,9 @@ function applyCloudSettingsToForm(settings) {
   if (Number.isFinite(Number(settings.delayMs))) $("delayMs").value = String(settings.delayMs);
   if (Number.isInteger(Number(settings.checkpointEveryNCycles))) $("checkpointEveryNCycles").value = String(settings.checkpointEveryNCycles);
   if (Number.isInteger(Number(settings.stuckTimeoutMinutes))) $("stuckTimeoutMinutes").value = String(settings.stuckTimeoutMinutes);
-  if (typeof settings.jobA === "string") $("jobA").value = settings.jobA;
-  if (typeof settings.jobB === "string") $("jobB").value = settings.jobB;
-  if (typeof settings.jobC === "string") $("jobC").value = settings.jobC;
+  for (const side of ALL_SIDES) {
+    if (typeof settings[`job${side}`] === "string" && $(`job${side}`)) $(`job${side}`).value = settings[`job${side}`];
+  }
   if (typeof settings.teamRules === "string") $("teamRules").value = settings.teamRules;
   if (settings.history) renderHistory(settings.history);
   updateWorkModeUI();
@@ -1895,9 +1913,11 @@ window.addEventListener("hashchange", () => showDashboardView(dashboardViewFromH
 showDashboardView(dashboardViewFromHash());
 
 initPaneSplitter();
-Promise.all([loadTheme(), loadLayout(), loadPaneWidth(), loadFreshOnStart(), loadTabs({ preserve: false })]).then(async () => {
-  await refreshState();
-  await refreshCloudStatus();
-});
+Promise.all([loadTheme(), loadLayout(), loadPaneWidth(), loadFreshOnStart(), loadAgentCountPreference()])
+  .then(() => loadTabs({ preserve: false }))
+  .then(async () => {
+    await refreshState();
+    await refreshCloudStatus();
+  });
 setInterval(refreshState, 750);
 setInterval(() => updateRoundTimers(latestState), 100);
