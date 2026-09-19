@@ -17,6 +17,8 @@
   --a: #34d399;
   --b: #f59e0b;
   --c: #818cf8;
+  --d: #ec4899;
+  --e: #38bdf8;
   --human: #f0c46b;
   --danger: #ef6b78;
   --primary-bg: #e9eef5;
@@ -286,6 +288,10 @@ h2 { margin: 4px 0 0; font-size: 20px; }
 .agent-card.agent-a { border-left-color: var(--a); }
 .agent-card.agent-b { border-left-color: var(--b); }
 .agent-card.agent-c { border-left-color: var(--c); }
+.agent-card.agent-d { border-left-color: var(--d); }
+.agent-card.agent-e { border-left-color: var(--e); }
+.agent-card[hidden] { display: none !important; }
+.agent-count-row { margin-bottom: 10px; }
 
 .agent-identity { display: flex; align-items: center; gap: 8px; min-width: 0; }
 .round-timer {
@@ -318,6 +324,8 @@ h2 { margin: 4px 0 0; font-size: 20px; }
 .history-badge.side-a { color: var(--a); }
 .history-badge.side-b { color: var(--b); }
 .history-badge.side-c { color: var(--c); }
+.history-badge.side-d { color: var(--d); }
+.history-badge.side-e { color: var(--e); }
 .history-copy { min-width: 0; }
 .history-title { font-size: 10px; color: var(--muted); margin-bottom: 3px; }
 .history-text { font-size: 11px; color: var(--text-soft); white-space: pre-wrap; overflow-wrap: anywhere; display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 4; overflow: hidden; }
@@ -333,11 +341,15 @@ h2 { margin: 4px 0 0; font-size: 20px; }
 .vault-source-badge.side-a { color: var(--a); border-color: color-mix(in srgb, var(--a) 55%, var(--line)); }
 .vault-source-badge.side-b { color: var(--b); border-color: color-mix(in srgb, var(--b) 55%, var(--line)); }
 .vault-source-badge.side-c { color: var(--c); border-color: color-mix(in srgb, var(--c) 55%, var(--line)); }
+.vault-source-badge.side-d { color: var(--d); border-color: color-mix(in srgb, var(--d) 55%, var(--line)); }
+.vault-source-badge.side-e { color: var(--e); border-color: color-mix(in srgb, var(--e) 55%, var(--line)); }
 .vault-chips { display: flex; flex-wrap: wrap; gap: 6px; padding: 0 14px 14px; }
 .vault-chip { max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; border: 1px solid var(--line-strong); border-radius: 999px; padding: 5px 8px; background: var(--panel-3); color: var(--text-soft); font-size: 10px; font-weight: 750; }
 .vault-chip.relay-side-a { border-color: color-mix(in srgb, var(--a) 55%, var(--line)); }
 .vault-chip.relay-side-b { border-color: color-mix(in srgb, var(--b) 55%, var(--line)); }
 .vault-chip.relay-side-c { border-color: color-mix(in srgb, var(--c) 55%, var(--line)); }
+.vault-chip.relay-side-d { border-color: color-mix(in srgb, var(--d) 55%, var(--line)); }
+.vault-chip.relay-side-e { border-color: color-mix(in srgb, var(--e) 55%, var(--line)); }
 
 .human-panel { border: 1px solid var(--human-line); background: var(--human-bg); border-radius: 12px; padding: 12px; margin-bottom: 12px; }
 .human-question { white-space: pre-wrap; border: 1px solid var(--human-line); background: var(--human-question-bg); padding: 10px; border-radius: 9px; font-size: 12px; line-height: 1.45; margin-bottom: 8px; }
@@ -355,6 +367,8 @@ h2 { margin: 4px 0 0; font-size: 20px; }
 .transcript-card.side-a { border-left-color: var(--a); }
 .transcript-card.side-b { border-left-color: var(--b); }
 .transcript-card.side-c { border-left-color: var(--c); }
+.transcript-card.side-d { border-left-color: var(--d); }
+.transcript-card.side-e { border-left-color: var(--e); }
 .transcript-card.side-human { border-left-color: var(--human); }
 .transcript-head { display: flex; justify-content: space-between; gap: 14px; align-items: center; padding: 9px 12px; background: var(--panel-2); border-bottom: 1px solid var(--line); }
 .transcript-title { font-weight: 850; font-size: 12px; }
@@ -383,6 +397,8 @@ h2 { margin: 4px 0 0; font-size: 20px; }
 .relay-row.relay-side-a { border-left: 3px solid var(--a); }
 .relay-row.relay-side-b { border-left: 3px solid var(--b); }
 .relay-row.relay-side-c { border-left: 3px solid var(--c); }
+.relay-row.relay-side-d { border-left: 3px solid var(--d); }
+.relay-row.relay-side-e { border-left: 3px solid var(--e); }
 
 .vault-actions { display: flex; justify-content: flex-end; margin: 8px 0; }
 .relay-actions { display: flex; gap: 6px; align-items: center; }
