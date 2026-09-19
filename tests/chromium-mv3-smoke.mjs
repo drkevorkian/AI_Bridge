@@ -160,12 +160,12 @@ try {
   await workerClient.call("Runtime.enable");
 
   const manifestVersion = await evaluate(workerClient, "chrome.runtime.getManifest().version");
-  assert.equal(manifestVersion, "1.17.1");
+  assert.equal(manifestVersion, "1.18.0");
 
   const tabLookup = `(await chrome.tabs.query({})).find(item=>String(item.url||'').includes('chatgpt.com:${mockPort}/mock'))`;
   const ping = await eventually(async () => evaluate(workerClient, `(async()=>{const tab=${tabLookup};if(!tab?.id)return null;try{return await chrome.tabs.sendMessage(tab.id,{type:'AI_BRIDGE_PING'});}catch(_){return null;}})()`), { label: "manifest content-script injection" });
   assert.equal(ping?.ok, true);
-  assert.equal(ping?.runtimeVersion, "1.17.1");
+  assert.equal(ping?.runtimeVersion, "1.18.0");
 
   const sendExpr = `(async()=>{const tab=${tabLookup};return chrome.tabs.sendMessage(tab.id,{type:'AI_BRIDGE_SEND',text:'integration smoke prompt',artifacts:[],generationId:'integration-generation-1'});})()`;
   const first = await evaluate(workerClient, sendExpr);
