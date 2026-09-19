@@ -1202,8 +1202,8 @@ function recordTranscript(type, { side = null, text = "", ...extra } = {}) {
 function beginRoundTimer(side, startedAt = Date.now()) {
   if (!SIDES.includes(side)) return null;
   const when = Number.isFinite(Number(startedAt)) ? Number(startedAt) : Date.now();
-  state.roundStartedAtBySide = { A: null, B: null, C: null, ...(state.roundStartedAtBySide || {}) };
-  state.roundNumberBySide = { A: 0, B: 0, C: 0, ...(state.roundNumberBySide || {}) };
+  state.roundStartedAtBySide = { A: null, B: null, C: null, D: null, E: null, ...(state.roundStartedAtBySide || {}) };
+  state.roundNumberBySide = { A: 0, B: 0, C: 0, D: 0, E: 0, ...(state.roundNumberBySide || {}) };
   state.roundStartedAtBySide[side] = when;
   state.roundNumberBySide[side] = Math.max(0, Number(state.roundNumberBySide[side]) || 0) + 1;
   return { startedAt: when, roundNumber: state.roundNumberBySide[side] };
@@ -1211,10 +1211,10 @@ function beginRoundTimer(side, startedAt = Date.now()) {
 
 function completeRoundTimer(side, completedAt = Date.now()) {
   if (!SIDES.includes(side)) return { roundNumber: null, durationMs: null, completedAt: null };
-  state.roundStartedAtBySide = { A: null, B: null, C: null, ...(state.roundStartedAtBySide || {}) };
-  state.roundNumberBySide = { A: 0, B: 0, C: 0, ...(state.roundNumberBySide || {}) };
-  state.lastRoundDurationMsBySide = { A: null, B: null, C: null, ...(state.lastRoundDurationMsBySide || {}) };
-  state.lastRoundCompletedAtBySide = { A: null, B: null, C: null, ...(state.lastRoundCompletedAtBySide || {}) };
+  state.roundStartedAtBySide = { A: null, B: null, C: null, D: null, E: null, ...(state.roundStartedAtBySide || {}) };
+  state.roundNumberBySide = { A: 0, B: 0, C: 0, D: 0, E: 0, ...(state.roundNumberBySide || {}) };
+  state.lastRoundDurationMsBySide = { A: null, B: null, C: null, D: null, E: null, ...(state.lastRoundDurationMsBySide || {}) };
+  state.lastRoundCompletedAtBySide = { A: null, B: null, C: null, D: null, E: null, ...(state.lastRoundCompletedAtBySide || {}) };
 
   const start = Number(state.roundStartedAtBySide[side]);
   const requestedEnd = Number(completedAt);
