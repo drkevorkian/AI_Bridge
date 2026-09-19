@@ -541,7 +541,7 @@ function hydrateFromState(s) {
   if (hydrated || !s) return;
   hydrated = true;
 
-  if (s.sessionActive || s.agentCount) setAgentCountUI(s.agentCount || DEFAULT_AGENT_COUNT);
+  if (s.sessionActive) setAgentCountUI(s.agentCount || DEFAULT_AGENT_COUNT);
   for (const side of ALL_SIDES) {
     setSelectToTab(side, s[`tab${side}`]);
     if (s[`job${side}`]) $(`job${side}`).value = s[`job${side}`];
@@ -1039,6 +1039,7 @@ function updateControls(s) {
   $("stop").disabled = !s.sessionActive;
   $("newAllChats").disabled = Boolean(s.sessionActive);
   $("freshOnStart").disabled = Boolean(s.sessionActive);
+  $("agentCount").disabled = Boolean(s.sessionActive);
   $("workMode").disabled = Boolean(s.sessionActive);
   if ($("teamRules")) $("teamRules").disabled = false;
   if ($("applyTeamRules")) $("applyTeamRules").disabled = false;
@@ -1208,6 +1209,7 @@ chrome.storage.onChanged.addListener((changes, area) => {
   if (area !== "local") return;
   if (changes[THEME_KEY]) applyTheme(changes[THEME_KEY].newValue);
   if (changes[LAYOUT_KEY]) applyLayout(changes[LAYOUT_KEY].newValue || DEFAULT_LAYOUT);
+  if (changes[AGENT_COUNT_KEY] && !latestState?.sessionActive) setAgentCountUI(changes[AGENT_COUNT_KEY].newValue || DEFAULT_AGENT_COUNT);
   if (Object.prototype.hasOwnProperty.call(changes, PANE_WIDTH_KEY)) {
     applyPaneWidth(changes[PANE_WIDTH_KEY].newValue ?? DEFAULT_PANE_PCT);
   }
