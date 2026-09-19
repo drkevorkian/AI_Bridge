@@ -1,19 +1,15 @@
 {
   "manifest_version": 3,
-  "minimum_chrome_version": "106",
   "name": "AI Bridge",
-  "version": "1.17.1",
-  "description": "Coordinate 1–5 AI agents across supported web apps, including secure same-provider multi-tab viewpoints.",
+  "version": "1.11.3",
+  "description": "Coordinate three AI agents with relay, direct-mesh routing, persistent artifact vault storage, ZIP/file relay, human control, and a modern multi-theme workspace.",
   "permissions": [
     "tabs",
     "storage",
     "unlimitedStorage",
     "downloads",
     "notifications",
-    "scripting",
-    "identity",
-    "alarms",
-    "power"
+    "scripting"
   ],
   "host_permissions": [
     "https://chatgpt.com/*",
@@ -24,19 +20,15 @@
     "https://copilot.microsoft.com/*",
     "https://*.oaiusercontent.com/*",
     "https://assets.grok.com/*",
-    "https://assets.grokusercontent.com/*",
+    "https://*.x.ai/*",
     "https://*.googleusercontent.com/*",
     "https://*.anthropic.com/*",
-    "https://www.googleapis.com/*",
-    "https://api.github.com/*",
-    "https://raw.githubusercontent.com/*",
-    "https://codeload.github.com/*"
+    "https://*.microsoft.com/*",
+    "https://x.ai/*",
+    "https://api.x.ai/*"
   ],
-  "content_security_policy": {
-    "extension_pages": "script-src 'self'; object-src 'none'; base-uri 'none'; frame-ancestors 'none'"
-  },
   "background": {
-    "service_worker": "background-wrapper.js"
+    "service_worker": "background.js"
   },
   "action": {
     "default_popup": "popup.html",
@@ -56,10 +48,6 @@
         "https://copilot.microsoft.com/*"
       ],
       "js": [
-        "content-runtime-prelude.js",
-        "content-artifact-security-prelude.js",
-        "content-completion-guard.js",
-        "content-response-delivery-hardening.js",
         "content.js"
       ],
       "run_at": "document_idle"

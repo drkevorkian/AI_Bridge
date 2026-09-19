@@ -1,14 +1,170 @@
-# AI Bridge
+# AI Bridge 1.11.3 — Direct Mesh + Resumable Human Requests
 
-**Current version: 1.17.1**
+Version 1.11.3 builds on the verified 1.10.2 release with Direct Mesh peer routing, resumable suppressed human requests, and universal role reuse.
 
-AI Bridge is a Manifest V3 Chrome extension for coordinating **1–5 logical AI agents** from one dashboard. Agents may use different supported providers or multiple separate conversations from the same provider family to create independent viewpoints.
 
-Version 1.17.1 adds the dynamic A–E agent architecture, Provider Health, same-provider multi-tab viewpoint mode, strict tab/thread isolation, queue serialization and observability, dispatch-time provenance revalidation, and the resilience regressions that protect queued, resent, replaced, failed, and delayed generations.
+## 1.11.2 additions
 
-For the detailed same-provider security model, see [VIEWPOINT_MODE.md](VIEWPOINT_MODE.md).
+- **Direct Mesh work mode**: an AI can make a specific teammate the next speaker by ending its response with `SEND TO: AI A`, `SEND TO: AI B`, `SEND TO: AI C`, or the teammate's current label such as `SEND TO: Gemini`. Everything above that final line is the direct message. Without a routing command, Mesh falls back to the normal next-AI handoff.
+- **Registered LLM command architecture**: `SEND TO` is parsed only in Direct Mesh mode and only from the final non-empty line, avoiding accidental execution when the command is discussed in prose. Unknown/self targets pause instead of silently routing to the wrong AI.
+- **Suppressed request history**: Suppress keeps the human question in the saved session. The dashboard's Suppressed requests drawer can reopen it later and restore the normal answer modal.
+- **Universal role history**: a saved role/job can now be applied to AI A, B, or C regardless of which AI originally used it. Existing objective/command history remains reusable globally.
 
-## Supported providers
+## Human interaction controls
+
+- **Send response & continue** answers the requesting AI normally.
+- **Suppress request** records that the human declined to answer, closes the modal, and pauses the session without consuming an AI turn. Resume can continue later.
+- **Stop session** suppresses the request and ends the run immediately so the operator can open fresh AI chats or start a new session.
+- Suppression actions are written into the shared transcript, and the modal still has no silent dismiss/X.
+
+## UI refresh
+
+- **Blizzard Blue** is the default for new installs and now uses the actual Crayola Blizzard Blue `#ACE5EE` as the light ice canvas with dark teal `#0A3A44` body text.
+- **Ghost White** adds a low-fatigue bright workspace with deep slate body text and cool lavender/blue interactive accents.
+- Existing Midnight, Slate, Light, Solarized Light, Ocean, and Terminal themes remain.
+- Modernized 16px cards, softer elevation, pill controls, clearer focus states, smoother hover feedback, and refined transcript/vault/runtime surfaces.
+- The 40% / 60% dashboard contract and every existing DOM control ID are preserved.
+
+# AI Bridge 1.9 — Work Modes + Human Control + Cross-AI Artifact Relay
+
+AI Bridge is a Manifest V3 Chrome extension that coordinates a persistent three-AI conversation through supported AI web interfaces.
+
+
+
+
+## New in 1.9 — human control and stronger Gemini capture
+
+- **Gemini response capture is stricter and more complete.** AI Bridge anchors on the latest top-level `model-response`, prefers the richest response-body/Markdown descendant, rejects label-only stubs such as `Gemini said`, and waits longer for Gemini to remain stable before committing the response.
+- **Human-input detection is more tolerant.** The explicit `[[HUMAN_INPUT: ...]]` marker remains preferred, but the bridge now tolerates Markdown/formatting drift, scans the response tail, and recognizes clear blocking language that asks for a required decision, approval, clarification, permission, or choice. Generic optional offers do not pause the team.
+- **Human attention is now modal.** When input is required, AI Bridge brings the dashboard forward and shows a centered modal with the requesting AI, its question, a response box, and queued-request count. Browser notification and extension badge remain as backup signals.
+- **Human interjection is first-class.** During an active session the controller can add a correction, priority, or steering note from the dashboard. The note is recorded immediately in the shared transcript and delivered on the next safe scheduled handoff rather than interrupting an AI mid-generation. Peer Review also injects human interjections into the review prompts.
+
+## New in 1.8 — Work Mode
+
+AI Bridge now supports explicit work strategies from the dashboard:
+
+- **Relay** — the original sequential A → B → C workflow.
+- **Collaborate** — sequential shared-deliverable work where each AI improves the same result.
+- **Compete** — all three AIs receive the same objective simultaneously and submit independently.
+- **Parallel Independent** — all three AIs work simultaneously on self-contained versions of the same objective without seeing peers during the pass.
+- **Peer Review** — phase 1 collects three independent primary responses; phase 2 sends each AI the other two primary responses and collects three critiques.
+
+Turn accounting remains response-based. A complete Compete/Parallel pass uses 3 AI turns; a complete Peer Review cycle uses 6. `-1` is still accepted, but finite settings must be large enough to complete the chosen work cycle. Parallel file capture, ZIP previews, fresh-chat controls, and human-input handling continue to work across these modes.
+
+## New in 1.7 — start fresh AI conversations from AI Bridge
+
+The three AI web pages still need to be open and selected as AI A, B, and C, but the human no longer has to visit each site and click **New chat** manually. The dashboard now provides:
+
+- **Start in fresh AI chats** — checked by default. Pressing **Start** resets all three selected AI tabs to new conversations, waits for each page to load, reconnects the content script, and only then sends the first bridge prompt.
+- **New AI chats** — resets all three selected AI tabs without starting a bridge session.
+- **New chat** on each agent card — resets only that selected AI tab.
+
+AI Bridge reuses the selected existing tabs; these controls do not create replacement AI tabs. Fresh-chat controls are disabled while a bridge session is active so an in-progress team cannot accidentally lose its provider-side context. Supported fresh-chat routes are ChatGPT, Grok, Claude, Gemini, and Microsoft Copilot.
+
+## New in 1.6 — AI-to-AI file relay
+
+AI Bridge now detects downloadable files produced inside an AI response, captures supported file bytes in the originating AI tab, and makes them available to the other AI chats through a persistent **Shared Vault**. This supports workflows such as ChatGPT generating a ZIP and Grok reviewing that project without the human manually downloading and re-uploading it.
+
+The relay is hybrid by design:
+
+- AI Bridge preserves the **original file bytes** and attempts to attach the original file to the destination AI.
+- ZIP files are also inspected locally. Text/code entries using stored or DEFLATE compression are extracted into a bounded, plain-text preview.
+- Text/code artifacts receive their own bounded preview.
+- Those previews are included in the handoff as untrusted project data, so a provider UI change cannot block ZIP/code review merely because its native upload control changed.
+- Binary-only artifacts still fail closed when a destination attachment cannot be completed; AI Bridge does not pretend an unreadable binary was shared.
+
+Safety/performance limits remain bounded: up to 8 generated files per response, 12 MiB per file, 24 MiB combined per response, 24 retained vault files, and 60 MiB retained raw artifact data. ZIP extraction skips encrypted/unsupported/binary entries, caps individual extracted entries, and caps the text placed into any handoff. Artifact bytes live under a storage key separate from ordinary bridge/transcript state, so infinite sessions do not rewrite ZIP payloads on every state update.
+
+The dashboard now shows a collapsible **Shared Vault** with AI A/B/C source badges, filename, size, sequence number, and status such as `Extracted`, `Raw text`, or `Raw file`. Transcript cards that produced artifacts also show **Vault Upload** chips.
+
+ChatGPT `sandbox:/mnt/data/...` links use the authenticated conversation interpreter-download route only when the current ChatGPT conversation/message identifiers are present. Ordinary HTTP(S), blob, and data download links use direct capture.
+
+Artifact relay does **not** increment the turn counter. `-1` remains truly infinite; only completed AI responses count as turns. Resume re-shares the retained vault context with a replacement chat, while normal A → B → C routing sends each side only unseen vault files.
+
+## More themes
+
+The existing Midnight, Slate, and Light themes are joined by:
+
+- **Solarized Light** — warm sepia, low-eyestrain light palette.
+- **Ocean** — deep navy with icy blue/cyan accents.
+- **Terminal** — black/phosphor-green, sharper borders, and monospace controls.
+
+The theme selector remains a compact dropdown and the chosen theme stays synchronized between popup and dashboard through `aiBridgeTheme`.
+
+## New in 1.5 — wider workspace, history, and themes
+
+The dashboard control column now uses **40% of the page width**, with the live transcript using the remaining 60%. This gives the job editors, objective, source-file controls, and history room to breathe on desktop displays.
+
+AI Bridge now keeps two lightweight persistent history lists across sessions:
+
+- **Previous jobs** — one combined list for AI A, B, and C, tagged by side and provider label. A previous job can be restored to the same AI role with one click.
+- **Previous commands** — prior primary objectives/commands, each reusable with one click.
+
+History is stored separately from the active relay transcript and can be cleared independently. Repeated identical entries are moved to the top instead of duplicated forever.
+
+Three synchronized UI themes are available from both the dashboard and popup:
+
+- **Midnight** — original near-black interface.
+- **Slate** — lighter blue/gray dark theme.
+- **Light** — high-contrast light workspace.
+
+Theme choice is saved in `chrome.storage.local` and shared by the popup and dashboard.
+
+## New in 1.5 — local code/file input
+
+The dashboard can now attach local code without GitHub. Use **Add files**, **Add folder**, or drag files onto the Local code / files box before starting a session. AI Bridge reads text/code files locally in the extension page, stores them with the saved session, and sends the source bundle once to each AI chat. Resuming a session sends the bundle again so a replacement/new AI tab has the code context.
+
+Safety/performance limits: up to 100 files, 200,000 characters per file, and 400,000 characters combined. Binary files are rejected; common dependency/build folders such as `.git`, `node_modules`, `.venv`, `dist`, and `build` are skipped when a folder is selected. Source is rendered and relayed as plain text.
+
+## Dedicated application page
+
+The full application UI is now `dashboard.html`. Chrome extension pages use the `chrome-extension://` scheme, so the dashboard is opened at runtime with:
+
+```js
+chrome.runtime.getURL("dashboard.html")
+```
+
+which resolves to:
+
+```text
+chrome-extension://<extension-id>/dashboard.html
+```
+
+Chrome reserves `chrome://` for browser-internal pages, so an extension cannot register its own `chrome://extension/page.htm` URL.
+
+The toolbar popup is intentionally compact and opens/focuses the dashboard.
+
+## Dashboard features
+
+- Bind three supported AI chat tabs as AI A, AI B, and AI C.
+- Assign a separate job/responsibility to every AI and reuse prior assignments from the combined job history.
+- Choose the first speaker and shared primary objective, with reusable command history.
+- Start, Pause, Resume, Stop, and per-agent Resend controls.
+- Center-screen human-input modal plus a persistent Human interjection composer and workspace-header Interject shortcut.
+- Persistent live transcript of completed AI responses and human replies.
+- Transcript rendering uses plain text (`textContent`) rather than model-controlled HTML.
+- Manual transcript scrolling disables auto-follow until **Jump to latest** is used.
+- Runtime status shows the active agent, completed turn count, and finite/infinite limit.
+- Switch between Midnight, Slate, Light, Solarized Light, Ocean, and Terminal; the popup follows the same saved theme.
+
+## Turn limits
+
+`Max AI turns` now accepts:
+
+- `-1` — infinite; never stops due to turn count.
+- `1` through `10000` — finite number of completed AI responses.
+
+Values such as `0`, `-2`, `10001`, fractions, and nonnumeric input are rejected.
+
+## Human-input safety
+
+AI Bridge prefers an explicit `[[HUMAN_INPUT: ...]]` request near the end of an AI response, but v1.9 also recognizes formatting-drifted markers and clear blocking natural language such as needing the controller's decision, approval, clarification, permission, or required choice. The detector intentionally ignores generic optional offers (for example, asking whether the user would like an extra chart) so normal conversational endings do not constantly interrupt the workflow.
+
+## Persistence
+
+Session state, transcript, jobs, objective, bindings, turn cursor, and relay state are stored in `chrome.storage.local`. `unlimitedStorage` is requested so long-running/infinite sessions are not constrained by the normal local storage quota.
+
+## Supported sites
 
 - ChatGPT — `chatgpt.com`, `chat.openai.com`
 - Grok — `grok.com`
@@ -16,280 +172,58 @@ For the detailed same-provider security model, see [VIEWPOINT_MODE.md](VIEWPOINT
 - Gemini — `gemini.google.com`
 - Microsoft Copilot — `copilot.microsoft.com`
 
-Provider tabs must remain open. AI Bridge coordinates browser tabs; it does not run the models itself.
-
 ## Install / update
 
-1. Extract the release ZIP to a permanent folder.
+1. Extract the ZIP to a permanent folder.
 2. Open `chrome://extensions/`.
 3. Enable **Developer mode**.
-4. Choose **Load unpacked** and select the folder containing `manifest.json`.
-5. Open the AI conversations you want to use. You may use 1–5 logical agents.
-6. Open the AI Bridge dashboard, choose the agent count, and bind each active side (A–E) to a supported provider tab.
+4. For a new install, choose **Load unpacked** and select the folder containing `manifest.json`.
+5. For an existing unpacked install, replace the old files and click **Reload** on the extension card.
+6. Click the AI Bridge toolbar icon and choose **Open Dashboard**.
+7. Open three supported AI chats, bind them in the dashboard, assign jobs, enter the objective, and start the session.
 
-Unpacked Chrome extensions cannot overwrite themselves. After the first install, use **Settings → Check for updates**. AI Bridge fetches `manifest.json` from GitHub `main` over HTTPS, compares versions, and can download the ZIP. Extract it over the same folder, then click **Reload** on the extension card. Daily checks are optional and notify-only. AI Bridge never auto-installs.
+## Files
 
-## Dynamic agents
+- `manifest.json` — MV3 manifest and permissions.
+- `background.js` — persistent relay state, turn routing, human intervention, dashboard opening.
+- `content.js` — website DOM adapters for sending prompts and detecting completed responses.
+- `dashboard.html`, `dashboard.css`, `dashboard.js` — primary application UI and live output.
+- `popup.html`, `popup.css`, `popup.js` — compact launcher/status controller.
+- `icon128.png` — extension icon.
 
-The dashboard supports logical sides **A, B, C, D, and E**. The active count is selectable from 1 through 5.
 
-Each active side has independent:
+## v1.9 human-control improvements
 
-- tab binding;
-- assigned job;
-- generation ID;
-- response/provenance state;
-- timers;
-- resend/recovery state;
-- Provider Health state.
+- Gemini capture now prefers the full `model-response` body and richest Markdown/content descendant, while rejecting label-only stubs such as `Gemini said`.
+- Human-input detection still prefers `[[HUMAN_INPUT: ...]]`, but also scans the response tail for formatting-drifted markers and clear blocking natural language asking for a decision, approval, clarification, permission, or required choice.
+- Human input is shown as a centered modal dialog and the dashboard is brought forward when attention is required.
+- A Human interjection box lets the controller add steering notes/corrections to the shared transcript during an active session. Interjections are delivered on the next safe scheduled handoff rather than interrupting an AI mid-generation; Peer Review also injects them into the review prompts.
 
-The live side roster drives work-mode cycle semantics, recovery, routing, and dashboard visibility. A side that is not active is not part of the current cycle.
 
-## Same-provider multi-tab viewpoints
+## v1.11.2 controller routing refinements
 
-Multiple logical agents may use the same provider family, for example Agent A and Agent D both using ChatGPT, **only** when they are bound to different Chrome tabs and different sanitized conversation threads.
+- **Deferred Main-AI interjections:** the selected Main AI is the session's first-speaker selection. Human interjections are persisted immediately, but are held until that Main AI's next group turn. They are not injected into whichever secondary AI happens to be queued when the human writes the note. After Main receives the note, it becomes normal shared transcript context for later teammates.
+- **Ambiguous SEND TO aliases fail closed:** duplicate or overlapping configured labels are not guessed. Use `SEND TO: AI A`, `AI B`, or `AI C` when labels are ambiguous.
+- **Human replies are send-before-clear:** AI Bridge keeps the pending human question/modal state until the provider accepts the human answer, so a failed send can be retried without losing the question.
 
-Security invariants:
+## 1.11.2 independent round timers
 
-- one logical agent ↔ one unique Chrome tab;
-- same physical tab assigned twice → `DUPLICATE_TAB` → blocked;
-- same provider + different tabs + same sanitized thread → `DUPLICATE_THREAD` → blocked;
-- same provider + different tabs + different sanitized threads → allowed;
-- URL query strings and fragments do not create fake distinct threads;
-- provider hosts must match the trusted HTTPS allowlist exactly;
-- same-provider prompt dispatches serialize per provider family;
-- queued sends re-resolve and revalidate tab/thread identity immediately before provider dispatch;
-- queued tab navigation or closure fails closed;
-- failed active dispatch clears transient viewpoint identity and disarms that side's generation;
-- stale, delayed, superseded, or unarmed completions are rejected before commit.
+AI Bridge now measures each AI round itself, independently of any timing reported by the provider or LLM. The clock starts only after the browser page accepts the prompt and stops at the final observed response-text change that AI Bridge later recognizes as complete. This intentionally measures extension-observed prompt-to-response time, including network/browser/provider delivery, while excluding artifact-download time and AI Bridge's post-response file capture.
 
-Provider-family serialization does **not** merge side state. Agents sharing a provider remain independent logical viewpoints.
+- Each AI card shows a live stopwatch while that AI has an outstanding prompt.
+- Completed response transcript entries permanently store the round number and elapsed duration.
+- Parallel/Compete/Review modes keep three independent clocks.
+- Direct Mesh handoffs start a new clock only for the routed recipient.
+- Resend starts a new numbered round.
+- Active start timestamps are persisted so service-worker suspension does not reset the clock.
 
-## Queue status and privacy
 
-Same-provider queue telemetry is ephemeral service-worker memory only. It is not written to local, sync, or Drive storage.
 
-The extension-page UI may display safe operational data such as:
+## 1.11.3 persistent Vault + download hardening
 
-- logical side;
-- provider family;
-- `Sending` / `Queued` state;
-- relative queue position (`Queued #2`);
-- approximate wait duration;
-- aggregate completion/rejection counters.
-
-Public telemetry/UI must never expose:
-
-- raw Chrome tab IDs;
-- provenance IDs;
-- internal thread keys;
-- full provider URLs;
-- query strings or URL fragments.
-
-Queue badges use `aria-live="polite"` and reuse the existing Health/Adaptive refresh cadence rather than creating another independent polling timer.
-
-## Provider Health
-
-Provider Health continuously evaluates active bindings without mutating routing.
-
-Relevant states include:
-
-- `READY`
-- `GENERATING`
-- `UNASSIGNED`
-- `MISSING_TAB`
-- `UNSUPPORTED`
-- `UNREACHABLE`
-- `DUPLICATE_TAB`
-- `DUPLICATE_THREAD`
-
-Blocking binding faults disable Start. The background dispatch path revalidates bindings again immediately before provider send, so UI manipulation cannot bypass the binding policy.
-
-## Pause, Resume, Stop, resend, and recovery
-
-Global **Pause** pauses orchestration/watchdog scheduling. It currently does **not** retroactively cancel provider work that was already accepted before the pause.
-
-**Resume** continues orchestration without blanket-resetting per-side generation or provenance maps.
-
-**Stop** ends the session-level run according to the existing runtime controls.
-
-**Resend/replacement** is side-specific. Replacing Agent A does not reset or stop Agent D/E merely because they share the same provider family.
-
-Automatic stuck recovery is also side-specific and uses the live A–E roster. Recovery of one side does not blanket-clear sibling same-provider state.
-
-Service-worker restart does **not** restore or replay queued sends. Queue state is intentionally ephemeral; the next action must pass fresh binding and provenance validation.
-
-## Team configuration
-
-Each session has four instruction layers:
-
-1. **Assigned job** — role-specific responsibility for each active AI.
-2. **Team rules** — standing rules that bind all team members.
-3. **Primary objective** — the task the team is solving now.
-4. **Working rules** — AI Bridge's built-in coordination protocol.
-
-Team rules are inserted after the team roster and before the built-in working rules. **Apply to all members** updates a live session without requiring Stop/Start.
-
-Cloud/sync settings include the active agent count and A–E job configuration. Live tab IDs, transcripts, generation IDs, queue state, and viewpoint provenance are never synced.
-
-## Work modes
-
-All work modes use the currently selected live sides rather than assuming a fixed three-agent roster.
-
-### Relay
-
-Sequential through the active side order (for example `A → B → C → D → E`). A cycle completes after every selected side has participated once.
-
-### Collaborate
-
-Sequential like Relay, with each turn revising one shared deliverable. A cycle completes after every selected side has participated.
-
-### Compete
-
-All selected agents start the primary pass independently with the same objective. The cycle completes after the whole selected batch submits.
-
-### Parallel Independent
-
-All selected agents start simultaneously with their own assigned jobs. The cycle completes after the selected batch finishes.
-
-### Peer Review
-
-Phase 1: selected agents produce independent primary responses. Phase 2: each reviews the other selected primaries. The cycle completes after the full primary + critique pass.
-
-### Direct Mesh
-
-One agent at a time. The responding agent may choose the next active teammate with a final-line `SEND TO:` command. A cycle completes once every selected side has participated at least once.
-
-## Dashboard
-
-AI Bridge includes Classic, Studio, and Focus workspace layouts. **Studio is the default for new installs.** Dynamic A–E cards are shown or hidden according to the selected agent count.
-
-Core controls include:
-
-- agent count and A–E tab bindings;
-- assigned jobs and Team rules;
-- work strategy and Main AI/start side;
-- primary objective;
-- Max team cycles;
-- recovery-summary interval and stuck timeout;
-- Start / Pause / Resume / Stop / Resend;
-- fresh chats and manual relay;
-- human interjection;
-- Provider Health and Adaptive Selector status;
-- same-provider queue badges;
-- Shared Vault and file relay;
-- reusable history;
-- Total / Current timers per active side;
-- Settings for layout, theme, sync/login, and GitHub updates.
-
-Same-provider cards may show a sanitized conversation pathname badge when needed to distinguish viewpoints. Query/hash data is not displayed.
-
-## Account & sync (optional)
-
-Login is never required. Chrome Sync works without Google.
-
-A linked Google account optionally stores the same sanitized settings copy in Drive `appDataFolder` as `ai-bridge-settings.json`. OAuth access tokens remain session-only and are never synced or stored in Drive.
-
-For unpacked builds that use a user-supplied Google Web OAuth client, AI Bridge generates a **cryptographically random** per-request CSRF `state`, stores the pending value only in `chrome.storage.session`, validates the returned value before accepting a token, and expires it after 10 minutes. OAuth access tokens remain session-only.
-
-Synced configuration may include:
-
-- theme;
-- dashboard layout (Studio / Classic);
-- pane width;
-- work strategy;
-- Main AI/start-side preference;
-- agent count;
-- A–E jobs;
-- turn/delay/team-cycle defaults;
-- recovery-summary interval;
-- stuck timeout;
-- fresh-chat preference;
-- Team rules;
-- reusable job/command/Team-rule history.
-
-Never synced:
-
-- transcripts;
-- Vault binaries;
-- uploaded source files;
-- raw tab IDs;
-- OAuth tokens or OAuth client IDs;
-- live session state;
-- human answers;
-- recovery checkpoints;
-- generation IDs;
-- viewpoint provenance/thread identity;
-- queue telemetry/state.
-
-## Security model highlights
-
-AI Bridge assumes provider DOM and external content may be hostile.
-
-Important protections include:
-
-- trusted-extension-context authorization on privileged message endpoints;
-- exact trusted HTTPS provider-host validation;
-- generation-ID matching on completion;
-- viewpoint provenance stamping and dispatch-time identity revalidation;
-- same-family send serialization;
-- stale-response rejection;
-- structural wrapping of peer/file/vault data as untrusted evidence;
-- HTTPS-only artifact/update fetching with redirect re-validation;
-- OAuth CSRF `state` validation and session-only token storage;
-- `chrome.power.requestKeepAwake("system")` during active orchestration, released when the run no longer needs keep-awake;
-- locked `chrome.storage` access for trusted extension contexts;
-- fail-closed queue/tab/thread behavior.
-
-## GitHub updates
-
-Update URLs are hardcoded to this repository:
-
-- `https://raw.githubusercontent.com/drkevorkian/AI_Bridge/main/manifest.json`
-- `https://codeload.github.com/drkevorkian/AI_Bridge/zip/refs/heads/main`
-
-Fetches use HTTPS, reject redirects where required, and revalidate the destination. Daily update checks are optional and never auto-install.
-
-## Testing
-
-Command-line tests live in `tests/`.
-
-Run the complete portable suite with:
-
-```text
-node tests/run-all.mjs
-```
-
-The regression runner syntax-checks JS/MJS files and automatically runs top-level regression files. GitHub Actions executes the suite on Ubuntu, Windows, and macOS. A Chromium MV3 integration job also loads the unpacked extension and exercises real provider messaging paths.
-
-Recent viewpoint regressions cover:
-
-- dynamic 1–5 agent capability/routing/UI behavior;
-- same-provider tab/thread policy;
-- queue serialization, telemetry, and privacy;
-- queued-navigation TOCTOU protection;
-- queued tab closure cancellation;
-- active-send failure cleanup;
-- stale/superseded completion rejection;
-- same-provider resend/replacement isolation;
-- global lifecycle and side-specific recovery isolation.
-
-## Current release — 1.17.1
-
-Highlights:
-
-- dynamic 1–5 logical agent roster (A–E);
-- Provider Health and Adaptive Selector integration;
-- same-provider multi-tab viewpoint mode with distinct-tab/distinct-thread enforcement;
-- sanitized thread badges and Start blocking for conflicts;
-- same-family serialization and queue observability;
-- dispatch-time conversation identity pinning/revalidation;
-- immediate queued-tab-close cancellation;
-- active-send failure provenance/generation cleanup;
-- completion-side stale/superseded generation hardening;
-- side-isolated resend/replacement and recovery regressions;
-- cross-platform Node regression plus Chromium MV3 integration coverage.
-
-For deeper architecture and security details, see [VIEWPOINT_MODE.md](VIEWPOINT_MODE.md).
-
-Older release history remains available in the Git history and tags.
+- `chrome.storage.local` + `unlimitedStorage` remains the durable backing store for AI-generated artifact bytes. Starting a new Bridge session no longer erases the Vault.
+- Session routing now tracks `activeArtifactIds` separately, so files from an older session stay downloadable without being silently re-attached to a new session.
+- Shared Vault rows have a **Download** action backed by the Chrome downloads API, plus an explicit **Clear vault** action.
+- Artifact discovery now scans file/download buttons and data-URL controls as well as ordinary `<a href>` links.
+- HTTP(S) artifacts that fail in page context because of CORS are retried by the extension service worker on approved provider/CDN hosts.
+- Artifact capture errors are logged instead of disappearing silently, making provider DOM/download regressions debuggable.

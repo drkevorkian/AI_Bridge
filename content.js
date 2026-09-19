@@ -1,6 +1,6 @@
 (() => {
-  if (window.__AI_BRIDGE_LOADED_V114__) return;
-  window.__AI_BRIDGE_LOADED_V114__ = true;
+  if (window.__AI_BRIDGE_LOADED_V113__) return;
+  window.__AI_BRIDGE_LOADED_V113__ = true;
 
   const host = location.hostname;
   let lastObservedText = "";
@@ -8,8 +8,6 @@
   let lastReportedText = "";
   let lastReportedSignature = "";
   let pendingSend = false;
-  let currentGenerationId = "";
-  const responseMonitorInFlight = new Set();
   const MAX_ARTIFACTS_PER_RESPONSE = 8;
   const MAX_ARTIFACT_FILE_BYTES = 12 * 1024 * 1024;
   const MAX_ARTIFACT_TOTAL_BYTES = 24 * 1024 * 1024;
@@ -30,7 +28,6 @@
       ],
       sendSelectors: [
         "button[data-testid='send-button']",
-        "button[aria-label='Send prompt']",
         "button[aria-label*='Send']",
         "button[aria-label*='send']"
       ],
@@ -50,26 +47,16 @@
     },
     grok: {
       matches: () => host === "grok.com",
-      inputSelectors: [
-        "textarea[placeholder*='Ask']",
-        "div[contenteditable='true'][aria-label*='Grok']",
-        "textarea",
-        "div[contenteditable='true']"
-      ],
-      sendSelectors: ["button[aria-label='Send message']", "button[aria-label*='Send']", "button[type='submit']"],
-      responseSelectors: ["[data-testid='message-text']", "article", "div[class*='message']"],
+      inputSelectors: ["textarea", "div[contenteditable='true']"],
+      sendSelectors: ["button[aria-label*='Send']", "button[type='submit']"],
+      responseSelectors: ["article", "div[class*='message']"],
       stopSelectors: ["button[aria-label*='Stop']", "button[title*='Stop']"],
       fileInputSelectors: ["input[type='file']"],
       uploadButtonSelectors: ["button[aria-label*='Attach']", "button[aria-label*='Upload']", "button[title*='Attach']"]
     },
     claude: {
       matches: () => host === "claude.ai",
-      inputSelectors: [
-        "div[contenteditable='true'][aria-label*='Claude']",
-        "div[contenteditable='true'].ProseMirror",
-        "div[contenteditable='true']",
-        "textarea"
-      ],
+      inputSelectors: ["div[contenteditable='true']", "textarea"],
       sendSelectors: ["button[aria-label*='Send']", "button[type='submit']"],
       responseSelectors: [
         "div[data-is-streaming]",
@@ -82,13 +69,8 @@
     },
     gemini: {
       matches: () => host === "gemini.google.com",
-      inputSelectors: [
-        "rich-textarea div[contenteditable='true']",
-        "div[aria-label*='Prompt'][contenteditable='true']",
-        "div[contenteditable='true']",
-        "textarea"
-      ],
-      sendSelectors: ["button.send-button", "button[aria-label*='Send']"],
+      inputSelectors: ["div[contenteditable='true']", "textarea"],
+      sendSelectors: ["button[aria-label*='Send']", "button.send-button"],
       responseSelectors: [
         "model-response",
         ".model-response",
@@ -108,18 +90,13 @@
     },
     copilot: {
       matches: () => host === "copilot.microsoft.com",
-      inputSelectors: [
-        "textarea#searchbox",
-        "textarea[placeholder*='Ask']",
-        "div[contenteditable='true']",
-        "textarea"
-      ],
+      inputSelectors: ["textarea", "div[contenteditable='true']"],
       sendSelectors: [
         "button[aria-label*='Submit']",
         "button[aria-label*='Send']",
         "button[type='submit']"
       ],
-      responseSelectors: ["div[data-content='ai-message']", "cib-message", "div[class*='response']"],
+      responseSelectors: ["div[data-content='ai-message']", "div[class*='response']"],
       stopSelectors: ["button[aria-label*='Stop']"],
       fileInputSelectors: ["input[type='file']"],
       uploadButtonSelectors: ["button[aria-label*='Attach']", "button[aria-label*='Upload']", "button[aria-label*='Add']"]
@@ -129,52 +106,29 @@
   const adapter = Object.values(adapters).find(a => a.matches());
   if (!adapter) return;
 
-  function safeQueryAll(selector, root = document) {
-    try {
-      return [...(root?.querySelectorAll?.(selector) || [])];
-    } catch (_) {
-      return [];
-    }
-  }
-
-  function isVisible(el) {
-    if (!el) return false;
-    try {
-      const r = el.getBoundingClientRect();
-      const s = getComputedStyle(el);
-      return r.width > 0 && r.height > 0 && s.visibility !== "hidden" && s.display !== "none";
-    } catch (_) {
-      return false;
-    }
-  }
-
-  function isAuxiliaryComposerNode(el) {
-    if (!el) return true;
-    return Boolean(el.closest?.("[aria-modal='true'], [role='dialog'], nav, [aria-hidden='true'], .edit-turn-container, [data-testid*='edit']"));
-  }
-
-  function firstVisible(selectors, { preferLowest = false, excludeAuxiliary = false } = {}) {
+  function firstVisible(selectors) {
     for (const selector of selectors) {
-      let nodes = safeQueryAll(selector).filter(isVisible);
-      if (excludeAuxiliary) nodes = nodes.filter(el => !isAuxiliaryComposerNode(el));
-      if (preferLowest && nodes.length > 1) {
-        nodes.sort((a, b) => b.getBoundingClientRect().bottom - a.getBoundingClientRect().bottom);
-      }
-      if (nodes.length) return nodes[0];
+      const nodes = [...document.querySelectorAll(selector)];
+      const node = nodes.find(el => {
+        const r = el.getBoundingClientRect();
+        const s = getComputedStyle(el);
+        return r.width > 0 && r.height > 0 && s.visibility !== "hidden" && s.display !== "none";
+      });
+      if (node) return node;
     }
     return null;
   }
 
   function allVisible(selectors) {
     for (const selector of selectors) {
-      const nodes = safeQueryAll(selector).filter(isVisible);
+      const nodes = [...document.querySelectorAll(selector)].filter(el => {
+        const r = el.getBoundingClientRect();
+        const s = getComputedStyle(el);
+        return r.width > 0 && r.height > 0 && s.visibility !== "hidden" && s.display !== "none";
+      });
       if (nodes.length) return nodes;
     }
     return [];
-  }
-
-  function promptInput() {
-    return firstVisible(adapter.inputSelectors, { preferLowest: true, excludeAuxiliary: true });
   }
 
   function setNativeValue(el, text) {
@@ -220,17 +174,17 @@
   }
 
   async function findUploadInput() {
-    let input = firstVisible(adapter.fileInputSelectors || ["input[type='file']"], { preferLowest: true, excludeAuxiliary: true })
+    let input = firstVisible(adapter.fileInputSelectors || ["input[type='file']"])
       || document.querySelector((adapter.fileInputSelectors || ["input[type='file']"]).join(","));
     if (input) return input;
 
-    const trigger = firstVisible(adapter.uploadButtonSelectors || [], { preferLowest: true, excludeAuxiliary: true });
+    const trigger = firstVisible(adapter.uploadButtonSelectors || []);
     if (trigger) {
       trigger.click();
       for (let i = 0; i < 12; i++) {
         await sleep(150);
         input = document.querySelector((adapter.fileInputSelectors || ["input[type='file']"]).join(","));
-        if (input && !isAuxiliaryComposerNode(input)) return input;
+        if (input) return input;
       }
     }
     return null;
@@ -270,12 +224,11 @@
   }
 
   function visibleNewChatControl() {
-    const candidates = safeQueryAll("button, a").filter(isVisible);
+    const candidates = [...document.querySelectorAll("button, a")];
     return candidates.find(el => {
-      // Navigation/header controls are valid here; rendered model content is not.
-      if (el.closest?.("[data-message-author-role], [data-message-id], article, model-response, .model-response, [data-content='ai-message'], [role='dialog']")) {
-        return false;
-      }
+      const rect = el.getBoundingClientRect();
+      const style = getComputedStyle(el);
+      if (rect.width <= 0 || rect.height <= 0 || style.visibility === "hidden" || style.display === "none") return false;
       const label = [
         el.getAttribute("aria-label"),
         el.getAttribute("title"),
@@ -288,52 +241,44 @@
   async function openNewConversation() {
     const control = visibleNewChatControl();
     if (!control) return { clicked: false };
-    const before = location.href;
     control.click();
     await sleep(700);
-    const input = promptInput();
-    return { clicked: true, navigationObserved: location.href !== before || Boolean(input) };
+    return { clicked: true };
   }
 
-  async function sendPrompt(text, artifacts = [], generationId = "") {
-    currentGenerationId = String(generationId || "");
+  async function sendPrompt(text, artifacts = []) {
     lastReportedText = "";
     lastReportedSignature = "";
-    const input = promptInput();
+    const input = firstVisible(adapter.inputSelectors);
     if (!input) throw new Error("Could not find the prompt box on this page.");
 
     pendingSend = true;
-    try {
-      const uploadedCount = await uploadArtifacts(artifacts);
-      setNativeValue(input, text);
-      await sleep(uploadedCount ? 650 : 300);
+    const uploadedCount = await uploadArtifacts(artifacts);
+    setNativeValue(input, text);
+    await sleep(uploadedCount ? 650 : 300);
 
-      const button = firstVisible(adapter.sendSelectors, { preferLowest: true, excludeAuxiliary: true });
-      if (button && !button.disabled) {
-        button.click();
-      } else {
-        input.dispatchEvent(new KeyboardEvent("keydown", {
-          key: "Enter",
-          code: "Enter",
-          bubbles: true,
-          cancelable: true
-        }));
-        input.dispatchEvent(new KeyboardEvent("keyup", {
-          key: "Enter",
-          code: "Enter",
-          bubbles: true,
-          cancelable: true
-        }));
-      }
-
-      lastObservedText = "";
-      lastChangeAt = Date.now();
-      setTimeout(() => { pendingSend = false; }, uploadedCount ? 2200 : 1200);
-      return uploadedCount;
-    } catch (error) {
-      pendingSend = false;
-      throw error;
+    const button = firstVisible(adapter.sendSelectors);
+    if (button && !button.disabled) {
+      button.click();
+    } else {
+      input.dispatchEvent(new KeyboardEvent("keydown", {
+        key: "Enter",
+        code: "Enter",
+        bubbles: true,
+        cancelable: true
+      }));
+      input.dispatchEvent(new KeyboardEvent("keyup", {
+        key: "Enter",
+        code: "Enter",
+        bubbles: true,
+        cancelable: true
+      }));
     }
+
+    lastObservedText = "";
+    lastChangeAt = Date.now();
+    setTimeout(() => { pendingSend = false; }, uploadedCount ? 2200 : 1200);
+    return uploadedCount;
   }
 
   function rawNodeText(node) {
@@ -345,6 +290,8 @@
 
   function cleanResponseText(text) {
     let value = String(text || "").replace(/\u00a0/g, " ").replace(/\r/g, "").trim();
+    // Provider accessibility headings can be included in outer-container innerText.
+    // They are labels, not the assistant's answer.
     value = value.replace(/^(?:Gemini|ChatGPT|Claude|Grok|Copilot)\s+(?:said|says)\s*[:：]?\s*(?:\n+|$)/i, "").trim();
     return value;
   }
@@ -367,7 +314,7 @@
     const candidates = [];
     const seen = new Set();
     for (const selector of selectors) {
-      for (const candidate of safeQueryAll(selector, node)) {
+      for (const candidate of node.querySelectorAll?.(selector) || []) {
         if (seen.has(candidate)) continue;
         seen.add(candidate);
         const text = cleanResponseText(rawNodeText(candidate));
@@ -376,12 +323,19 @@
     }
     const outer = cleanResponseText(rawNodeText(node));
     if (outer) candidates.push(outer);
+    // The real answer is normally the richest text block. This avoids Gemini's
+    // short accessibility header such as "Gemini said" winning the scrape.
     return candidates.sort((a, b) => b.length - a.length)[0] || "";
   }
 
   function latestResponseNode() {
     if (host === "gemini.google.com") {
-      const models = safeQueryAll("model-response, .model-response, [data-test-id='model-response']").filter(isVisible);
+      const models = [...document.querySelectorAll("model-response, .model-response, [data-test-id='model-response']")]
+        .filter(el => {
+          const r = el.getBoundingClientRect();
+          const style = getComputedStyle(el);
+          return r.width > 0 && r.height > 0 && style.visibility !== "hidden" && style.display !== "none";
+        });
       if (models.length) return models[models.length - 1];
     }
 
@@ -408,6 +362,8 @@
     const primary = node?.closest?.("[data-message-author-role='assistant'], [data-message-id], article, model-response") || node;
     if (!primary) return node;
     if (primary.querySelector?.(DOWNLOAD_CANDIDATE_SELECTOR)) return primary;
+    // Some providers render a file card as a sibling of the textual response.
+    // Look one message-wrapper level up, but never scan the whole conversation.
     const parent = primary.parentElement;
     if (parent && parent !== document.body && parent.querySelector?.(DOWNLOAD_CANDIDATE_SELECTOR)) return parent;
     return primary;
@@ -493,7 +449,7 @@
   }
 
   function downloadCandidates(root) {
-    const nodes = safeQueryAll(DOWNLOAD_CANDIDATE_SELECTOR, root);
+    const nodes = [...(root?.querySelectorAll?.(DOWNLOAD_CANDIDATE_SELECTOR) || [])];
     const out = [];
     const seen = new Set();
     for (const node of nodes) {
@@ -533,74 +489,26 @@
     return btoa(binary);
   }
 
-  function authenticatedLocalArtifactAllowed(rawUrl) {
-    try {
-      if (!(host === "chatgpt.com" || host === "chat.openai.com")) return false;
-      const url = new URL(String(rawUrl || ""), location.href);
-      if (url.protocol !== "https:" || url.origin !== location.origin || url.username || url.password) return false;
-      const conversationMatch = location.pathname.match(/(?:^|\/)c\/([^/?#]+)/);
-      if (!conversationMatch?.[1]) return false;
-      const expected = `/backend-api/conversation/${encodeURIComponent(conversationMatch[1])}/interpreter/download`;
-      return url.pathname === expected
-        && Boolean(url.searchParams.get("message_id"))
-        && String(url.searchParams.get("sandbox_path") || "").startsWith("/mnt/data/");
-    } catch (_) {
-      return false;
-    }
-  }
-
-  async function readArtifactBlobBounded(response) {
-    const declared = Number(response.headers.get("content-length") || 0);
-    if (Number.isFinite(declared) && declared > MAX_ARTIFACT_FILE_BYTES) throw new Error("file too large");
-    if (!response.body?.getReader) {
-      const blob = await response.blob();
-      if (blob.size <= 0 || blob.size > MAX_ARTIFACT_FILE_BYTES) throw new Error("file too large or empty");
-      return blob;
-    }
-    const reader = response.body.getReader();
-    const chunks = [];
-    let total = 0;
-    try {
-      while (true) {
-        const { value, done } = await reader.read();
-        if (done) break;
-        const chunk = value instanceof Uint8Array ? value : new Uint8Array(value || 0);
-        total += chunk.byteLength;
-        if (total > MAX_ARTIFACT_FILE_BYTES) {
-          try { await reader.cancel("Artifact exceeds relay limit"); } catch (_) {}
-          throw new Error("file too large");
-        }
-        if (chunk.byteLength) chunks.push(chunk);
-      }
-    } finally {
-      try { reader.releaseLock(); } catch (_) {}
-    }
-    if (!total) throw new Error("file empty");
-    return new Blob(chunks, { type: response.headers.get("content-type") || "application/octet-stream" });
-  }
-
-  async function fetchArtifact(node, index, options = {}) {
+  async function fetchArtifact(node, index) {
     const url = artifactUrl(node);
     if (!url) throw new Error("download control has no resolvable URL");
     const name = artifactName(node, url, index);
-    const candidateSignature = `${url}|${name}`.slice(0, 2048);
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), ARTIFACT_FETCH_TIMEOUT_MS);
     let localError = null;
     try {
       try {
-        const response = await fetch(url, {
-          credentials: authenticatedLocalArtifactAllowed(url) ? "include" : "omit",
-          signal: controller.signal
-        });
+        const response = await fetch(url, { credentials: "include", signal: controller.signal });
         if (!response.ok) throw new Error(`HTTP ${response.status}`);
-        const blob = await readArtifactBlobBounded(response);
+        const declared = Number(response.headers.get("content-length") || 0);
+        if (declared > MAX_ARTIFACT_FILE_BYTES) throw new Error("file too large");
+        const blob = await response.blob();
+        if (blob.size <= 0 || blob.size > MAX_ARTIFACT_FILE_BYTES) throw new Error("file too large or empty");
         return {
           name,
           mime: blob.type || response.headers.get("content-type") || "application/octet-stream",
           size: blob.size,
-          dataBase64: await blobToBase64(blob),
-          sourceUrl: url
+          dataBase64: await blobToBase64(blob)
         };
       } catch (err) {
         localError = err;
@@ -609,19 +517,16 @@
       clearTimeout(timer);
     }
 
-    if (/^https:/i.test(url)) {
+    // Page-context fetch can be blocked by CORS even though the extension has
+    // permission to retrieve the file. Retry HTTP(S) downloads in the service worker.
+    if (/^https?:/i.test(url)) {
       const remote = await chrome.runtime.sendMessage({
         type: "AI_BRIDGE_FETCH_ARTIFACT",
         url,
         name,
-        mime: "",
-        observed: true,
-        generationId: currentGenerationId,
-        pageUrl: location.href,
-        manualCapture: options.manualCapture === true,
-        candidateSignature
+        mime: ""
       });
-      if (remote?.ok && remote.artifact?.dataBase64) return { ...remote.artifact, sourceUrl: url };
+      if (remote?.ok && remote.artifact?.dataBase64) return remote.artifact;
       throw new Error(remote?.error || localError?.message || "artifact fetch failed");
     }
     throw localError || new Error("artifact fetch failed");
@@ -636,32 +541,17 @@
     }).join("||");
   }
 
-  function artifactIdentity(artifact) {
-    const data = String(artifact?.dataBase64 || "");
-    return [
-      String(artifact?.sourceUrl || ""),
-      String(artifact?.name || ""),
-      Number(artifact?.size) || 0,
-      data.length,
-      data.slice(0, 48),
-      data.slice(-48)
-    ].join("\u0000");
-  }
-
-  async function captureArtifacts(node, options = {}) {
+  async function captureArtifacts(node) {
     const root = artifactRoot(node);
     const candidates = downloadCandidates(root);
     const artifacts = [];
-    const identities = new Set();
     const errors = [];
     let total = 0;
     for (let i = 0; i < candidates.length; i++) {
       try {
-        const artifact = await fetchArtifact(candidates[i], i, options);
+        const artifact = await fetchArtifact(candidates[i], i);
         if (!artifact) continue;
-        const identity = artifactIdentity(artifact);
-        if (identities.has(identity)) continue;
-        identities.add(identity);
+        if (artifacts.some(existing => existing.name === artifact.name && existing.size === artifact.size)) continue;
         total += artifact.size;
         if (total > MAX_ARTIFACT_TOTAL_BYTES) {
           errors.push("combined artifact relay limit reached");
@@ -690,15 +580,6 @@
     return false;
   }
 
-  function responseDeliveryAccepted(result) {
-    if (result && typeof result === "object" && result.ok === true) return true;
-    if (!result || typeof result !== "object" || result.ok !== false) return false;
-    return Boolean(
-      result.ignored || result.superseded || result.stale || result.staleDelivery ||
-      result.cancelled || result.expired || result.duplicate || result.stopped
-    );
-  }
-
   async function monitor() {
     const node = latestResponseNode();
     const text = latestResponseText(node);
@@ -720,95 +601,30 @@
     if (signature === lastReportedSignature || (text === lastReportedText && !linkSignature)) return;
 
     const completedAt = Number(lastChangeAt) || Date.now();
-    const monitorKey = `${currentGenerationId}\u0000${completedAt}\u0000${signature}`;
-    if (responseMonitorInFlight.has(monitorKey)) return;
-    responseMonitorInFlight.add(monitorKey);
-
+    const captured = await captureArtifacts(node);
+    lastReportedText = text;
+    lastReportedSignature = signature;
     try {
-      const captured = await captureArtifacts(node);
-      const result = await chrome.runtime.sendMessage({
+      await chrome.runtime.sendMessage({
         type: "AI_BRIDGE_RESPONSE",
         text,
         artifacts: captured.artifacts,
         artifactDiagnostics: { candidateCount: captured.candidateCount, errors: captured.errors },
-        completedAt,
-        generationId: currentGenerationId
+        completedAt
       });
-      if (!responseDeliveryAccepted(result)) {
-        throw new Error(result?.error || "Coordinator did not accept the completed response.");
-      }
-      lastReportedText = text;
-      lastReportedSignature = signature;
-    } catch (_) {
-      // Leave suppression state untouched so a later monitor tick can retry.
-    } finally {
-      responseMonitorInFlight.delete(monitorKey);
-    }
+    } catch (_) {}
   }
 
+  const observer = new MutationObserver(() => {});
+  observer.observe(document.documentElement, { childList: true, subtree: true, characterData: true });
   setInterval(monitor, 650);
-
-  function stopGeneration() {
-    const button = firstVisible(adapter.stopSelectors || [], { preferLowest: true });
-    if (button && !button.disabled) {
-      button.click();
-      return { stopped: true };
-    }
-    return { stopped: false };
-  }
-
-  function generationStatus() {
-    const node = latestResponseNode();
-    return {
-      ok: true,
-      generating: Boolean(pendingSend || generationAppearsActive(node)),
-      lastChangeAt: Number(lastChangeAt) || 0,
-      lastObservedChars: String(lastObservedText || "").length,
-      pendingSend: Boolean(pendingSend),
-      generationId: currentGenerationId
-    };
-  }
-
-  async function captureLatestVisibleReply() {
-    const node = latestResponseNode();
-    const text = latestResponseText(node);
-    if (!text || isResponseStub(text)) {
-      throw new Error("No assistant reply is visible on this page yet.");
-    }
-    const captured = await captureArtifacts(node, { manualCapture: true });
-    return {
-      ok: true,
-      text,
-      artifacts: captured.artifacts,
-      artifactDiagnostics: { candidateCount: captured.candidateCount, errors: captured.errors },
-      completedAt: Number(lastChangeAt) || Date.now(),
-      generationId: currentGenerationId,
-      generating: Boolean(pendingSend || generationAppearsActive(node))
-    };
-  }
 
   chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
     if (msg.type === "AI_BRIDGE_PING") {
-      sendResponse({ ok: true, host: location.hostname, ready: true, version: "1.14.0" });
+      sendResponse({ ok: true, host: location.hostname, ready: true, version: "1.11.3" });
       return false;
     }
 
-    if (msg.type === "AI_BRIDGE_GENERATION_STATUS") {
-      sendResponse(generationStatus());
-      return false;
-    }
-
-    if (msg.type === "AI_BRIDGE_CAPTURE_LATEST") {
-      captureLatestVisibleReply()
-        .then(result => sendResponse(result))
-        .catch(err => sendResponse({ ok: false, error: err.message }));
-      return true;
-    }
-
-    if (msg.type === "AI_BRIDGE_STOP_GENERATION") {
-      sendResponse({ ok: true, ...stopGeneration() });
-      return false;
-    }
 
     if (msg.type === "AI_BRIDGE_NEW_CHAT") {
       openNewConversation()
@@ -818,8 +634,8 @@
     }
 
     if (msg.type === "AI_BRIDGE_SEND") {
-      sendPrompt(String(msg.text || ""), Array.isArray(msg.artifacts) ? msg.artifacts : [], msg.generationId)
-        .then(uploadedCount => sendResponse({ ok: true, uploadedCount, generationId: currentGenerationId }))
+      sendPrompt(String(msg.text || ""), Array.isArray(msg.artifacts) ? msg.artifacts : [])
+        .then(uploadedCount => sendResponse({ ok: true, uploadedCount }))
         .catch(err => sendResponse({ ok: false, error: err.message }));
       return true;
     }
