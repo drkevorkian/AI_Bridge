@@ -8,7 +8,7 @@ const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const read = relative => fs.readFileSync(path.join(root, relative), "utf8");
 
 const manifest = JSON.parse(read("manifest.json"));
-assert.equal(manifest.version, "1.17.1");
+assert.equal(manifest.version, "1.18.0");
 assert.ok(Number(manifest.minimum_chrome_version) >= 106);
 assert.equal(
   manifest.content_security_policy?.extension_pages,
