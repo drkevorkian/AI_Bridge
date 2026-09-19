@@ -1,0 +1,104 @@
+<!doctype html>
+<html lang="en" data-theme="blizzard">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>AI Bridge Settings</title>
+  <link rel="stylesheet" href="settings.css">
+</head>
+<body>
+  <main class="settings-shell">
+    <header class="settings-header">
+      <div>
+        <div class="eyebrow">AI BRIDGE</div>
+        <h1>Settings</h1>
+        <p>Appearance, sync, provider health, updates, and runtime power controls. These settings are isolated from the relay engine.</p>
+      </div>
+      <button id="openDashboard" class="primary" type="button">Open Dashboard</button>
+    </header>
+
+    <section class="settings-card">
+      <div class="section-heading"><span>Appearance</span><span id="installedVersion" class="muted"></span></div>
+      <div class="grid two">
+        <label>Theme
+          <select id="settingsTheme">
+            <option value="blizzard">Blizzard Blue</option>
+            <option value="ghostwhite">Ghost White</option>
+            <option value="midnight">Midnight</option>
+            <option value="slate">Slate</option>
+            <option value="light">Light</option>
+            <option value="solarized">Solarized Light</option>
+            <option value="ocean">Ocean</option>
+            <option value="terminal">Terminal</option>
+          </select>
+        </label>
+        <label>Dashboard layout
+          <select id="settingsLayout">
+            <option value="studio">Studio — transcript first</option>
+            <option value="classic">Classic — balanced workspace</option>
+            <option value="focus">Focus — maximum transcript space</option>
+          </select>
+        </label>
+      </div>
+      <p class="help">Theme and layout apply immediately to every AI Bridge page on this Chrome profile.</p>
+    </section>
+
+    <section class="settings-card">
+      <div class="section-heading"><span>Portable settings</span><span id="syncStatus" class="muted">Local only</span></div>
+      <p class="help">Push/Pull syncs appearance and reusable team preferences. It never syncs transcripts, Vault files, tab IDs, access tokens, or a live session.</p>
+      <div class="actions">
+        <button id="syncPush" type="button">Push to Chrome Sync</button>
+        <button id="syncPull" type="button">Pull from Chrome Sync</button>
+      </div>
+      <div id="syncNotice" class="notice hidden"></div>
+    </section>
+
+    <section class="settings-card">
+      <div class="section-heading"><span>Google Drive app data</span><span id="googleStatus" class="muted">Not linked</span></div>
+      <p class="help">Optional second copy in your private Google Drive <code>appDataFolder</code>. Uses OAuth PKCE; the client ID stays local and tokens are kept in Chrome session storage.</p>
+      <label>Extension ID
+        <div class="copy-row"><code id="extensionId">...</code><button id="copyExtensionId" type="button">Copy</button></div>
+      </label>
+      <label>Authorized redirect URI
+        <div class="copy-row"><code id="redirectUri">...</code><button id="copyRedirectUri" type="button">Copy</button></div>
+      </label>
+      <label>OAuth client ID
+        <input id="googleClientId" type="text" autocomplete="off" spellcheck="false" placeholder="1234567890-abc.apps.googleusercontent.com">
+      </label>
+      <div class="actions">
+        <button id="saveGoogleClientId" type="button">Save client ID</button>
+        <button id="googleLink" type="button">Link Google</button>
+        <button id="googleUnlink" type="button">Unlink</button>
+        <button id="drivePush" type="button">Push to Drive</button>
+        <button id="drivePull" type="button">Pull from Drive</button>
+      </div>
+      <div id="googleNotice" class="notice hidden"></div>
+    </section>
+
+    <section class="settings-card">
+      <div class="section-heading"><span>Provider Health</span><span id="healthSummary" class="muted">Not checked</span></div>
+      <p class="help">Checks the currently open supported AI tabs and verifies the AI Bridge content script responds. This is informational and does not alter relay state.</p>
+      <button id="refreshHealth" type="button">Refresh provider health</button>
+      <div id="healthList" class="health-list"></div>
+    </section>
+
+    <section class="settings-card">
+      <div class="section-heading"><span>Runtime power</span><span id="powerStatus" class="muted">Released</span></div>
+      <label class="check-line"><input id="keepAwake" type="checkbox"> Keep the system awake while AI Bridge is enabled</label>
+      <p class="help">Uses Chrome's power API. Turning it off immediately releases the keep-awake request.</p>
+    </section>
+
+    <section class="settings-card">
+      <div class="section-heading"><span>Updates</span><span id="updateVersion" class="muted"></span></div>
+      <p class="help">Checks this repository's <code>main/manifest.json</code>. AI Bridge never overwrites an unpacked extension automatically.</p>
+      <div id="updateStatus" class="notice">Not checked yet.</div>
+      <div class="actions">
+        <button id="checkUpdates" type="button">Check for updates</button>
+        <button id="downloadUpdate" type="button" disabled>Download latest ZIP</button>
+      </div>
+      <label class="check-line"><input id="autoCheckUpdates" type="checkbox"> Check once a day and notify when a newer version exists</label>
+    </section>
+  </main>
+  <script src="settings.js"></script>
+</body>
+</html>
