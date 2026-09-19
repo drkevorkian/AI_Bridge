@@ -626,6 +626,22 @@
     }
 
 
+    if (msg.type === "AI_BRIDGE_READ_LAST_RESPONSE") {
+      try {
+        const node = latestResponseNode();
+        const text = latestResponseText(node);
+        sendResponse({
+          ok: Boolean(text),
+          text,
+          active: generationAppearsActive(node),
+          host: location.hostname
+        });
+      } catch (err) {
+        sendResponse({ ok: false, error: err.message || String(err) });
+      }
+      return false;
+    }
+
     if (msg.type === "AI_BRIDGE_NEW_CHAT") {
       openNewConversation()
         .then(result => sendResponse({ ok: true, ...result }))
