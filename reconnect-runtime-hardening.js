@@ -7,7 +7,7 @@
 (() => {
   "use strict";
 
-  const EXPECTED_CONTENT_VERSION = "1.17.1";
+  const EXPECTED_CONTENT_VERSION = "1.18.0";
   const PING_ATTEMPTS = 12;
   const PING_DELAY_MS = 250;
   const RELOAD_TIMEOUT_MS = 20000;
