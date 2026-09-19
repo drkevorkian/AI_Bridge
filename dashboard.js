@@ -233,7 +233,7 @@ function setSelectToTab(side, tabId) {
 }
 
 function refreshStartLabels() {
-  for (const side of SIDES) {
+  for (const side of ALL_SIDES) {
     const tab = tabsById.get(selectedTab(side));
     const option = [...$("startSide").options].find(o => o.value === side);
     if (option) option.textContent = `${aiName(tab?.url)} (AI ${side}) — Main`;
@@ -242,13 +242,13 @@ function refreshStartLabels() {
 
 async function loadTabs({ preserve = true } = {}) {
   const previous = {};
-  if (preserve) for (const side of SIDES) previous[side] = selectedTab(side);
+  if (preserve) for (const side of ALL_SIDES) previous[side] = selectedTab(side);
 
   const tabs = await chrome.tabs.query({});
   const candidates = tabs.filter(t => supported.some(x => x.re.test(t.url || "")));
   tabsById = new Map(candidates.map(t => [t.id, t]));
 
-  for (const side of SIDES) {
+  for (const side of ALL_SIDES) {
     const select = $(`tab${side}`);
     select.textContent = "";
     for (const tab of candidates) {
@@ -259,16 +259,21 @@ async function loadTabs({ preserve = true } = {}) {
     }
   }
 
-  for (const [index, side] of SIDES.entries()) {
+  for (const [index, side] of ALL_SIDES.entries()) {
     const desired = previous[side] || latestState?.[`tab${side}`];
     if (!setSelectToTab(side, desired) && candidates[index]) {
       $(`tab${side}`).value = String(candidates[index].id);
     }
   }
 
+  for (const option of $("agentCount").options) {
+    option.disabled = Number(option.value) > candidates.length;
+  }
+  $("agentCountHelp").textContent = `${candidates.length} supported AI tab${candidates.length === 1 ? "" : "s"} currently open. Multiple tabs from the same LLM are allowed and count as separate agents.`;
+
   refreshStartLabels();
-  if (candidates.length < 3) {
-    $("status").textContent = "Open at least three supported AI chat tabs, then click Refresh AI tabs.";
+  if (candidates.length < SIDES.length) {
+    $("status").textContent = `Open at least ${SIDES.length} supported AI tab${SIDES.length === 1 ? "" : "s"}, then click Refresh AI tabs.`;
   }
 }
 
@@ -276,7 +281,8 @@ function hydrateFromState(s) {
   if (hydrated || !s) return;
   hydrated = true;
 
-  for (const side of SIDES) {
+  if (s.sessionActive) setAgentCountUI(s.agentCount);
+  for (const side of ALL_SIDES) {
     setSelectToTab(side, s[`tab${side}`]);
     if (s[`job${side}`]) $(`job${side}`).value = s[`job${side}`];
   }
@@ -812,10 +818,10 @@ function selectedBindings() {
   return data;
 }
 
-function validateThreeTabs() {
+function validateActiveTabs() {
   const ids = SIDES.map(selectedTab);
-  if (ids.some(id => !id)) return "Choose three supported AI tabs.";
-  if (new Set(ids).size !== 3) return "AI A, AI B, and AI C must be three different tabs.";
+  if (ids.some(id => !id)) return `Choose ${SIDES.length} supported AI tab${SIDES.length === 1 ? "" : "s"}.`;
+  if (new Set(ids).size !== ids.length) return "Each logical AI must use a different browser tab. Multiple tabs from the same LLM are allowed.";
   return null;
 }
 
@@ -825,7 +831,7 @@ function validateMaxTurns() {
   const raw = input.value.trim();
   const value = Number(raw);
   const mode = selectedWorkMode();
-  const minTurns = WORK_MODE_INFO[mode]?.minTurns || 1;
+  const minTurns = minimumTurnsForMode(mode);
   const valid = raw !== "" && Number.isInteger(value) && (value === -1 || (value >= minTurns && value <= 10000));
   if (!valid) {
     input.classList.add("validation-error");
@@ -847,7 +853,7 @@ chrome.storage.onChanged.addListener((changes, area) => {
 async function openFreshChats(sides) {
   if (latestState?.sessionActive) return;
   const chosen = Array.isArray(sides) ? sides : SIDES;
-  const tabError = validateThreeTabs();
+  const tabError = validateActiveTabs();
   if (chosen.length === 3 && tabError) {
     $("status").textContent = tabError;
     return;
@@ -902,7 +908,7 @@ $("workMode").addEventListener("change", () => {
 $("maxTurns").addEventListener("input", () => $("maxTurns").classList.remove("validation-error"));
 
 $("start").addEventListener("click", async () => {
-  const tabError = validateThreeTabs();
+  const tabError = validateActiveTabs();
   if (tabError) return $("status").textContent = tabError;
   const turnError = validateMaxTurns();
   if (turnError) return $("status").textContent = turnError;
@@ -941,7 +947,7 @@ $("pause").addEventListener("click", async () => {
 });
 
 $("resume").addEventListener("click", async () => {
-  const tabError = validateThreeTabs();
+  const tabError = validateActiveTabs();
   if (tabError) return $("status").textContent = `${tabError}\nTo resume, bind all three roles to open AI tabs.`;
 
   $("status").textContent = "Restoring saved session…";
