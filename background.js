@@ -2083,8 +2083,6 @@ async function handleCompletedResponse(side, text, { relay = true, artifacts = [
 
 chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   (async () => {
-    await stateReady;
-
     if (msg.type === "AI_BRIDGE_POWER_SET") {
       await aiBridgeApplyKeepAwake(Boolean(msg.enabled));
       sendResponse({ ok: true, enabled: Boolean(msg.enabled) });
@@ -2102,6 +2100,8 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
       sendResponse({ ok: true, tabId: tab.id });
       return;
     }
+
+    await stateReady;
 
     if (msg.type === "AI_BRIDGE_GET_STATE") {
       sendResponse({
