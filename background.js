@@ -1811,8 +1811,9 @@ async function resetChatTab(tabId) {
 
 async function resetSelectedChats(msg, sides = SIDES, { allowActive = false } = {}) {
   if (state.sessionActive && !allowActive) throw new Error("Stop the current bridge session before opening fresh AI chats.");
+  const allowedSides = state.sessionActive ? SIDES : ALL_SIDES;
   const chosen = [...new Set((Array.isArray(sides) ? sides : SIDES).map(side => String(side || "").toUpperCase()))]
-    .filter(side => SIDES.includes(side));
+    .filter(side => allowedSides.includes(side));
   if (!chosen.length) throw new Error("Choose at least one AI role to reset.");
 
   const ids = chosen.map(side => Number(msg?.[`tab${side}`]));
@@ -2157,18 +2158,18 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
       const previousAgentCount = normalizeAgentCount(previousState?.agentCount, DEFAULT_AGENT_COUNT);
       const fresh = cloneDefaultState();
       fresh.agentCount = normalizeAgentCount(msg.agentCount, DEFAULT_AGENT_COUNT);
-      setActiveAgentCount(fresh.agentCount);
+      const requestedSides = ALL_SIDES.slice(0, fresh.agentCount);
       fresh.sessionActive = true;
       fresh.running = false;
       fresh.paused = false;
-      fresh.startSide = SIDES.includes(msg.startSide) ? msg.startSide : "A";
+      fresh.startSide = requestedSides.includes(msg.startSide) ? msg.startSide : requestedSides[0];
       fresh.mainSide = fresh.startSide;
       fresh.pendingMainInterjections = [];
       fresh.workMode = normalizeWorkMode(msg.workMode);
       fresh.workPhase = isBatchWorkMode(fresh.workMode) ? "primary" : (fresh.workMode === "collaborate" ? "collaborate" : (fresh.workMode === "mesh" ? "mesh" : "relay"));
       fresh.currentSide = isBatchWorkMode(fresh.workMode) ? null : fresh.startSide;
       fresh.maxTurns = normalizeMaxTurns(msg.maxTurns);
-      const minimumTurns = minimumTurnsForWorkMode(fresh.workMode);
+      const minimumTurns = minimumTurnsForWorkMode(fresh.workMode, fresh.agentCount);
       if (fresh.maxTurns !== INFINITE_TURNS && fresh.maxTurns < minimumTurns) {
         throw new Error(`${workModeLabel(fresh.workMode)} mode needs at least ${minimumTurns} AI turns to complete one full cycle, or use -1.`);
       }
@@ -2179,7 +2180,7 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
       fresh.sourceFiles = normalizeSourceFiles(msg.sourceFiles);
       fresh.sourceDeliveredBySide = { A: false, B: false, C: false, D: false, E: false };
 
-      for (const side of SIDES) {
+      for (const side of requestedSides) {
         fresh[`tab${side}`] = Number(msg[`tab${side}`]);
         fresh[`label${side}`] = String(msg[`label${side}`] || `AI ${side}`);
         fresh[`job${side}`] = String(msg[`job${side}`] || "").trim();
@@ -2188,6 +2189,7 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
       // Preserve the durable Vault index while starting a clean routing session.
       fresh.relayArtifacts = artifactSummariesFromStore();
       fresh.activeArtifactIds = [];
+      setActiveAgentCount(fresh.agentCount);
       state = fresh;
       try {
         await bindTabsFromMessage(msg);
