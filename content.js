@@ -787,7 +787,7 @@
 
   chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
     if (msg.type === "AI_BRIDGE_PING") {
-      sendResponse({ ok: true, host: location.hostname, ready: true, version: "1.14.0" });
+      sendResponse({ ok: true, host: location.hostname, ready: true, version: "1.18.0" });
       return false;
     }
 
