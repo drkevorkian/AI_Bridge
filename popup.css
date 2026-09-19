@@ -89,3 +89,5 @@ button:focus-visible, select:focus-visible { outline: 2px solid var(--primary-bg
 button.primary { box-shadow: 0 8px 22px color-mix(in srgb, var(--primary-bg) 22%, transparent); }
 :root[data-theme="ghostwhite"] .status { box-shadow: 0 10px 28px rgba(70,82,128,.08); }
 :root[data-theme="terminal"] button, :root[data-theme="terminal"] select, :root[data-theme="terminal"] .status { border-radius: 0; }
+
+#openSettings{margin-top:8px}
