@@ -499,14 +499,15 @@ function refreshStartLabels() {
 
 async function loadTabs({ preserve = true } = {}) {
   const previous = {};
-  if (preserve) for (const side of SIDES) previous[side] = selectedTab(side);
+  if (preserve) for (const side of ALL_SIDES) previous[side] = selectedTab(side);
 
   const tabs = await chrome.tabs.query({});
   const candidates = tabs.filter(t => supported.some(x => x.re.test(t.url || "")));
   tabsById = new Map(candidates.map(t => [t.id, t]));
 
-  for (const side of SIDES) {
+  for (const side of ALL_SIDES) {
     const select = $(`tab${side}`);
+    if (!select) continue;
     select.textContent = "";
     for (const tab of candidates) {
       const opt = document.createElement("option");
@@ -516,16 +517,23 @@ async function loadTabs({ preserve = true } = {}) {
     }
   }
 
-  for (const [index, side] of SIDES.entries()) {
+  for (const [index, side] of ALL_SIDES.entries()) {
     const desired = previous[side] || latestState?.[`tab${side}`];
     if (!setSelectToTab(side, desired) && candidates[index]) {
       $(`tab${side}`).value = String(candidates[index].id);
     }
   }
 
+  for (const option of $("agentCount")?.options || []) {
+    option.disabled = Number(option.value) > candidates.length;
+  }
+  if ($("agentCountHelp")) {
+    $("agentCountHelp").textContent = `${candidates.length} supported AI tab${candidates.length === 1 ? "" : "s"} currently open. Multiple tabs from the same LLM provider are allowed and count as separate agents.`;
+  }
+
   refreshStartLabels();
-  if (candidates.length < 3) {
-    $("status").textContent = "Open at least three supported AI chat tabs, then click Refresh AI tabs.";
+  if (candidates.length < SIDES.length) {
+    $("status").textContent = `Open at least ${SIDES.length} supported AI tab${SIDES.length === 1 ? "" : "s"}, then click Refresh AI tabs.`;
   }
 }
 
@@ -533,7 +541,8 @@ function hydrateFromState(s) {
   if (hydrated || !s) return;
   hydrated = true;
 
-  for (const side of SIDES) {
+  if (s.sessionActive || s.agentCount) setAgentCountUI(s.agentCount || DEFAULT_AGENT_COUNT);
+  for (const side of ALL_SIDES) {
     setSelectToTab(side, s[`tab${side}`]);
     if (s[`job${side}`]) $(`job${side}`).value = s[`job${side}`];
   }
@@ -1123,10 +1132,10 @@ function selectedBindings() {
   return data;
 }
 
-function validateThreeTabs() {
+function validateActiveTabs() {
   const ids = SIDES.map(selectedTab);
-  if (ids.some(id => !id)) return "Choose three supported AI tabs.";
-  if (new Set(ids).size !== 3) return "AI A, AI B, and AI C must be three different tabs.";
+  if (ids.some(id => !id)) return `Choose ${SIDES.length} supported AI tab${SIDES.length === 1 ? "" : "s"}.`;
+  if (new Set(ids).size !== ids.length) return "Each logical AI must use a different browser tab. Multiple tabs from the same LLM provider are allowed.";
   return null;
 }
 
@@ -1210,7 +1219,7 @@ chrome.storage.onChanged.addListener((changes, area) => {
 async function openFreshChats(sides) {
   if (latestState?.sessionActive) return;
   const chosen = Array.isArray(sides) ? sides : SIDES;
-  const tabError = validateThreeTabs();
+  const tabError = validateActiveTabs();
   if (chosen.length === 3 && tabError) {
     $("status").textContent = tabError;
     return;
@@ -1295,7 +1304,7 @@ if ($("freshOnStart")) {
 }
 
 $("start").addEventListener("click", async () => {
-  const tabError = validateThreeTabs();
+  const tabError = validateActiveTabs();
   if (tabError) return $("status").textContent = tabError;
   const turnError = validateMaxCycles();
   if (turnError) return $("status").textContent = turnError;
@@ -1342,7 +1351,7 @@ $("pause").addEventListener("click", async () => {
 });
 
 $("resume").addEventListener("click", async () => {
-  const tabError = validateThreeTabs();
+  const tabError = validateActiveTabs();
   if (tabError) return $("status").textContent = `${tabError}\nTo resume, bind all three roles to open AI tabs.`;
 
   $("status").textContent = "Restoring saved session…";
@@ -1624,9 +1633,12 @@ function collectCloudSettings() {
     stuckTimeoutMinutes: Number($("stuckTimeoutMinutes")?.value),
     delayMs: Number($("delayMs")?.value),
     freshOnStart: Boolean($("freshOnStart")?.checked),
+    agentCount: SIDES.length,
     jobA: $("jobA")?.value || "",
     jobB: $("jobB")?.value || "",
     jobC: $("jobC")?.value || "",
+    jobD: $("jobD")?.value || "",
+    jobE: $("jobE")?.value || "",
     teamRules: $("teamRules")?.value || "",
     history: latestState?.history || { jobs: [], commands: [], rules: [] }
   };
