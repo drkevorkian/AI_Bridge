@@ -54,6 +54,7 @@ const DEFAULT_STATE = {
   jobC: "",
   jobD: "",
   jobE: "",
+  teamRules: "",
 
   currentSide: null,
   startSide: "A",
@@ -85,6 +86,7 @@ const DEFAULT_STATE = {
   roundNumberBySide: { A: 0, B: 0, C: 0, D: 0, E: 0 },
   lastRoundDurationMsBySide: { A: null, B: null, C: null, D: null, E: null },
   lastRoundCompletedAtBySide: { A: null, B: null, C: null, D: null, E: null },
+  totalWorkMsBySide: { A: 0, B: 0, C: 0, D: 0, E: 0 },
 
   awaitingHuman: false,
   pendingHuman: null,
@@ -115,6 +117,7 @@ function cloneDefaultState() {
     roundNumberBySide: { A: 0, B: 0, C: 0, D: 0, E: 0 },
     lastRoundDurationMsBySide: { A: null, B: null, C: null, D: null, E: null },
     lastRoundCompletedAtBySide: { A: null, B: null, C: null, D: null, E: null },
+    totalWorkMsBySide: { A: 0, B: 0, C: 0, D: 0, E: 0 },
     phasePendingSides: [],
     phaseSentSides: [],
     phaseCompletedSides: [],
@@ -876,6 +879,7 @@ async function loadState() {
       roundNumberBySide: { A: 0, B: 0, C: 0, D: 0, E: 0, ...(bridgeState.roundNumberBySide || {}) },
       lastRoundDurationMsBySide: { A: null, B: null, C: null, D: null, E: null, ...(bridgeState.lastRoundDurationMsBySide || {}) },
       lastRoundCompletedAtBySide: { A: null, B: null, C: null, D: null, E: null, ...(bridgeState.lastRoundCompletedAtBySide || {}) },
+      totalWorkMsBySide: { A: 0, B: 0, C: 0, D: 0, E: 0, ...(bridgeState.totalWorkMsBySide || {}) },
       phasePendingSides: Array.isArray(bridgeState.phasePendingSides) ? bridgeState.phasePendingSides.filter(side => SIDES.includes(side)) : [],
       phaseSentSides: Array.isArray(bridgeState.phaseSentSides) ? bridgeState.phaseSentSides.filter(side => SIDES.includes(side)) : [],
       phaseCompletedSides: Array.isArray(bridgeState.phaseCompletedSides) ? bridgeState.phaseCompletedSides.filter(side => SIDES.includes(side)) : [],
@@ -1085,6 +1089,12 @@ function teamContext(side) {
     "",
     "TEAM ROSTER:",
     roster,
+    ...(String(state.teamRules || "").trim() ? [
+      "",
+      "TEAM RULES (ALL MEMBERS):",
+      "These standing rules bind every teammate regardless of assigned job or role.",
+      String(state.teamRules || "").trim()
+    ] : []),
     "",
     "WORKING RULES:",
     "- Do your assigned job first. Do not silently take over another agent's job unless it is necessary to unblock the team.",
@@ -1229,6 +1239,8 @@ function completeRoundTimer(side, completedAt = Date.now()) {
   state.roundStartedAtBySide[side] = null;
   state.lastRoundDurationMsBySide[side] = durationMs;
   state.lastRoundCompletedAtBySide[side] = safeEnd;
+  state.totalWorkMsBySide = { A: 0, B: 0, C: 0, D: 0, E: 0, ...(state.totalWorkMsBySide || {}) };
+  state.totalWorkMsBySide[side] = Math.max(0, Number(state.totalWorkMsBySide[side]) || 0) + durationMs;
   return { roundNumber, durationMs, completedAt: safeEnd };
 }
 
@@ -2195,6 +2207,8 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
       fresh.delayMs = Math.max(0, Math.min(30000, Number.isFinite(requestedDelay) ? requestedDelay : 1500));
       fresh.initialPrompt = String(msg.initialPrompt || "").trim();
       if (!fresh.initialPrompt) throw new Error("Enter an initial objective or prompt.");
+      fresh.teamRules = String(msg.teamRules || "").trim();
+      if (fresh.teamRules.length > 12000) throw new Error("Team rules are limited to 12,000 characters.");
       fresh.sourceFiles = normalizeSourceFiles(msg.sourceFiles);
       fresh.sourceDeliveredBySide = { A: false, B: false, C: false, D: false, E: false };
 
@@ -2242,6 +2256,60 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
       recordSessionHistory(state);
       await saveHistory();
       sendResponse({ ok: true });
+      return;
+    }
+
+    if (msg.type === "AI_BRIDGE_UPDATE_RULES") {
+      const rules = String(msg.rules || "").trim();
+      if (rules.length > 12000) throw new Error("Team rules are limited to 12,000 characters.");
+      const changed = rules !== String(state.teamRules || "").trim();
+      state.teamRules = rules;
+      if (changed && state.sessionActive) {
+        recordTranscript("human", { text: rules || "(Team rules cleared)", teamRulesUpdate: true });
+      }
+      await saveState();
+      sendResponse({ ok: true, rules: state.teamRules });
+      return;
+    }
+
+    if (msg.type === "AI_BRIDGE_MANUAL_RELAY") {
+      if (!state.sessionActive) throw new Error("Start a session first.");
+      if (state.running) throw new Error("Pause the session before using Manual Relay.");
+      if (state.awaitingHuman) throw new Error("Resolve the pending human-input request before Manual Relay.");
+      const sourceSide = String(msg.sourceSide || "").toUpperCase();
+      const targetSides = [...new Set((Array.isArray(msg.targetSides) ? msg.targetSides : [])
+        .map(side => String(side || "").toUpperCase()))]
+        .filter(side => SIDES.includes(side) && side !== sourceSide);
+      if (!SIDES.includes(sourceSide)) throw new Error("Choose an active source AI.");
+      if (!targetSides.length) throw new Error("Choose at least one active destination AI.");
+      const sourceTab = tabForSide(sourceSide);
+      if (!sourceTab) throw new Error(`AI ${sourceSide} has no bound tab.`);
+      const recovered = await chrome.tabs.sendMessage(sourceTab, { type: "AI_BRIDGE_READ_LAST_RESPONSE" });
+      const recoveredText = String(recovered?.text || "").trim();
+      if (!recovered?.ok || !recoveredText) throw new Error(recovered?.error || `Could not read AI ${sourceSide}'s last visible response.`);
+      if (recovered.active) throw new Error(`AI ${sourceSide} still appears to be generating.`);
+
+      recordTranscript("response", { side: sourceSide, text: recoveredText, manualRelay: true });
+      const deliveredSeq = latestSeq();
+      for (const targetSide of targetSides) {
+        const manualMessage = [
+          teamContext(targetSide),
+          "",
+          "MANUAL RELAY RECOVERY:",
+          `The human controller recovered the following completed response from AI ${sourceSide} (${labelForSide(sourceSide)}).`,
+          "Treat it as shared teammate context and continue from your assigned job.",
+          "",
+          `--- AI ${sourceSide} RECOVERED RESPONSE ---`,
+          recoveredText,
+          `--- END AI ${sourceSide} RESPONSE ---`
+        ].join("\n");
+        await sendToSide(targetSide, manualMessage, { deliveredSeq });
+      }
+      state.running = false;
+      state.paused = true;
+      state.pauseReason = `Manual relay sent AI ${sourceSide}'s recovered response to ${targetSides.map(side => "AI " + side).join(", ")}. Resume when ready.`;
+      await saveState();
+      sendResponse({ ok: true, sourceSide, targetSides });
       return;
     }
 
