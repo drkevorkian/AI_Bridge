@@ -1,4 +1,4 @@
-const SIDES = ["A", "B", "C"];
+const ALL_SIDES = ["A", "B", "C", "D", "E"];\nconst DEFAULT_AGENT_COUNT = 3;\nlet SIDES = ALL_SIDES.slice(0, DEFAULT_AGENT_COUNT);
 const supported = [
   { re: /^https:\/\/(chatgpt\.com|chat\.openai\.com)\//, name: "ChatGPT" },
   { re: /^https:\/\/grok\.com\//, name: "Grok" },
@@ -8,7 +8,7 @@ const supported = [
 ];
 
 const $ = id => document.getElementById(id);
-const THEME_KEY = "aiBridgeTheme";
+const THEME_KEY = "aiBridgeTheme";\nconst AGENT_COUNT_KEY = "aiBridgeAgentCount";
 const THEMES = new Set(["blizzard", "ghostwhite", "midnight", "slate", "light", "solarized", "ocean", "terminal"]);
 let tabsById = new Map();
 let latestState = null;
@@ -18,13 +18,68 @@ let autoScroll = true;
 let selectedSourceFiles = [];
 let activeHumanModalKey = "";
 const WORK_MODE_INFO = {
-  relay: { label: "Relay", minTurns: 1, help: "Normal sequential A → B → C relay. Each AI receives shared updates from the previous agents." },
-  collaborate: { label: "Collaborate", minTurns: 1, help: "Sequential shared-deliverable mode. Each AI improves one common result using its assigned specialty." },
-  compete: { label: "Compete", minTurns: 3, help: "All three AIs receive the same objective simultaneously and submit independently. They do not see competitor answers during the pass." },
-  parallel: { label: "Parallel Independent", minTurns: 3, help: "All three AIs work simultaneously and independently on complementary versions of the same objective." },
-  review: { label: "Peer Review", minTurns: 6, help: "Phase 1: all three answer independently. Phase 2: each AI receives the other two answers and critiques them simultaneously." },
-  mesh: { label: "Direct Mesh", minTurns: 1, help: "One AI speaks at a time, but each model can route its completed response directly to a specific teammate with a final-line SEND TO command. Without a command, routing falls back to the next AI." }
+  relay: { label: "Relay" },
+  collaborate: { label: "Collaborate" },
+  compete: { label: "Compete" },
+  parallel: { label: "Parallel Independent" },
+  review: { label: "Peer Review" },
+  mesh: { label: "Direct Mesh" }
 };
+
+function normalizeAgentCount(raw) {
+  const value = Number(raw);
+  return Number.isInteger(value) && value >= 1 && value <= ALL_SIDES.length ? value : DEFAULT_AGENT_COUNT;
+}
+
+function minimumTurnsForMode(mode = selectedWorkMode()) {
+  if (mode === "review") return SIDES.length * 2;
+  if (mode === "compete" || mode === "parallel") return SIDES.length;
+  return 1;
+}
+
+function modeHelp(mode = selectedWorkMode()) {
+  const count = SIDES.length;
+  if (mode === "relay") return "Normal sequential " + SIDES.join(" → ") + " relay. Each AI receives shared updates from the previous agents.";
+  if (mode === "collaborate") return "Sequential shared-deliverable mode. Each active AI improves one common result using its assigned specialty.";
+  if (mode === "compete") return "All " + count + " active AIs receive the same objective simultaneously and submit independently.";
+  if (mode === "parallel") return "All " + count + " active AIs work simultaneously and independently on complementary versions of the same objective.";
+  if (mode === "review") return "Phase 1: all " + count + " active AIs answer independently. Phase 2: each AI receives the other active responses and critiques them simultaneously.";
+  return "One AI speaks at a time, but each model can route its completed response directly to a specific active teammate with a final-line SEND TO command.";
+}
+
+function setAgentCountUI(raw, { persist = false } = {}) {
+  const count = normalizeAgentCount(raw);
+  SIDES = ALL_SIDES.slice(0, count);
+  if ($("agentCount")) $("agentCount").value = String(count);
+  if ($("teamRouteLabel")) $("teamRouteLabel").textContent = SIDES.join(" → ");
+  for (const side of ALL_SIDES) {
+    const active = SIDES.includes(side);
+    const card = $("agentCard" + side);
+    if (card) card.hidden = !active;
+    const option = [...($("startSide")?.options || [])].find(item => item.value === side);
+    if (option) {
+      option.hidden = !active;
+      option.disabled = !active;
+    }
+  }
+  if ($("startSide") && !SIDES.includes($("startSide").value)) $("startSide").value = SIDES[0];
+  const relayOption = [...($("workMode")?.options || [])].find(item => item.value === "relay");
+  if (relayOption) relayOption.textContent = "Relay — " + SIDES.join(" → ");
+  updateWorkModeUI();
+  refreshStartLabels();
+  if (latestState) renderHistory(latestState.history);
+  if (persist) chrome.storage.local.set({ [AGENT_COUNT_KEY]: count }).catch(() => {});
+  return count;
+}
+
+async function loadAgentCountPreference() {
+  try {
+    const stored = await chrome.storage.local.get(AGENT_COUNT_KEY);
+    setAgentCountUI(stored?.[AGENT_COUNT_KEY] ?? DEFAULT_AGENT_COUNT);
+  } catch (_) {
+    setAgentCountUI(DEFAULT_AGENT_COUNT);
+  }
+}
 
 function selectedWorkMode() {
   const value = $("workMode")?.value || "relay";
@@ -33,16 +88,16 @@ function selectedWorkMode() {
 
 function updateWorkModeUI() {
   const mode = selectedWorkMode();
-  const info = WORK_MODE_INFO[mode];
-  if ($("workModeHelp")) $("workModeHelp").textContent = info.help;
+  const minTurns = minimumTurnsForMode(mode);
+  if ($("workModeHelp")) $("workModeHelp").textContent = modeHelp(mode);
   const batch = ["compete", "parallel", "review"].includes(mode);
   $("startSide").disabled = Boolean(latestState?.sessionActive);
   $("startSide").title = batch
-    ? "All three AIs start simultaneously; this selection still defines the Main AI for queued human interjections."
+    ? "All " + SIDES.length + " active AIs start simultaneously; this selection still defines the Main AI for queued human interjections."
     : "Choose the first speaker and Main AI for queued human interjections.";
   const maxHelp = $("maxTurns")?.parentElement?.querySelector(".field-help");
   if (maxHelp) {
-    maxHelp.innerHTML = `<strong>-1 = Infinite</strong> · ${info.minTurns > 1 ? `${info.minTurns}–10000 for this mode` : "1–10000 = finite"}`;
+    maxHelp.innerHTML = "<strong>-1 = Infinite</strong> · " + (minTurns > 1 ? (minTurns + "–10000 for this mode") : "1–10000 = finite");
   }
 }
 
