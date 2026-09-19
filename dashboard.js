@@ -1,4 +1,6 @@
-const ALL_SIDES = ["A", "B", "C", "D", "E"];\nconst DEFAULT_AGENT_COUNT = 3;\nlet SIDES = ALL_SIDES.slice(0, DEFAULT_AGENT_COUNT);
+const ALL_SIDES = ["A", "B", "C", "D", "E"];
+const DEFAULT_AGENT_COUNT = 3;
+let SIDES = ALL_SIDES.slice(0, DEFAULT_AGENT_COUNT);
 const supported = [
   { re: /^https:\/\/(chatgpt\.com|chat\.openai\.com)\//, name: "ChatGPT" },
   { re: /^https:\/\/grok\.com\//, name: "Grok" },
@@ -8,7 +10,8 @@ const supported = [
 ];
 
 const $ = id => document.getElementById(id);
-const THEME_KEY = "aiBridgeTheme";\nconst AGENT_COUNT_KEY = "aiBridgeAgentCount";
+const THEME_KEY = "aiBridgeTheme";
+const AGENT_COUNT_KEY = "aiBridgeAgentCount";
 const THEMES = new Set(["blizzard", "ghostwhite", "midnight", "slate", "light", "solarized", "ocean", "terminal"]);
 let tabsById = new Map();
 let latestState = null;
