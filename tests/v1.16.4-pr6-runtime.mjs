@@ -113,8 +113,8 @@ assert.match(prelude, /providerSendAcknowledgement:\s*true/);
   assert.equal(outbound.length, 1, "real response must pass through");
 
   const ping = await dispatch({ type: "AI_BRIDGE_PING" });
-  assert.equal(ping.version, "1.17.1");
-  assert.equal(ping.runtimeVersion, "1.17.1");
+  assert.equal(ping.version, "1.18.0");
+  assert.equal(ping.runtimeVersion, "1.18.0");
 }
 
 // Service-worker overlap guard: active generation must be stopped and observed
