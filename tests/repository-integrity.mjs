@@ -83,15 +83,22 @@ function dollarRefs(js) {
 }
 const dashboardIds = assertUniqueIds(dashboardHtml, "dashboard.html");
 const popupIds = assertUniqueIds(popupHtml, "popup.html");
+const settingsIds = assertUniqueIds(settingsHtml, "settings.html");
 for (const id of dollarRefs(dashboardJs)) assert.ok(dashboardIds.has(id), `dashboard.js references missing DOM id: ${id}`);
 for (const id of dollarRefs(popupJs)) assert.ok(popupIds.has(id), `popup.js references missing DOM id: ${id}`);
+for (const id of dollarRefs(settingsJs)) assert.ok(settingsIds.has(id), `settings.js references missing DOM id: ${id}`);
 
 for (const side of ["A", "B", "C", "D", "E"]) {
-  for (const prefix of ["agentCard", "tab", "job", "timer", "newChat", "resend"]) {
+  for (const prefix of ["agentCard", "tab", "job", "timerTotal", "timerCurrent", "newChat", "resend", "forceFrom", "forceTo"]) {
     assert.ok(dashboardIds.has(prefix + side), `dynamic roster is missing ${prefix}${side}`);
   }
 }
 assert.ok(dashboardIds.has("agentCount"), "dashboard is missing the active-agent count control");
+assert.ok(dashboardIds.has("teamRules"), "dashboard is missing Team Rules");
+assert.ok(dashboardIds.has("applyTeamRules"), "dashboard is missing Team Rules apply control");
+assert.ok(dashboardIds.has("forceRelayBtn"), "dashboard is missing Manual Relay");
+assert.ok(dashboardIds.has("paneSplitter"), "dashboard is missing the pane splitter");
+assert.match(settingsHtml, /id="paneWidth"/);
 assert.match(settingsHtml, /Blizzard Blue/);
 assert.match(settingsHtml, /Ghost White/);
 assert.match(settingsHtml, /Midnight/);
@@ -112,6 +119,10 @@ assert.match(manifest.permissions.join(","), /alarms/);
 assert.match(manifest.permissions.join(","), /power/);
 assert.match(background, /AI_BRIDGE_POWER_SET/);
 assert.match(background, /AI_BRIDGE_AUTO_UPDATE_SET/);
+assert.match(background, /AI_BRIDGE_UPDATE_RULES/);
+assert.match(background, /AI_BRIDGE_MANUAL_RELAY/);
+assert.match(background, /totalWorkMsBySide/);
+assert.match(content, /AI_BRIDGE_READ_LAST_RESPONSE/);
 assert.doesNotMatch(settingsJs, /bridgeState\s*=\s*.*sessionActive\s*:\s*true/s, "Settings must not synthesize an active relay session");
 assert.doesNotMatch(layoutJs, /AI_BRIDGE_START|AI_BRIDGE_RESUME|bridgeState/, "layout module must not control relay state");
 assert.match(background, /const ALL_SIDES = \["A", "B", "C", "D", "E"\]/);
@@ -155,13 +166,13 @@ assert.match(background, /while\s*\(\s*true\s*\)\s*\{\s*const\s*\{\s*value,\s*do
 const handledByBackground = new Set([...background.matchAll(/msg\.type\s*===\s*"([A-Z0-9_]+)"/g)].map(m => m[1]));
 const handledByContent = new Set([...content.matchAll(/msg\.type\s*===\s*"([A-Z0-9_]+)"/g)].map(m => m[1]));
 const literalTypes = src => [...new Set([...src.matchAll(/type:\s*"([A-Z0-9_]+)"/g)].map(m => m[1]))];
-for (const type of literalTypes(dashboardJs + "\n" + popupJs)) {
+for (const type of literalTypes(dashboardJs + "\n" + settingsJs + "\n" + popupJs)) {
   assert.ok(handledByBackground.has(type), `extension page sends unhandled background message: ${type}`);
 }
 for (const type of literalTypes(content)) {
   assert.ok(handledByBackground.has(type), `content script sends unhandled background message: ${type}`);
 }
-for (const type of ["AI_BRIDGE_PING", "AI_BRIDGE_NEW_CHAT", "AI_BRIDGE_SEND"]) {
+for (const type of ["AI_BRIDGE_PING", "AI_BRIDGE_NEW_CHAT", "AI_BRIDGE_SEND", "AI_BRIDGE_READ_LAST_RESPONSE"]) {
   assert.ok(handledByContent.has(type), `background/content protocol handler missing: ${type}`);
 }
 
