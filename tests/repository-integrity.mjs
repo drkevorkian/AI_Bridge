@@ -166,8 +166,15 @@ assert.match(background, /while\s*\(\s*true\s*\)\s*\{\s*const\s*\{\s*value,\s*do
 const handledByBackground = new Set([...background.matchAll(/msg\.type\s*===\s*"([A-Z0-9_]+)"/g)].map(m => m[1]));
 const handledByContent = new Set([...content.matchAll(/msg\.type\s*===\s*"([A-Z0-9_]+)"/g)].map(m => m[1]));
 const literalTypes = src => [...new Set([...src.matchAll(/type:\s*"([A-Z0-9_]+)"/g)].map(m => m[1]))];
-for (const type of literalTypes(dashboardJs + "\n" + settingsJs + "\n" + popupJs)) {
+for (const type of literalTypes(dashboardJs + "\n" + popupJs)) {
   assert.ok(handledByBackground.has(type), `extension page sends unhandled background message: ${type}`);
+}
+for (const type of literalTypes(settingsJs)) {
+  if (type === "AI_BRIDGE_PING") {
+    assert.ok(handledByContent.has(type), `Settings sends unhandled content-script message: ${type}`);
+  } else {
+    assert.ok(handledByBackground.has(type), `Settings sends unhandled background message: ${type}`);
+  }
 }
 for (const type of literalTypes(content)) {
   assert.ok(handledByBackground.has(type), `content script sends unhandled background message: ${type}`);
