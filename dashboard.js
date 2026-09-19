@@ -1,4 +1,6 @@
-const SIDES = ["A", "B", "C"];
+const ALL_SIDES = ["A", "B", "C", "D", "E"];
+const DEFAULT_AGENT_COUNT = 3;
+let SIDES = ALL_SIDES.slice(0, DEFAULT_AGENT_COUNT);
 const supported = [
   { re: /^https:\/\/(chatgpt\.com|chat\.openai\.com)\//, name: "ChatGPT" },
   { re: /^https:\/\/grok\.com\//, name: "Grok" },
@@ -12,6 +14,7 @@ const THEME_KEY = "aiBridgeTheme";
 const PANE_WIDTH_KEY = "aiBridgeControlPaneWidth";
 const FRESH_KEY = "aiBridgeFreshOnStart";
 const LAYOUT_KEY = "aiBridgeLayout";
+const AGENT_COUNT_KEY = "aiBridgeAgentCount";
 const DEFAULT_PANE_PCT = 40;
 const MIN_PANE_PCT = 24;
 const MAX_PANE_PCT = 70;
@@ -27,73 +30,101 @@ let autoScroll = true;
 let selectedSourceFiles = [];
 let activeHumanModalKey = "";
 const WORK_MODE_INFO = {
-  relay: {
-    label: "Relay",
-    minTurns: 1,
-    help: [
-      "Timing: sequential A → B → C. One AI at a time.",
-      "Peer visibility: every later AI sees accumulated shared updates before it responds, and continues the same problem.",
-      "Cycle: every selected LLM has participated once (A, then B, then C). The counter ticks only after that full lap.",
-      "Main AI: first speaker, and the recipient of queued human interjections.",
-      "Best for: investigations, debugging, and iterative design where each specialist builds on prior work."
-    ].join("\n")
-  },
-  collaborate: {
-    label: "Collaborate",
-    minTurns: 1,
-    help: [
-      "Timing: sequential like Relay. One AI at a time. Not a live consensus discussion.",
-      "Peer visibility: every later AI sees the accumulated shared deliverable and revises that same artifact.",
-      "Cycle: every selected LLM has participated once. The counter ticks only after that full lap of the shared document/design/code.",
-      "Main AI: first speaker, and the recipient of queued human interjections.",
-      "Best for: writing one final design, spec, or codebase where each specialist improves the same artifact."
-    ].join("\n")
-  },
-  compete: {
-    label: "Compete",
-    minTurns: 1,
-    help: [
-      "Timing: A, B, and C start simultaneously.",
-      "Peer visibility: they do not see each other's answers during the primary pass.",
-      "Cycle: the whole simultaneous batch. The counter ticks after every selected LLM has submitted, not after each individual response.",
-      "Main AI: still the recipient of queued human interjections; it is not a sequential first speaker in this mode.",
-      "Best for: independent solutions, avoiding anchoring, then comparing results."
-    ].join("\n")
-  },
-  parallel: {
-    label: "Parallel Independent",
-    minTurns: 1,
-    help: [
-      "Timing: A, B, and C start simultaneously.",
-      "Peer visibility: they work independently on their assigned jobs rather than solving the identical problem three times.",
-      "Cycle: the whole simultaneous batch. The counter ticks after every selected job has finished.",
-      "Main AI: recipient of queued human interjections; all three still start together.",
-      "Best for: work that decomposes into backend / frontend / research / security tracks."
-    ].join("\n")
-  },
-  review: {
-    label: "Peer Review",
-    minTurns: 1,
-    help: [
-      "Timing: two simultaneous phases. All three produce independent primaries first; there is no single drafter.",
-      "Peer visibility: phase 1 is independent (no peer answers). Phase 2 gives each AI the other two results and requests critique. There is no automatic primary-revision pass after critique.",
-      "Cycle: the full primary+critique pass (6 responses when A/B/C are selected). The counter ticks only after both phases finish.",
-      "Main AI: recipient of queued human interjections; it is not a sequential first speaker.",
-      "Best for: high-confidence validation and catching mistakes or bias."
-    ].join("\n")
-  },
-  mesh: {
-    label: "Direct Mesh",
-    minTurns: 1,
-    help: [
-      "Timing: one AI at a time.",
-      "Peer visibility: the responding AI sees accumulated shared updates, then can choose the next teammate.",
-      "Cycle: every selected LLM has participated at least once. Routing the same teammate twice does not complete the cycle. Put SEND TO: AI A|B|C (or an unambiguous label) on the final non-empty line. Without a valid target, normal next-agent routing applies.",
-      "Main AI: first speaker unless a prior handoff changed the cursor, and the recipient of queued human interjections.",
-      "Best for: dynamic workflows where the right next specialist depends on what was just discovered."
-    ].join("\n")
-  }
+  relay: { label: "Relay" },
+  collaborate: { label: "Collaborate" },
+  compete: { label: "Compete" },
+  parallel: { label: "Parallel Independent" },
+  review: { label: "Peer Review" },
+  mesh: { label: "Direct Mesh" }
 };
+
+function normalizeAgentCount(raw) {
+  const value = Number(raw);
+  return Number.isInteger(value) && value >= 1 && value <= ALL_SIDES.length ? value : DEFAULT_AGENT_COUNT;
+}
+
+function modeHelp(mode = selectedWorkMode()) {
+  const count = SIDES.length;
+  const route = SIDES.join(" → ");
+  if (mode === "relay") return [
+    `Timing: sequential ${route}. One AI at a time.`,
+    "Peer visibility: every later AI sees accumulated shared updates before it responds and continues the same problem.",
+    `Cycle: every active AI has participated once. The counter ticks after the full ${count}-AI lap.`,
+    "Main AI: first speaker and recipient of queued human interjections.",
+    "Best for: investigations, debugging, and iterative design."
+  ].join("\n");
+  if (mode === "collaborate") return [
+    "Timing: sequential like Relay. One AI at a time.",
+    "Peer visibility: every later AI sees and improves the shared deliverable.",
+    `Cycle: every active AI participates once before the cycle counter advances.`,
+    "Best for: one shared design, document, or codebase."
+  ].join("\n");
+  if (mode === "compete") return [
+    `Timing: all ${count} active AIs start simultaneously.`,
+    "Peer visibility: primary answers remain independent during the pass.",
+    "Cycle: the whole simultaneous batch.",
+    "Best for: independent solutions and avoiding anchoring."
+  ].join("\n");
+  if (mode === "parallel") return [
+    `Timing: all ${count} active AIs start simultaneously.`,
+    "Peer visibility: each works independently on its assigned job.",
+    "Cycle: the whole active batch.",
+    "Best for: decomposed backend / frontend / research / security work."
+  ].join("\n");
+  if (mode === "review") return [
+    `Timing: two simultaneous phases across ${count} active AIs.`,
+    "Phase 1: independent primary responses. Phase 2: each AI reviews the other active primary responses.",
+    `Cycle: ${count * 2} responses for a complete primary + critique pass.`,
+    "Best for: validation and catching errors or bias."
+  ].join("\n");
+  return [
+    "Timing: one AI at a time.",
+    "Peer visibility: the responding AI sees accumulated shared updates and can choose the next active teammate.",
+    `Cycle: every active AI has participated at least once. Final-line SEND TO may target ${SIDES.map(side => "AI " + side).join(", ")}.`,
+    "Best for: dynamic workflows where the next specialist depends on the latest result."
+  ].join("\n");
+}
+
+function setAgentCountUI(raw, { persist = false } = {}) {
+  const count = normalizeAgentCount(raw);
+  SIDES = ALL_SIDES.slice(0, count);
+  if ($("agentCount")) $("agentCount").value = String(count);
+  if ($("teamRouteLabel")) $("teamRouteLabel").textContent = SIDES.join(" → ");
+  for (const side of ALL_SIDES) {
+    const active = SIDES.includes(side);
+    const card = $("agentCard" + side);
+    if (card) card.hidden = !active;
+    const startOption = [...($("startSide")?.options || [])].find(option => option.value === side);
+    if (startOption) {
+      startOption.hidden = !active;
+      startOption.disabled = !active;
+    }
+    const forceFrom = $("forceFrom" + side);
+    if (forceFrom) forceFrom.hidden = !active;
+    const forceTo = $("forceTo" + side);
+    if (forceTo?.parentElement) forceTo.parentElement.hidden = !active;
+  }
+  if ($("startSide") && !SIDES.includes($("startSide").value)) $("startSide").value = SIDES[0];
+  const relayOption = [...($("workMode")?.options || [])].find(option => option.value === "relay");
+  if (relayOption) relayOption.textContent = "Relay — " + SIDES.join(" → ");
+  updateWorkModeUI();
+  refreshStartLabels();
+  if (latestState) {
+    renderHistory(latestState.history);
+    updateRoundTimers(latestState);
+  }
+  if (persist) chrome.storage.local.set({ [AGENT_COUNT_KEY]: count }).catch(() => {});
+  return count;
+}
+
+async function loadAgentCountPreference() {
+  try {
+    const stored = await chrome.storage.local.get(AGENT_COUNT_KEY);
+    setAgentCountUI(stored?.[AGENT_COUNT_KEY] ?? DEFAULT_AGENT_COUNT);
+  } catch (_) {
+    setAgentCountUI(DEFAULT_AGENT_COUNT);
+  }
+}
 
 function selectedWorkMode() {
   const value = $("workMode")?.value || "relay";
@@ -102,12 +133,11 @@ function selectedWorkMode() {
 
 function updateWorkModeUI() {
   const mode = selectedWorkMode();
-  const info = WORK_MODE_INFO[mode];
-  if ($("workModeHelp")) $("workModeHelp").textContent = info.help;
+  if ($("workModeHelp")) $("workModeHelp").textContent = modeHelp(mode);
   const batch = ["compete", "parallel", "review"].includes(mode);
   $("startSide").disabled = Boolean(latestState?.sessionActive);
   $("startSide").title = batch
-    ? "All three AIs start simultaneously; this selection still defines the Main AI for queued human interjections."
+    ? "All " + SIDES.length + " active AIs start simultaneously; this selection still defines the Main AI for queued human interjections."
     : "Choose the first speaker and Main AI for queued human interjections.";
   const maxHelp = $("maxCycles")?.parentElement?.querySelector(".field-help");
   if (maxHelp) {
