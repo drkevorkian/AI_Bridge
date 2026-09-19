@@ -1,8 +1,8 @@
 {
   "manifest_version": 3,
   "name": "AI Bridge",
-  "version": "1.15",
-  "description": "Coordinate three AI agents with relay, direct-mesh routing, persistent artifact vault storage, ZIP/file relay, human control, and a modern multi-theme workspace.",
+  "version": "1.16",
+  "description": "Coordinate 1–5 logical AI agents across selected browser tabs, including multiple independent tabs from the same LLM provider.",
   "permissions": [
     "tabs",
     "storage",

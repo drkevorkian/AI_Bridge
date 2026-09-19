@@ -1,4 +1,6 @@
-const SIDES = ["A", "B", "C"];
+const ALL_SIDES = ["A", "B", "C", "D", "E"];
+const DEFAULT_AGENT_COUNT = 3;
+let SIDES = ALL_SIDES.slice(0, DEFAULT_AGENT_COUNT);
 const supported = [
   { re: /^https:\/\/(chatgpt\.com|chat\.openai\.com)\//, name: "ChatGPT" },
   { re: /^https:\/\/grok\.com\//, name: "Grok" },
@@ -9,6 +11,7 @@ const supported = [
 
 const $ = id => document.getElementById(id);
 const THEME_KEY = "aiBridgeTheme";
+const AGENT_COUNT_KEY = "aiBridgeAgentCount";
 const THEMES = new Set(["blizzard", "ghostwhite", "midnight", "slate", "light", "solarized", "ocean", "terminal"]);
 let tabsById = new Map();
 let latestState = null;
@@ -18,13 +21,68 @@ let autoScroll = true;
 let selectedSourceFiles = [];
 let activeHumanModalKey = "";
 const WORK_MODE_INFO = {
-  relay: { label: "Relay", minTurns: 1, help: "Normal sequential A → B → C relay. Each AI receives shared updates from the previous agents." },
-  collaborate: { label: "Collaborate", minTurns: 1, help: "Sequential shared-deliverable mode. Each AI improves one common result using its assigned specialty." },
-  compete: { label: "Compete", minTurns: 3, help: "All three AIs receive the same objective simultaneously and submit independently. They do not see competitor answers during the pass." },
-  parallel: { label: "Parallel Independent", minTurns: 3, help: "All three AIs work simultaneously and independently on complementary versions of the same objective." },
-  review: { label: "Peer Review", minTurns: 6, help: "Phase 1: all three answer independently. Phase 2: each AI receives the other two answers and critiques them simultaneously." },
-  mesh: { label: "Direct Mesh", minTurns: 1, help: "One AI speaks at a time, but each model can route its completed response directly to a specific teammate with a final-line SEND TO command. Without a command, routing falls back to the next AI." }
+  relay: { label: "Relay" },
+  collaborate: { label: "Collaborate" },
+  compete: { label: "Compete" },
+  parallel: { label: "Parallel Independent" },
+  review: { label: "Peer Review" },
+  mesh: { label: "Direct Mesh" }
 };
+
+function normalizeAgentCount(raw) {
+  const value = Number(raw);
+  return Number.isInteger(value) && value >= 1 && value <= ALL_SIDES.length ? value : DEFAULT_AGENT_COUNT;
+}
+
+function minimumTurnsForMode(mode = selectedWorkMode()) {
+  if (mode === "review") return SIDES.length * 2;
+  if (mode === "compete" || mode === "parallel") return SIDES.length;
+  return 1;
+}
+
+function modeHelp(mode = selectedWorkMode()) {
+  const count = SIDES.length;
+  if (mode === "relay") return "Normal sequential " + SIDES.join(" → ") + " relay. Each AI receives shared updates from the previous agents.";
+  if (mode === "collaborate") return "Sequential shared-deliverable mode. Each active AI improves one common result using its assigned specialty.";
+  if (mode === "compete") return "All " + count + " active AIs receive the same objective simultaneously and submit independently.";
+  if (mode === "parallel") return "All " + count + " active AIs work simultaneously and independently on complementary versions of the same objective.";
+  if (mode === "review") return "Phase 1: all " + count + " active AIs answer independently. Phase 2: each AI receives the other active responses and critiques them simultaneously.";
+  return "One AI speaks at a time, but each model can route its completed response directly to a specific active teammate with a final-line SEND TO command.";
+}
+
+function setAgentCountUI(raw, { persist = false } = {}) {
+  const count = normalizeAgentCount(raw);
+  SIDES = ALL_SIDES.slice(0, count);
+  if ($("agentCount")) $("agentCount").value = String(count);
+  if ($("teamRouteLabel")) $("teamRouteLabel").textContent = SIDES.join(" → ");
+  for (const side of ALL_SIDES) {
+    const active = SIDES.includes(side);
+    const card = $("agentCard" + side);
+    if (card) card.hidden = !active;
+    const option = [...($("startSide")?.options || [])].find(item => item.value === side);
+    if (option) {
+      option.hidden = !active;
+      option.disabled = !active;
+    }
+  }
+  if ($("startSide") && !SIDES.includes($("startSide").value)) $("startSide").value = SIDES[0];
+  const relayOption = [...($("workMode")?.options || [])].find(item => item.value === "relay");
+  if (relayOption) relayOption.textContent = "Relay — " + SIDES.join(" → ");
+  updateWorkModeUI();
+  refreshStartLabels();
+  if (latestState) renderHistory(latestState.history);
+  if (persist) chrome.storage.local.set({ [AGENT_COUNT_KEY]: count }).catch(() => {});
+  return count;
+}
+
+async function loadAgentCountPreference() {
+  try {
+    const stored = await chrome.storage.local.get(AGENT_COUNT_KEY);
+    setAgentCountUI(stored?.[AGENT_COUNT_KEY] ?? DEFAULT_AGENT_COUNT);
+  } catch (_) {
+    setAgentCountUI(DEFAULT_AGENT_COUNT);
+  }
+}
 
 function selectedWorkMode() {
   const value = $("workMode")?.value || "relay";
@@ -33,16 +91,16 @@ function selectedWorkMode() {
 
 function updateWorkModeUI() {
   const mode = selectedWorkMode();
-  const info = WORK_MODE_INFO[mode];
-  if ($("workModeHelp")) $("workModeHelp").textContent = info.help;
+  const minTurns = minimumTurnsForMode(mode);
+  if ($("workModeHelp")) $("workModeHelp").textContent = modeHelp(mode);
   const batch = ["compete", "parallel", "review"].includes(mode);
   $("startSide").disabled = Boolean(latestState?.sessionActive);
   $("startSide").title = batch
-    ? "All three AIs start simultaneously; this selection still defines the Main AI for queued human interjections."
+    ? "All " + SIDES.length + " active AIs start simultaneously; this selection still defines the Main AI for queued human interjections."
     : "Choose the first speaker and Main AI for queued human interjections.";
   const maxHelp = $("maxTurns")?.parentElement?.querySelector(".field-help");
   if (maxHelp) {
-    maxHelp.innerHTML = `<strong>-1 = Infinite</strong> · ${info.minTurns > 1 ? `${info.minTurns}–10000 for this mode` : "1–10000 = finite"}`;
+    maxHelp.innerHTML = "<strong>-1 = Infinite</strong> · " + (minTurns > 1 ? (minTurns + "–10000 for this mode") : "1–10000 = finite");
   }
 }
 
@@ -178,7 +236,7 @@ function setSelectToTab(side, tabId) {
 }
 
 function refreshStartLabels() {
-  for (const side of SIDES) {
+  for (const side of ALL_SIDES) {
     const tab = tabsById.get(selectedTab(side));
     const option = [...$("startSide").options].find(o => o.value === side);
     if (option) option.textContent = `${aiName(tab?.url)} (AI ${side}) — Main`;
@@ -187,13 +245,13 @@ function refreshStartLabels() {
 
 async function loadTabs({ preserve = true } = {}) {
   const previous = {};
-  if (preserve) for (const side of SIDES) previous[side] = selectedTab(side);
+  if (preserve) for (const side of ALL_SIDES) previous[side] = selectedTab(side);
 
   const tabs = await chrome.tabs.query({});
   const candidates = tabs.filter(t => supported.some(x => x.re.test(t.url || "")));
   tabsById = new Map(candidates.map(t => [t.id, t]));
 
-  for (const side of SIDES) {
+  for (const side of ALL_SIDES) {
     const select = $(`tab${side}`);
     select.textContent = "";
     for (const tab of candidates) {
@@ -204,16 +262,21 @@ async function loadTabs({ preserve = true } = {}) {
     }
   }
 
-  for (const [index, side] of SIDES.entries()) {
+  for (const [index, side] of ALL_SIDES.entries()) {
     const desired = previous[side] || latestState?.[`tab${side}`];
     if (!setSelectToTab(side, desired) && candidates[index]) {
       $(`tab${side}`).value = String(candidates[index].id);
     }
   }
 
+  for (const option of $("agentCount").options) {
+    option.disabled = Number(option.value) > candidates.length;
+  }
+  $("agentCountHelp").textContent = `${candidates.length} supported AI tab${candidates.length === 1 ? "" : "s"} currently open. Multiple tabs from the same LLM are allowed and count as separate agents.`;
+
   refreshStartLabels();
-  if (candidates.length < 3) {
-    $("status").textContent = "Open at least three supported AI chat tabs, then click Refresh AI tabs.";
+  if (candidates.length < SIDES.length) {
+    $("status").textContent = `Open at least ${SIDES.length} supported AI tab${SIDES.length === 1 ? "" : "s"}, then click Refresh AI tabs.`;
   }
 }
 
@@ -221,7 +284,8 @@ function hydrateFromState(s) {
   if (hydrated || !s) return;
   hydrated = true;
 
-  for (const side of SIDES) {
+  if (s.sessionActive) setAgentCountUI(s.agentCount);
+  for (const side of ALL_SIDES) {
     setSelectToTab(side, s[`tab${side}`]);
     if (s[`job${side}`]) $(`job${side}`).value = s[`job${side}`];
   }
@@ -681,6 +745,7 @@ function updateControls(s) {
   $("stop").disabled = !s.sessionActive;
   $("newAllChats").disabled = Boolean(s.sessionActive);
   $("freshOnStart").disabled = Boolean(s.sessionActive);
+  $("agentCount").disabled = Boolean(s.sessionActive);
   $("workMode").disabled = Boolean(s.sessionActive);
   $("sendInterject").disabled = !s.sessionActive || s.awaitingHuman;
   $("interjectText").disabled = !s.sessionActive || s.awaitingHuman;
@@ -757,10 +822,10 @@ function selectedBindings() {
   return data;
 }
 
-function validateThreeTabs() {
+function validateActiveTabs() {
   const ids = SIDES.map(selectedTab);
-  if (ids.some(id => !id)) return "Choose three supported AI tabs.";
-  if (new Set(ids).size !== 3) return "AI A, AI B, and AI C must be three different tabs.";
+  if (ids.some(id => !id)) return `Choose ${SIDES.length} supported AI tab${SIDES.length === 1 ? "" : "s"}.`;
+  if (new Set(ids).size !== ids.length) return "Each logical AI must use a different browser tab. Multiple tabs from the same LLM are allowed.";
   return null;
 }
 
@@ -770,7 +835,7 @@ function validateMaxTurns() {
   const raw = input.value.trim();
   const value = Number(raw);
   const mode = selectedWorkMode();
-  const minTurns = WORK_MODE_INFO[mode]?.minTurns || 1;
+  const minTurns = minimumTurnsForMode(mode);
   const valid = raw !== "" && Number.isInteger(value) && (value === -1 || (value >= minTurns && value <= 10000));
   if (!valid) {
     input.classList.add("validation-error");
@@ -792,8 +857,8 @@ chrome.storage.onChanged.addListener((changes, area) => {
 async function openFreshChats(sides) {
   if (latestState?.sessionActive) return;
   const chosen = Array.isArray(sides) ? sides : SIDES;
-  const tabError = validateThreeTabs();
-  if (chosen.length === 3 && tabError) {
+  const tabError = validateActiveTabs();
+  if (chosen.length === SIDES.length && tabError) {
     $("status").textContent = tabError;
     return;
   }
@@ -803,7 +868,7 @@ async function openFreshChats(sides) {
     const button = chosen.length === 1 ? $(`newChat${side}`) : null;
     if (button) { oldLabels.set(button, button.textContent); button.textContent = "Opening…"; button.disabled = true; }
   }
-  if (chosen.length === 3) { oldLabels.set($("newAllChats"), $("newAllChats").textContent); $("newAllChats").textContent = "Opening…"; $("newAllChats").disabled = true; }
+  if (chosen.length === SIDES.length) { oldLabels.set($("newAllChats"), $("newAllChats").textContent); $("newAllChats").textContent = "Opening…"; $("newAllChats").disabled = true; }
 
   try {
     const payload = { type: "AI_BRIDGE_NEW_CHATS", sides: chosen };
@@ -835,11 +900,26 @@ async function clearHistory(kind) {
 $("clearJobHistory").addEventListener("click", () => clearHistory("jobs"));
 $("clearCommandHistory").addEventListener("click", () => clearHistory("commands"));
 
-for (const side of SIDES) {
+for (const side of ALL_SIDES) {
   $(`tab${side}`).addEventListener("change", () => { refreshStartLabels(); if (latestState) updateControls(latestState); });
   $(`newChat${side}`).addEventListener("click", () => openFreshChats([side]));
 }
-$("newAllChats").addEventListener("click", () => openFreshChats(SIDES));
+$("newAllChats").addEventListener("click", () => openFreshChats([...SIDES]));
+$("agentCount").addEventListener("change", async event => {
+  if (latestState?.sessionActive) {
+    event.target.value = String(latestState.agentCount || SIDES.length);
+    return;
+  }
+  const requested = normalizeAgentCount(event.target.value);
+  if (tabsById.size && requested > tabsById.size) {
+    $("status").textContent = `Only ${tabsById.size} supported AI tab${tabsById.size === 1 ? "" : "s"} are open.`;
+    event.target.value = String(Math.min(SIDES.length, tabsById.size));
+    return;
+  }
+  setAgentCountUI(requested, { persist: true });
+  await loadTabs({ preserve: true });
+  if (latestState) updateControls(latestState);
+});
 $("workMode").addEventListener("change", () => {
   updateWorkModeUI();
   $("maxTurns").classList.remove("validation-error");
@@ -847,7 +927,7 @@ $("workMode").addEventListener("change", () => {
 $("maxTurns").addEventListener("input", () => $("maxTurns").classList.remove("validation-error"));
 
 $("start").addEventListener("click", async () => {
-  const tabError = validateThreeTabs();
+  const tabError = validateActiveTabs();
   if (tabError) return $("status").textContent = tabError;
   const turnError = validateMaxTurns();
   if (turnError) return $("status").textContent = turnError;
@@ -855,16 +935,17 @@ $("start").addEventListener("click", async () => {
   const initialPrompt = $("prompt").value.trim();
   if (!initialPrompt) return $("status").textContent = "Enter a primary objective or initial prompt.";
 
-  $("status").textContent = "Starting three-AI session…";
+  $("status").textContent = `Starting ${SIDES.length}-AI session…`;
   try {
+    const jobBindings = {};
+    for (const side of SIDES) jobBindings[`job${side}`] = $(`job${side}`).value.trim();
     const res = await chrome.runtime.sendMessage({
       type: "AI_BRIDGE_START",
       ...selectedBindings(),
+      ...jobBindings,
+      agentCount: SIDES.length,
       startSide: $("startSide").value,
       workMode: selectedWorkMode(),
-      jobA: $("jobA").value.trim(),
-      jobB: $("jobB").value.trim(),
-      jobC: $("jobC").value.trim(),
       initialPrompt,
       sourceFiles: selectedSourceFiles.map(file => ({ path: file.path, size: file.size, content: file.content })),
       freshChats: $("freshOnStart").checked,
@@ -886,8 +967,8 @@ $("pause").addEventListener("click", async () => {
 });
 
 $("resume").addEventListener("click", async () => {
-  const tabError = validateThreeTabs();
-  if (tabError) return $("status").textContent = `${tabError}\nTo resume, bind all three roles to open AI tabs.`;
+  const tabError = validateActiveTabs();
+  if (tabError) return $("status").textContent = `${tabError}\nTo resume, bind every active AI role to an open supported tab.`;
 
   $("status").textContent = "Restoring saved session…";
   try {
@@ -923,7 +1004,7 @@ async function resend(side) {
     await refreshState();
   }
 }
-for (const side of SIDES) $(`resend${side}`).addEventListener("click", () => resend(side));
+for (const side of ALL_SIDES) $(`resend${side}`).addEventListener("click", () => resend(side));
 
 $("sendHumanModal").addEventListener("click", async () => {
   const text = $("humanModalResponse").value.trim();
@@ -1075,6 +1156,8 @@ $("jumpLatest").addEventListener("click", () => {
   $("jumpLatest").classList.add("hidden");
 });
 
-Promise.all([loadTheme(), loadTabs({ preserve: false })]).then(refreshState);
+Promise.all([loadTheme(), loadAgentCountPreference()])
+  .then(() => loadTabs({ preserve: false }))
+  .then(refreshState);
 setInterval(refreshState, 750);
 setInterval(() => updateRoundTimers(latestState), 100);

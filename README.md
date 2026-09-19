@@ -1,8 +1,18 @@
-# AI Bridge 1.15 — Stable Three-Agent Release
+# AI Bridge 1.16 — Dynamic Multi-Tab Teams
 
-Version 1.15 promotes the known-good three-agent runtime after the rollback from the failed experimental branch. The working relay behavior is intentionally left intact while release metadata is synchronized and repository regression checks are restored.
+Version 1.16 extends the stable v1.15 runtime to a manually selectable 1–5 logical-agent team. Each logical agent is one distinct supported browser tab, and multiple tabs may use the same LLM provider, allowing one provider to contribute multiple independent conversations to the team.
 
-## 1.15 release notes
+## 1.16 release notes
+
+- **1–5 active agents:** choose how many logical AI slots participate before starting a session. The active relay roster expands from A through E.
+- **Same-LLM multi-tab teams:** ChatGPT, Grok, Gemini, Claude, or Copilot may occupy multiple logical slots as long as every slot uses a different browser tab. This lets one LLM converse with another instance of itself or have more representation in a team.
+- **Independent roles and context:** every active tab keeps its own assigned job, provider conversation, timers, resend state, transcript attribution, artifact routing, and human-input routing.
+- **Dynamic work modes:** Relay, Collaborate, Compete, Parallel, Peer Review, and Direct Mesh all use the active roster. Batch-mode minimum turn counts scale with team size.
+- **Fresh-chat support:** New AI chats and Start in fresh AI chats operate across the selected active roster, including D and E.
+- **Scope boundary preserved:** this release does not restore the later OAuth, Provider Health, state-v4, cloud-sync, watchdog, or experimental viewpoint-overlay architecture.
+- **State compatibility:** the persisted state schema remains version 3; existing three-agent sessions load as a three-agent roster.
+
+## 1.15 historical release notes
 
 - **Known-good runtime preserved:** no dynamic-agent, state-v4, OAuth, provider-health, or other rolled-back experimental runtime code is reintroduced.
 - **Version contract repaired:** `manifest.json`, the background service worker, the content-script handshake, and this README now identify the same release.
@@ -39,7 +49,7 @@ Version 1.11.3 builds on the verified 1.10.2 release with Direct Mesh peer routi
 
 # AI Bridge 1.9 — Work Modes + Human Control + Cross-AI Artifact Relay
 
-AI Bridge is a Manifest V3 Chrome extension that coordinates a persistent three-AI conversation through supported AI web interfaces.
+AI Bridge is a Manifest V3 Chrome extension that coordinates a persistent 1–5-agent conversation through supported AI web interfaces.
 
 
 
@@ -55,20 +65,20 @@ AI Bridge is a Manifest V3 Chrome extension that coordinates a persistent three-
 
 AI Bridge now supports explicit work strategies from the dashboard:
 
-- **Relay** — the original sequential A → B → C workflow.
+- **Relay** — sequential routing through the active roster (for example A → B → C → D → E).
 - **Collaborate** — sequential shared-deliverable work where each AI improves the same result.
-- **Compete** — all three AIs receive the same objective simultaneously and submit independently.
-- **Parallel Independent** — all three AIs work simultaneously on self-contained versions of the same objective without seeing peers during the pass.
-- **Peer Review** — phase 1 collects three independent primary responses; phase 2 sends each AI the other two primary responses and collects three critiques.
+- **Compete** — all active AIs receive the same objective simultaneously and submit independently.
+- **Parallel Independent** — all active AIs work simultaneously on self-contained versions of the same objective without seeing peers during the pass.
+- **Peer Review** — phase 1 collects one independent primary response from every active AI; phase 2 sends each AI the other active primary responses and collects one critique from every active AI.
 
 Turn accounting remains response-based. A complete Compete/Parallel pass uses 3 AI turns; a complete Peer Review cycle uses 6. `-1` is still accepted, but finite settings must be large enough to complete the chosen work cycle. Parallel file capture, ZIP previews, fresh-chat controls, and human-input handling continue to work across these modes.
 
 ## New in 1.7 — start fresh AI conversations from AI Bridge
 
-The three AI web pages still need to be open and selected as AI A, B, and C, but the human no longer has to visit each site and click **New chat** manually. The dashboard now provides:
+The selected AI web pages still need to be open and bound to the active logical slots, but the human no longer has to visit each site and click **New chat** manually. The dashboard now provides:
 
-- **Start in fresh AI chats** — checked by default. Pressing **Start** resets all three selected AI tabs to new conversations, waits for each page to load, reconnects the content script, and only then sends the first bridge prompt.
-- **New AI chats** — resets all three selected AI tabs without starting a bridge session.
+- **Start in fresh AI chats** — checked by default. Pressing **Start** resets every active selected AI tab to a new conversation, waits for each page to load, reconnects the content script, and only then sends the first bridge prompt.
+- **New AI chats** — resets every active selected AI tab without starting a bridge session.
 - **New chat** on each agent card — resets only that selected AI tab.
 
 AI Bridge reuses the selected existing tabs; these controls do not create replacement AI tabs. Fresh-chat controls are disabled while a bridge session is active so an in-progress team cannot accidentally lose its provider-side context. Supported fresh-chat routes are ChatGPT, Grok, Claude, Gemini, and Microsoft Copilot.
@@ -87,11 +97,11 @@ The relay is hybrid by design:
 
 Safety/performance limits remain bounded: up to 8 generated files per response, 12 MiB per file, 24 MiB combined per response, 24 retained vault files, and 60 MiB retained raw artifact data. ZIP extraction skips encrypted/unsupported/binary entries, caps individual extracted entries, and caps the text placed into any handoff. Artifact bytes live under a storage key separate from ordinary bridge/transcript state, so infinite sessions do not rewrite ZIP payloads on every state update.
 
-The dashboard now shows a collapsible **Shared Vault** with AI A/B/C source badges, filename, size, sequence number, and status such as `Extracted`, `Raw text`, or `Raw file`. Transcript cards that produced artifacts also show **Vault Upload** chips.
+The dashboard now shows a collapsible **Shared Vault** with source badges for the active AI slots, filename, size, sequence number, and status such as `Extracted`, `Raw text`, or `Raw file`. Transcript cards that produced artifacts also show **Vault Upload** chips.
 
 ChatGPT `sandbox:/mnt/data/...` links use the authenticated conversation interpreter-download route only when the current ChatGPT conversation/message identifiers are present. Ordinary HTTP(S), blob, and data download links use direct capture.
 
-Artifact relay does **not** increment the turn counter. `-1` remains truly infinite; only completed AI responses count as turns. Resume re-shares the retained vault context with a replacement chat, while normal A → B → C routing sends each side only unseen vault files.
+Artifact relay does **not** increment the turn counter. `-1` remains truly infinite; only completed AI responses count as turns. Resume re-shares retained vault context with a replacement chat, while normal active-roster routing sends each side only unseen vault files.
 
 ## More themes
 
@@ -109,7 +119,7 @@ The dashboard control column now uses **40% of the page width**, with the live t
 
 AI Bridge now keeps two lightweight persistent history lists across sessions:
 
-- **Previous jobs** — one combined list for AI A, B, and C, tagged by side and provider label. A previous job can be restored to the same AI role with one click.
+- **Previous jobs** — one combined list for all active logical AI slots, tagged by side and provider label. A previous job can be restored to any active AI role with one click.
 - **Previous commands** — prior primary objectives/commands, each reusable with one click.
 
 History is stored separately from the active relay transcript and can be cleared independently. Repeated identical entries are moved to the top instead of duplicated forever.

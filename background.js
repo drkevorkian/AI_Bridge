@@ -1,6 +1,10 @@
-const SIDES = ["A", "B", "C"];
+const ALL_SIDES = ["A", "B", "C", "D", "E"];
+const DEFAULT_AGENT_COUNT = 3;
+const MIN_AGENT_COUNT = 1;
+const MAX_AGENT_COUNT = ALL_SIDES.length;
+const SIDES = ALL_SIDES.slice(0, DEFAULT_AGENT_COUNT);
 const STATE_VERSION = 3;
-const CONTENT_VERSION = "1.15";
+const CONTENT_VERSION = "1.16";
 const WORK_MODES = new Set(["relay", "collaborate", "compete", "parallel", "review", "mesh"]);
 const INFINITE_TURNS = -1;
 const MIN_FINITE_TURNS = 1;
@@ -29,6 +33,7 @@ const DEFAULT_HISTORY = {
 
 const DEFAULT_STATE = {
   stateVersion: STATE_VERSION,
+  agentCount: DEFAULT_AGENT_COUNT,
   sessionActive: false,
   running: false,
   paused: false,
@@ -37,12 +42,18 @@ const DEFAULT_STATE = {
   tabA: null,
   tabB: null,
   tabC: null,
+  tabD: null,
+  tabE: null,
   labelA: "AI A",
   labelB: "AI B",
   labelC: "AI C",
+  labelD: "AI D",
+  labelE: "AI E",
   jobA: "",
   jobB: "",
   jobC: "",
+  jobD: "",
+  jobE: "",
 
   currentSide: null,
   startSide: "A",
@@ -53,8 +64,8 @@ const DEFAULT_STATE = {
   phasePendingSides: [],
   phaseSentSides: [],
   phaseCompletedSides: [],
-  primaryResponseSeqBySide: { A: null, B: null, C: null },
-  reviewResponseSeqBySide: { A: null, B: null, C: null },
+  primaryResponseSeqBySide: { A: null, B: null, C: null, D: null, E: null },
+  reviewResponseSeqBySide: { A: null, B: null, C: null, D: null, E: null },
   pendingHumanQueue: [],
   suppressedHumanRequests: [],
   turn: 0,
@@ -62,18 +73,18 @@ const DEFAULT_STATE = {
   delayMs: 1500,
   initialPrompt: "",
   sourceFiles: [],
-  sourceDeliveredBySide: { A: false, B: false, C: false },
+  sourceDeliveredBySide: { A: false, B: false, C: false, D: false, E: false },
   relayArtifacts: [],
   activeArtifactIds: [],
-  lastSentArtifactIdsBySide: { A: [], B: [], C: [] },
+  lastSentArtifactIdsBySide: { A: [], B: [], C: [], D: [], E: [] },
 
   lastResponseBySide: {},
   lastSentBySide: {},
-  lastDeliveredSeqBySide: { A: 0, B: 0, C: 0 },
-  roundStartedAtBySide: { A: null, B: null, C: null },
-  roundNumberBySide: { A: 0, B: 0, C: 0 },
-  lastRoundDurationMsBySide: { A: null, B: null, C: null },
-  lastRoundCompletedAtBySide: { A: null, B: null, C: null },
+  lastDeliveredSeqBySide: { A: 0, B: 0, C: 0, D: 0, E: 0 },
+  roundStartedAtBySide: { A: null, B: null, C: null, D: null, E: null },
+  roundNumberBySide: { A: 0, B: 0, C: 0, D: 0, E: 0 },
+  lastRoundDurationMsBySide: { A: null, B: null, C: null, D: null, E: null },
+  lastRoundCompletedAtBySide: { A: null, B: null, C: null, D: null, E: null },
 
   awaitingHuman: false,
   pendingHuman: null,
@@ -93,22 +104,22 @@ function cloneDefaultState() {
   return {
     ...DEFAULT_STATE,
     sourceFiles: [],
-    sourceDeliveredBySide: { A: false, B: false, C: false },
+    sourceDeliveredBySide: { A: false, B: false, C: false, D: false, E: false },
   relayArtifacts: [],
   activeArtifactIds: [],
-  lastSentArtifactIdsBySide: { A: [], B: [], C: [] },
+  lastSentArtifactIdsBySide: { A: [], B: [], C: [], D: [], E: [] },
     lastResponseBySide: {},
     lastSentBySide: {},
-    lastDeliveredSeqBySide: { A: 0, B: 0, C: 0 },
-    roundStartedAtBySide: { A: null, B: null, C: null },
-    roundNumberBySide: { A: 0, B: 0, C: 0 },
-    lastRoundDurationMsBySide: { A: null, B: null, C: null },
-    lastRoundCompletedAtBySide: { A: null, B: null, C: null },
+    lastDeliveredSeqBySide: { A: 0, B: 0, C: 0, D: 0, E: 0 },
+    roundStartedAtBySide: { A: null, B: null, C: null, D: null, E: null },
+    roundNumberBySide: { A: 0, B: 0, C: 0, D: 0, E: 0 },
+    lastRoundDurationMsBySide: { A: null, B: null, C: null, D: null, E: null },
+    lastRoundCompletedAtBySide: { A: null, B: null, C: null, D: null, E: null },
     phasePendingSides: [],
     phaseSentSides: [],
     phaseCompletedSides: [],
-    primaryResponseSeqBySide: { A: null, B: null, C: null },
-    reviewResponseSeqBySide: { A: null, B: null, C: null },
+    primaryResponseSeqBySide: { A: null, B: null, C: null, D: null, E: null },
+    reviewResponseSeqBySide: { A: null, B: null, C: null, D: null, E: null },
     pendingHumanQueue: [],
     pendingMainInterjections: [],
     suppressedHumanRequests: [],
@@ -117,6 +128,25 @@ function cloneDefaultState() {
   };
 }
 
+
+function normalizeAgentCount(raw, fallback = DEFAULT_AGENT_COUNT) {
+  const value = Number(raw);
+  if (Number.isInteger(value) && value >= MIN_AGENT_COUNT && value <= MAX_AGENT_COUNT) return value;
+  const safeFallback = Number(fallback);
+  return Number.isInteger(safeFallback) && safeFallback >= MIN_AGENT_COUNT && safeFallback <= MAX_AGENT_COUNT
+    ? safeFallback
+    : DEFAULT_AGENT_COUNT;
+}
+
+function setActiveAgentCount(raw) {
+  const count = normalizeAgentCount(raw);
+  SIDES.splice(0, SIDES.length, ...ALL_SIDES.slice(0, count));
+  return count;
+}
+
+function activeRosterLabel() {
+  return SIDES.map(side => `AI ${side}`).join(" → ");
+}
 
 function normalizeWorkMode(raw) {
   const value = String(raw || "relay").toLowerCase();
@@ -131,9 +161,10 @@ function isBatchWorkMode(mode = state.workMode) {
   return mode === "compete" || mode === "parallel" || mode === "review";
 }
 
-function minimumTurnsForWorkMode(mode = state.workMode) {
-  if (mode === "review") return 6;
-  if (mode === "compete" || mode === "parallel") return 3;
+function minimumTurnsForWorkMode(mode = state.workMode, agentCount = SIDES.length) {
+  const count = normalizeAgentCount(agentCount, SIDES.length || DEFAULT_AGENT_COUNT);
+  if (mode === "review") return count * 2;
+  if (mode === "compete" || mode === "parallel") return count;
   return 1;
 }
 
@@ -530,7 +561,7 @@ function artifactSummariesFromStore() {
 
 function resetSessionArtifactRouting() {
   state.activeArtifactIds = [];
-  state.lastSentArtifactIdsBySide = { A: [], B: [], C: [] };
+  state.lastSentArtifactIdsBySide = { A: [], B: [], C: [], D: [], E: [] };
 }
 
 function pruneArtifactVault() {
@@ -560,7 +591,7 @@ async function clearArtifacts() {
   artifactStore = {};
   state.relayArtifacts = [];
   state.activeArtifactIds = [];
-  state.lastSentArtifactIdsBySide = { A: [], B: [], C: [] };
+  state.lastSentArtifactIdsBySide = { A: [], B: [], C: [], D: [], E: [] };
   await chrome.storage.local.remove("bridgeArtifacts");
 }
 
@@ -807,6 +838,8 @@ function migrateSuppressedHumanRequests(bridgeState) {
 
 async function loadState() {
   const { bridgeState, bridgeHistory, bridgeArtifacts } = await chrome.storage.local.get(["bridgeState", "bridgeHistory", "bridgeArtifacts"]);
+  const loadedAgentCount = normalizeAgentCount(bridgeState?.agentCount, DEFAULT_AGENT_COUNT);
+  setActiveAgentCount(loadedAgentCount);
   history = normalizeHistory(bridgeHistory);
   artifactStore = bridgeArtifacts && typeof bridgeArtifacts === "object" ? bridgeArtifacts : {};
 
@@ -814,43 +847,51 @@ async function loadState() {
     state = {
       ...cloneDefaultState(),
       ...bridgeState,
+      agentCount: loadedAgentCount,
       sourceFiles: Array.isArray(bridgeState.sourceFiles) ? bridgeState.sourceFiles : [],
       sourceDeliveredBySide: {
         A: false,
         B: false,
         C: false,
+        D: false,
+        E: false,
         ...(bridgeState.sourceDeliveredBySide || {})
       },
       relayArtifacts: Array.isArray(bridgeState.relayArtifacts) ? bridgeState.relayArtifacts : [],
       activeArtifactIds: Array.isArray(bridgeState.activeArtifactIds)
         ? bridgeState.activeArtifactIds
         : (bridgeState.sessionActive && Array.isArray(bridgeState.relayArtifacts) ? bridgeState.relayArtifacts.map(item => item?.id).filter(Boolean) : []),
-      lastSentArtifactIdsBySide: { A: [], B: [], C: [], ...(bridgeState.lastSentArtifactIdsBySide || {}) },
+      lastSentArtifactIdsBySide: { A: [], B: [], C: [], D: [], E: [], ...(bridgeState.lastSentArtifactIdsBySide || {}) },
       lastResponseBySide: bridgeState.lastResponseBySide || {},
       lastSentBySide: bridgeState.lastSentBySide || {},
       lastDeliveredSeqBySide: {
         A: 0,
         B: 0,
         C: 0,
+        D: 0,
+        E: 0,
         ...(bridgeState.lastDeliveredSeqBySide || {})
       },
-      roundStartedAtBySide: { A: null, B: null, C: null, ...(bridgeState.roundStartedAtBySide || {}) },
-      roundNumberBySide: { A: 0, B: 0, C: 0, ...(bridgeState.roundNumberBySide || {}) },
-      lastRoundDurationMsBySide: { A: null, B: null, C: null, ...(bridgeState.lastRoundDurationMsBySide || {}) },
-      lastRoundCompletedAtBySide: { A: null, B: null, C: null, ...(bridgeState.lastRoundCompletedAtBySide || {}) },
+      roundStartedAtBySide: { A: null, B: null, C: null, D: null, E: null, ...(bridgeState.roundStartedAtBySide || {}) },
+      roundNumberBySide: { A: 0, B: 0, C: 0, D: 0, E: 0, ...(bridgeState.roundNumberBySide || {}) },
+      lastRoundDurationMsBySide: { A: null, B: null, C: null, D: null, E: null, ...(bridgeState.lastRoundDurationMsBySide || {}) },
+      lastRoundCompletedAtBySide: { A: null, B: null, C: null, D: null, E: null, ...(bridgeState.lastRoundCompletedAtBySide || {}) },
       phasePendingSides: Array.isArray(bridgeState.phasePendingSides) ? bridgeState.phasePendingSides.filter(side => SIDES.includes(side)) : [],
       phaseSentSides: Array.isArray(bridgeState.phaseSentSides) ? bridgeState.phaseSentSides.filter(side => SIDES.includes(side)) : [],
       phaseCompletedSides: Array.isArray(bridgeState.phaseCompletedSides) ? bridgeState.phaseCompletedSides.filter(side => SIDES.includes(side)) : [],
-      primaryResponseSeqBySide: { A: null, B: null, C: null, ...(bridgeState.primaryResponseSeqBySide || {}) },
-      reviewResponseSeqBySide: { A: null, B: null, C: null, ...(bridgeState.reviewResponseSeqBySide || {}) },
+      primaryResponseSeqBySide: { A: null, B: null, C: null, D: null, E: null, ...(bridgeState.primaryResponseSeqBySide || {}) },
+      reviewResponseSeqBySide: { A: null, B: null, C: null, D: null, E: null, ...(bridgeState.reviewResponseSeqBySide || {}) },
       pendingHumanQueue: Array.isArray(bridgeState.pendingHumanQueue) ? bridgeState.pendingHumanQueue : [],
       pendingMainInterjections: Array.isArray(bridgeState.pendingMainInterjections) ? bridgeState.pendingMainInterjections : [],
       suppressedHumanRequests: migrateSuppressedHumanRequests(bridgeState),
       transcript: Array.isArray(bridgeState.transcript) ? bridgeState.transcript : [],
       log: Array.isArray(bridgeState.log) ? bridgeState.log : []
     };
+    state.agentCount = setActiveAgentCount(state.agentCount);
+    state.startSide = SIDES.includes(state.startSide) ? state.startSide : SIDES[0];
+    state.mainSide = SIDES.includes(state.mainSide) ? state.mainSide : state.startSide;
+    if (state.currentSide && !SIDES.includes(state.currentSide)) state.currentSide = state.startSide;
     state.workMode = normalizeWorkMode(state.workMode);
-    state.mainSide = SIDES.includes(state.mainSide) ? state.mainSide : (SIDES.includes(state.startSide) ? state.startSide : "A");
     if (!isBatchWorkMode(state.workMode)) {
       state.workPhase = state.workMode === "collaborate" ? "collaborate" : (state.workMode === "mesh" ? "mesh" : "relay");
       state.phasePendingSides = [];
@@ -872,11 +913,12 @@ async function loadState() {
       state.sourceFiles = normalizeSourceFiles(state.sourceFiles);
     } catch (_) {
       state.sourceFiles = [];
-      state.sourceDeliveredBySide = { A: false, B: false, C: false };
+      state.sourceDeliveredBySide = { A: false, B: false, C: false, D: false, E: false };
     }
   } else {
-    // Older builds may not have the current three-agent/dashboard state shape.
-    // Preserve a few useful settings, but start with a clean v1.5 session.
+    // Older builds may not have the current dashboard state shape.
+    // Preserve a few useful settings, but start with a clean compatible session.
+    setActiveAgentCount(DEFAULT_AGENT_COUNT);
     state = cloneDefaultState();
     if (bridgeState) {
       state.maxTurns = Number(bridgeState.maxTurns) || state.maxTurns;
@@ -890,7 +932,7 @@ async function loadState() {
   await validateSavedBindings();
 
   // Manifest V3 service workers are disposable. When Chrome wakes this worker
-  // back up, proactively reconnect all three page listeners so a saved running
+  // back up, proactively reconnect all active page listeners so a saved running
   // session can continue without the popup having to be opened first.
   if (state.sessionActive && state.running) {
     try {
@@ -898,7 +940,7 @@ async function loadState() {
     } catch (err) {
       state.running = false;
       state.paused = true;
-      state.pauseReason = `Automatic reconnect failed: ${err.message}. Rebind the three tabs and press Resume.`;
+      state.pauseReason = `Automatic reconnect failed: ${err.message}. Rebind all active AI tabs and press Resume.`;
       await saveState();
     }
   }
@@ -959,10 +1001,10 @@ function resolveCommandTarget(raw, fromSide = null) {
   const token = normalizeTargetToken(raw);
   if (!token) return null;
 
-  const sideMatch = token.match(/(?:^|\b)ai\s*[-:]?\s*([abc])(?:\b|$)/i) || token.match(/^([abc])$/i);
+  const sideMatch = token.match(/(?:^|\b)ai\s*[-:]?\s*([a-e])(?:\b|$)/i) || token.match(/^([a-e])$/i);
   if (sideMatch) {
     const side = String(sideMatch[1]).toUpperCase();
-    return side === fromSide ? null : side;
+    return !SIDES.includes(side) || side === fromSide ? null : side;
   }
 
   const matches = SIDES.filter(side => {
@@ -1011,9 +1053,7 @@ function bridgeCommandProtocolText() {
     "DIRECT-MESH COMMAND PROTOCOL:",
     "AI Bridge recognizes registered LLM routing commands only in Direct Mesh mode.",
     "To choose the next teammate, put exactly one routing line as the FINAL non-empty line of your response:",
-    "SEND TO: AI A",
-    "SEND TO: AI B",
-    "SEND TO: AI C",
+    ...SIDES.map(targetSide => `SEND TO: AI ${targetSide}`),
     "You may use the teammate's current label instead (for example SEND TO: Gemini).",
     "Everything above the final SEND TO line is treated as your direct message to that teammate.",
     "Do not target yourself. Do not place SEND TO as the final line when merely discussing or demonstrating the command.",
@@ -1038,7 +1078,7 @@ function humanProtocolText() {
 function teamContext(side) {
   const roster = SIDES.map(s => `- AI ${s} — ${labelForSide(s)} — JOB: ${jobForSide(s)}`).join("\n");
   return [
-    `You are AI ${side} (${labelForSide(side)}) in a three-AI team coordinated by AI Bridge.`,
+    `You are AI ${side} (${labelForSide(side)}) in a ${SIDES.length}-AI team coordinated by AI Bridge.`,
     "",
     "YOUR ASSIGNED JOB:",
     jobForSide(side),
@@ -1052,8 +1092,8 @@ function teamContext(side) {
       ? "- This is an independent primary phase. Do not wait for or infer another AI's unpublished answer."
       : "- Build on the shared updates below and explicitly challenge errors that affect your job.",
     state.workMode === "compete"
-      ? "- Treat AI A, AI B, and AI C as competitors on the same objective during the primary pass; do not sabotage or misrepresent peer work."
-      : "- Treat AI A, AI B, and AI C as collaborators on the same objective.",
+      ? "- Treat the active AI roster as competitors on the same objective during the primary pass; do not sabotage or misrepresent peer work."
+      : "- Treat every active AI in the roster as a collaborator on the same objective.",
     "- Do not add browser-extension meta-commentary unless it is necessary to diagnose the relay itself.",
     humanProtocolText(),
     ...(bridgeCommandProtocolText() ? ["", bridgeCommandProtocolText()] : [])
@@ -1072,21 +1112,21 @@ function workModeInstruction(side, phase = state.workPhase) {
   if (mode === "compete") {
     return [
       "WORK MODE: COMPETE — INDEPENDENT SUBMISSION",
-      "You are competing with AI A, AI B, and AI C on the same objective.",
+      "You are competing with the other active AIs on the same objective.",
       "Produce your strongest complete answer independently. Do not wait for, imitate, or assume access to another competitor's answer during this phase."
     ].join("\n");
   }
   if (mode === "parallel") {
     return [
       "WORK MODE: PARALLEL INDEPENDENT",
-      "Work on the same objective simultaneously and independently from the other two AIs.",
+      "Work on the same objective simultaneously and independently from the other active AIs.",
       "Produce a self-contained result from your assigned perspective. Do not depend on peer output during this phase."
     ].join("\n");
   }
   if (mode === "mesh") {
     return [
       "WORK MODE: DIRECT MESH",
-      "Work as one member of a dynamically routed three-AI team.",
+      "Work as one member of the dynamically routed active AI team.",
       "You may send your completed response directly to a specific teammate with the registered final-line SEND TO command.",
       "Use direct routing when a specific teammate should answer, verify, debug, or continue your thought. If no direct target is needed, omit the command and AI Bridge will continue to the next teammate normally."
     ].join("\n");
@@ -1094,7 +1134,7 @@ function workModeInstruction(side, phase = state.workPhase) {
   if (mode === "review" && phase === "review") {
     return [
       "WORK MODE: PEER REVIEW — CRITIQUE PHASE",
-      "Review the other two AIs' primary responses below. Critique each one separately and specifically.",
+      "Review the other active AIs' primary responses below. Critique each one separately and specifically.",
       "Identify factual or logical errors, missing considerations, weak assumptions, useful strengths, and contradictions.",
       "Do not merely agree. End with actionable recommendations for improving the team's final result."
     ].join("\n");
@@ -1102,12 +1142,12 @@ function workModeInstruction(side, phase = state.workPhase) {
   if (mode === "review") {
     return [
       "WORK MODE: PEER REVIEW — INDEPENDENT PRIMARY PHASE",
-      "First produce your own complete answer independently. You will receive the other two primary responses only after all three AIs finish this phase."
+      "First produce your own complete answer independently. You will receive the other active AIs' primary responses only after every active AI finishes this phase."
     ].join("\n");
   }
   return [
     "WORK MODE: RELAY",
-    "Work in the normal A → B → C relay. Build on shared updates while prioritizing your assigned job."
+    "Work in the normal active-roster relay order. Build on shared updates while prioritizing your assigned job."
   ].join("\n");
 }
 
@@ -1162,8 +1202,8 @@ function recordTranscript(type, { side = null, text = "", ...extra } = {}) {
 function beginRoundTimer(side, startedAt = Date.now()) {
   if (!SIDES.includes(side)) return null;
   const when = Number.isFinite(Number(startedAt)) ? Number(startedAt) : Date.now();
-  state.roundStartedAtBySide = { A: null, B: null, C: null, ...(state.roundStartedAtBySide || {}) };
-  state.roundNumberBySide = { A: 0, B: 0, C: 0, ...(state.roundNumberBySide || {}) };
+  state.roundStartedAtBySide = { A: null, B: null, C: null, D: null, E: null, ...(state.roundStartedAtBySide || {}) };
+  state.roundNumberBySide = { A: 0, B: 0, C: 0, D: 0, E: 0, ...(state.roundNumberBySide || {}) };
   state.roundStartedAtBySide[side] = when;
   state.roundNumberBySide[side] = Math.max(0, Number(state.roundNumberBySide[side]) || 0) + 1;
   return { startedAt: when, roundNumber: state.roundNumberBySide[side] };
@@ -1171,10 +1211,10 @@ function beginRoundTimer(side, startedAt = Date.now()) {
 
 function completeRoundTimer(side, completedAt = Date.now()) {
   if (!SIDES.includes(side)) return { roundNumber: null, durationMs: null, completedAt: null };
-  state.roundStartedAtBySide = { A: null, B: null, C: null, ...(state.roundStartedAtBySide || {}) };
-  state.roundNumberBySide = { A: 0, B: 0, C: 0, ...(state.roundNumberBySide || {}) };
-  state.lastRoundDurationMsBySide = { A: null, B: null, C: null, ...(state.lastRoundDurationMsBySide || {}) };
-  state.lastRoundCompletedAtBySide = { A: null, B: null, C: null, ...(state.lastRoundCompletedAtBySide || {}) };
+  state.roundStartedAtBySide = { A: null, B: null, C: null, D: null, E: null, ...(state.roundStartedAtBySide || {}) };
+  state.roundNumberBySide = { A: 0, B: 0, C: 0, D: 0, E: 0, ...(state.roundNumberBySide || {}) };
+  state.lastRoundDurationMsBySide = { A: null, B: null, C: null, D: null, E: null, ...(state.lastRoundDurationMsBySide || {}) };
+  state.lastRoundCompletedAtBySide = { A: null, B: null, C: null, D: null, E: null, ...(state.lastRoundCompletedAtBySide || {}) };
 
   const start = Number(state.roundStartedAtBySide[side]);
   const requestedEnd = Number(completedAt);
@@ -1256,7 +1296,7 @@ function initialMessage(side) {
       batch
         ? "Begin your independent primary work now. Return one complete response when finished."
         : (state.workMode === "collaborate"
-            ? "You are the first collaborator. Establish a strong shared starting point for the other two agents to improve."
+            ? "You are the first collaborator. Establish a strong shared starting point for the later agents to improve."
             : (state.workMode === "mesh"
                 ? "You are the first speaker. Work from your assigned job's perspective, then use SEND TO as your final line if a specific teammate should receive the next turn."
                 : "You are the first speaker. Begin the work from your assigned job's perspective, and produce something useful for the next two agents to build on."))
@@ -1771,8 +1811,9 @@ async function resetChatTab(tabId) {
 
 async function resetSelectedChats(msg, sides = SIDES, { allowActive = false } = {}) {
   if (state.sessionActive && !allowActive) throw new Error("Stop the current bridge session before opening fresh AI chats.");
+  const allowedSides = state.sessionActive ? SIDES : ALL_SIDES;
   const chosen = [...new Set((Array.isArray(sides) ? sides : SIDES).map(side => String(side || "").toUpperCase()))]
-    .filter(side => SIDES.includes(side));
+    .filter(side => allowedSides.includes(side));
   if (!chosen.length) throw new Error("Choose at least one AI role to reset.");
 
   const ids = chosen.map(side => Number(msg?.[`tab${side}`]));
@@ -1808,7 +1849,7 @@ async function endBridge(reason = "Stopped") {
   state.pendingHumanQueue = [];
   state.pendingMainInterjections = [];
   state.suppressedHumanRequests = [];
-  state.roundStartedAtBySide = { A: null, B: null, C: null };
+  state.roundStartedAtBySide = { A: null, B: null, C: null, D: null, E: null };
   appendLog({ time: Date.now(), type: "system", text: reason });
   await clearAttention();
   await saveState();
@@ -1816,8 +1857,8 @@ async function endBridge(reason = "Stopped") {
 
 async function bindTabsFromMessage(msg) {
   const tabIds = SIDES.map(side => Number(msg[`tab${side}`]));
-  if (tabIds.some(id => !Number.isInteger(id) || id <= 0)) throw new Error("Choose three supported AI tabs.");
-  if (new Set(tabIds).size !== 3) throw new Error("AI A, AI B, and AI C must use three different tabs.");
+  if (tabIds.some(id => !Number.isInteger(id) || id <= 0)) throw new Error(`Choose ${SIDES.length} supported AI tab${SIDES.length === 1 ? "" : "s"}.`);
+  if (new Set(tabIds).size !== tabIds.length) throw new Error("Each logical AI must use a different browser tab. Separate tabs from the same LLM are allowed.");
 
   await Promise.all(tabIds.map(ensureTabListener));
 
@@ -2113,18 +2154,22 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
     if (msg.type === "AI_BRIDGE_START") {
       if (state.sessionActive) throw new Error("A saved session already exists. Resume it or Stop it before starting a new one.");
 
+      const previousState = state;
+      const previousAgentCount = normalizeAgentCount(previousState?.agentCount, DEFAULT_AGENT_COUNT);
       const fresh = cloneDefaultState();
+      fresh.agentCount = normalizeAgentCount(msg.agentCount, DEFAULT_AGENT_COUNT);
+      const requestedSides = ALL_SIDES.slice(0, fresh.agentCount);
       fresh.sessionActive = true;
       fresh.running = false;
       fresh.paused = false;
-      fresh.startSide = SIDES.includes(msg.startSide) ? msg.startSide : "A";
+      fresh.startSide = requestedSides.includes(msg.startSide) ? msg.startSide : requestedSides[0];
       fresh.mainSide = fresh.startSide;
       fresh.pendingMainInterjections = [];
       fresh.workMode = normalizeWorkMode(msg.workMode);
       fresh.workPhase = isBatchWorkMode(fresh.workMode) ? "primary" : (fresh.workMode === "collaborate" ? "collaborate" : (fresh.workMode === "mesh" ? "mesh" : "relay"));
       fresh.currentSide = isBatchWorkMode(fresh.workMode) ? null : fresh.startSide;
       fresh.maxTurns = normalizeMaxTurns(msg.maxTurns);
-      const minimumTurns = minimumTurnsForWorkMode(fresh.workMode);
+      const minimumTurns = minimumTurnsForWorkMode(fresh.workMode, fresh.agentCount);
       if (fresh.maxTurns !== INFINITE_TURNS && fresh.maxTurns < minimumTurns) {
         throw new Error(`${workModeLabel(fresh.workMode)} mode needs at least ${minimumTurns} AI turns to complete one full cycle, or use -1.`);
       }
@@ -2133,18 +2178,18 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
       fresh.initialPrompt = String(msg.initialPrompt || "").trim();
       if (!fresh.initialPrompt) throw new Error("Enter an initial objective or prompt.");
       fresh.sourceFiles = normalizeSourceFiles(msg.sourceFiles);
-      fresh.sourceDeliveredBySide = { A: false, B: false, C: false };
+      fresh.sourceDeliveredBySide = { A: false, B: false, C: false, D: false, E: false };
 
-      for (const side of SIDES) {
+      for (const side of requestedSides) {
         fresh[`tab${side}`] = Number(msg[`tab${side}`]);
         fresh[`label${side}`] = String(msg[`label${side}`] || `AI ${side}`);
         fresh[`job${side}`] = String(msg[`job${side}`] || "").trim();
       }
 
-      const previousState = state;
       // Preserve the durable Vault index while starting a clean routing session.
       fresh.relayArtifacts = artifactSummariesFromStore();
       fresh.activeArtifactIds = [];
+      setActiveAgentCount(fresh.agentCount);
       state = fresh;
       try {
         await bindTabsFromMessage(msg);
@@ -2154,6 +2199,7 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
         }
       } catch (err) {
         state = previousState;
+        setActiveAgentCount(previousAgentCount);
         throw err;
       }
 

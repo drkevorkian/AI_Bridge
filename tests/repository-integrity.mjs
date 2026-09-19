@@ -78,6 +78,34 @@ const popupIds = assertUniqueIds(popupHtml, "popup.html");
 for (const id of dollarRefs(dashboardJs)) assert.ok(dashboardIds.has(id), `dashboard.js references missing DOM id: ${id}`);
 for (const id of dollarRefs(popupJs)) assert.ok(popupIds.has(id), `popup.js references missing DOM id: ${id}`);
 
+for (const side of ["A", "B", "C", "D", "E"]) {
+  for (const prefix of ["agentCard", "tab", "job", "timer", "newChat", "resend"]) {
+    assert.ok(dashboardIds.has(prefix + side), `dynamic roster is missing ${prefix}${side}`);
+  }
+}
+assert.ok(dashboardIds.has("agentCount"), "dashboard is missing the active-agent count control");
+assert.match(background, /const ALL_SIDES = \["A", "B", "C", "D", "E"\]/);
+assert.match(background, /agentCount: DEFAULT_AGENT_COUNT/);
+assert.match(background, /minimumTurnsForWorkMode\(mode = state\.workMode, agentCount = SIDES\.length\)/);
+assert.match(background, /new Set\(tabIds\)\.size !== tabIds\.length/);
+assert.match(background, /Separate tabs from the same LLM are allowed/);
+assert.match(dashboardJs, /const ALL_SIDES = \["A", "B", "C", "D", "E"\]/);
+assert.match(dashboardJs, /agentCount: SIDES\.length/);
+assert.match(dashboardJs, /Multiple tabs from the same LLM are allowed/);
+assert.doesNotMatch(background, /\[abc\]/i, "mesh routing must not remain limited to A-C");
+assert.doesNotMatch(dashboardJs, /validateThreeTabs|Starting three-AI|all three AIs/i, "dashboard must not retain fixed three-agent behavior");
+
+for (const removedExperimental of [
+  "agent-capabilities.js",
+  "provider-health-runtime.js",
+  "viewpoint-runtime.js",
+  "oauth-runtime-hardening.js",
+  "roster-v2-migration.js",
+  "cloud-settings-v2.js"
+]) {
+  assert.ok(!exists(removedExperimental), `out-of-scope experimental file was reintroduced: ${removedExperimental}`);
+}
+
 for (const forbidden of [
   /\beval\s*\(/,
   /\bnew\s+Function\s*\(/,
