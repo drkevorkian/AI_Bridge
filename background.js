@@ -1002,7 +1002,7 @@ function resolveCommandTarget(raw, fromSide = null) {
   const sideMatch = token.match(/(?:^|\b)ai\s*[-:]?\s*([a-e])(?:\b|$)/i) || token.match(/^([a-e])$/i);
   if (sideMatch) {
     const side = String(sideMatch[1]).toUpperCase();
-    return side === fromSide ? null : side;
+    return !SIDES.includes(side) || side === fromSide ? null : side;
   }
 
   const matches = SIDES.filter(side => {
@@ -1051,9 +1051,7 @@ function bridgeCommandProtocolText() {
     "DIRECT-MESH COMMAND PROTOCOL:",
     "AI Bridge recognizes registered LLM routing commands only in Direct Mesh mode.",
     "To choose the next teammate, put exactly one routing line as the FINAL non-empty line of your response:",
-    "SEND TO: AI A",
-    "SEND TO: AI B",
-    "SEND TO: AI C",
+    ...SIDES.map(targetSide => `SEND TO: AI ${targetSide}`),
     "You may use the teammate's current label instead (for example SEND TO: Gemini).",
     "Everything above the final SEND TO line is treated as your direct message to that teammate.",
     "Do not target yourself. Do not place SEND TO as the final line when merely discussing or demonstrating the command.",
