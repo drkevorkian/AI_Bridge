@@ -2616,8 +2616,9 @@ async function resetChatTab(tabId) {
 
 async function resetSelectedChats(msg, sides = SIDES, { allowActive = false } = {}) {
   if (state.sessionActive && !allowActive) throw new Error("Stop the current bridge session before opening fresh AI chats.");
+  const allowedSides = state.sessionActive ? SIDES : ALL_SIDES;
   const chosen = [...new Set((Array.isArray(sides) ? sides : SIDES).map(side => String(side || "").toUpperCase()))]
-    .filter(side => SIDES.includes(side));
+    .filter(side => allowedSides.includes(side));
   if (!chosen.length) throw new Error("Choose at least one AI role to reset.");
 
   const ids = chosen.map(side => Number(msg?.[`tab${side}`]));
