@@ -4,7 +4,7 @@ const MIN_AGENT_COUNT = 1;
 const MAX_AGENT_COUNT = ALL_SIDES.length;
 const SIDES = ALL_SIDES.slice(0, DEFAULT_AGENT_COUNT);
 const STATE_VERSION = 3;
-const CONTENT_VERSION = "1.16";
+const CONTENT_VERSION = "1.18.0";
 const WORK_MODES = new Set(["relay", "collaborate", "compete", "parallel", "review", "mesh"]);
 const INFINITE_TURNS = -1;
 const MIN_FINITE_TURNS = 1;
@@ -2476,3 +2476,93 @@ chrome.tabs.onRemoved.addListener(async tabId => {
   appendLog({ time: Date.now(), type: "system", text: state.pauseReason });
   await saveState();
 });
+
+/* v1.18 Settings services -------------------------------------------------
+ * Intentionally isolated from bridge routing/state. No timers or loops here.
+ */
+const AI_BRIDGE_KEEP_AWAKE_KEY = "aiBridgeKeepAwake";
+const AI_BRIDGE_AUTO_UPDATE_KEY = "aiBridgeAutoCheckUpdates";
+const AI_BRIDGE_UPDATE_ALARM = "ai-bridge-daily-update";
+const AI_BRIDGE_UPDATE_MANIFEST = "https://raw.githubusercontent.com/drkevorkian/AI_Bridge/main/manifest.json";
+
+function aiBridgeVersionParts(value) {
+  return String(value || "0").split(".").map(part => Number(part) || 0);
+}
+
+function aiBridgeIsNewerVersion(candidate, installed) {
+  const a = aiBridgeVersionParts(candidate);
+  const b = aiBridgeVersionParts(installed);
+  for (let i = 0; i < Math.max(a.length, b.length); i++) {
+    const av = a[i] || 0;
+    const bv = b[i] || 0;
+    if (av !== bv) return av > bv;
+  }
+  return false;
+}
+
+async function aiBridgeApplyKeepAwake(enabled) {
+  if (enabled) chrome.power.requestKeepAwake("system");
+  else chrome.power.releaseKeepAwake();
+  await chrome.storage.local.set({ [AI_BRIDGE_KEEP_AWAKE_KEY]: Boolean(enabled) });
+}
+
+async function aiBridgeConfigureUpdateAlarm(enabled) {
+  await chrome.alarms.clear(AI_BRIDGE_UPDATE_ALARM);
+  if (enabled) {
+    chrome.alarms.create(AI_BRIDGE_UPDATE_ALARM, { delayInMinutes: 1, periodInMinutes: 1440 });
+  }
+  await chrome.storage.local.set({ [AI_BRIDGE_AUTO_UPDATE_KEY]: Boolean(enabled) });
+}
+
+async function aiBridgeCheckForUpdateNotification() {
+  const response = await fetch(AI_BRIDGE_UPDATE_MANIFEST, { cache: "no-store" });
+  if (!response.ok) throw new Error("Update manifest request failed.");
+  const remote = await response.json();
+  const installed = chrome.runtime.getManifest().version;
+  if (aiBridgeIsNewerVersion(remote.version, installed)) {
+    await chrome.notifications.create("ai-bridge-update", {
+      type: "basic",
+      iconUrl: "icon128.png",
+      title: "AI Bridge update available",
+      message: `Version ${remote.version} is available. Open Settings to download it.`
+    });
+  }
+}
+
+chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
+  if (msg?.type === "AI_BRIDGE_POWER_SET") {
+    aiBridgeApplyKeepAwake(Boolean(msg.enabled))
+      .then(() => sendResponse({ ok: true, enabled: Boolean(msg.enabled) }))
+      .catch(error => sendResponse({ ok: false, error: error.message }));
+    return true;
+  }
+
+  if (msg?.type === "AI_BRIDGE_AUTO_UPDATE_SET") {
+    aiBridgeConfigureUpdateAlarm(Boolean(msg.enabled))
+      .then(() => sendResponse({ ok: true, enabled: Boolean(msg.enabled) }))
+      .catch(error => sendResponse({ ok: false, error: error.message }));
+    return true;
+  }
+
+  if (msg?.type === "AI_BRIDGE_SETTINGS_OPEN") {
+    chrome.tabs.create({ url: chrome.runtime.getURL("settings.html") })
+      .then(tab => sendResponse({ ok: true, tabId: tab.id }))
+      .catch(error => sendResponse({ ok: false, error: error.message }));
+    return true;
+  }
+  return false;
+});
+
+chrome.alarms.onAlarm.addListener(alarm => {
+  if (alarm.name !== AI_BRIDGE_UPDATE_ALARM) return;
+  aiBridgeCheckForUpdateNotification().catch(error => console.warn("AI Bridge update check failed", error));
+});
+
+chrome.storage.local.get([AI_BRIDGE_KEEP_AWAKE_KEY, AI_BRIDGE_AUTO_UPDATE_KEY]).then(values => {
+  if (values[AI_BRIDGE_KEEP_AWAKE_KEY] === true) chrome.power.requestKeepAwake("system");
+  if (values[AI_BRIDGE_AUTO_UPDATE_KEY] === true) {
+    chrome.alarms.get(AI_BRIDGE_UPDATE_ALARM).then(existing => {
+      if (!existing) chrome.alarms.create(AI_BRIDGE_UPDATE_ALARM, { delayInMinutes: 1, periodInMinutes: 1440 });
+    });
+  }
+}).catch(error => console.warn("AI Bridge settings bootstrap failed", error));
