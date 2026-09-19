@@ -14,6 +14,11 @@ const expectedFiles = [
   "dashboard.css",
   "dashboard.html",
   "dashboard.js",
+  "dashboard-layouts.css",
+  "dashboard-layouts.js",
+  "settings.css",
+  "settings.html",
+  "settings.js",
   "icon128.png",
   "manifest.json",
   "popup.css",
@@ -30,9 +35,12 @@ const dashboardHtml = read("dashboard.html");
 const dashboardJs = read("dashboard.js");
 const popupHtml = read("popup.html");
 const popupJs = read("popup.js");
+const settingsHtml = read("settings.html");
+const settingsJs = read("settings.js");
+const layoutJs = read("dashboard-layouts.js");
 const readme = read("README.md");
 const workflow = read(".github/workflows/regression.yml");
-const allJs = [background, content, dashboardJs, popupJs].join("\n");
+const allJs = [background, content, dashboardJs, layoutJs, settingsJs, popupJs].join("\n");
 
 assert.equal(manifest.manifest_version, 3);
 assert.equal(manifest.name, "AI Bridge");
@@ -55,7 +63,7 @@ if (manifest.action?.default_popup) referenced.add(manifest.action.default_popup
 for (const value of Object.values(manifest.action?.default_icon || {})) referenced.add(value);
 for (const script of manifest.content_scripts || []) for (const file of script.js || []) referenced.add(file);
 for (const value of Object.values(manifest.icons || {})) referenced.add(value);
-for (const html of [dashboardHtml, popupHtml]) {
+for (const html of [dashboardHtml, popupHtml, settingsHtml]) {
   for (const match of html.matchAll(/<script[^>]+src="([^"]+)"/g)) referenced.add(match[1]);
   for (const match of html.matchAll(/<link[^>]+href="([^"]+)"/g)) referenced.add(match[1]);
   assert.doesNotMatch(html, /<script(?![^>]+src=)[^>]*>/i, "inline scripts are not allowed");
@@ -84,6 +92,28 @@ for (const side of ["A", "B", "C", "D", "E"]) {
   }
 }
 assert.ok(dashboardIds.has("agentCount"), "dashboard is missing the active-agent count control");
+assert.match(settingsHtml, /Blizzard Blue/);
+assert.match(settingsHtml, /Ghost White/);
+assert.match(settingsHtml, /Midnight/);
+assert.match(settingsHtml, /Slate/);
+assert.match(settingsHtml, /Solarized Light/);
+assert.match(settingsHtml, /Ocean/);
+assert.match(settingsHtml, /Terminal/);
+assert.match(settingsHtml, /value="studio"/);
+assert.match(settingsHtml, /value="classic"/);
+assert.match(settingsHtml, /value="focus"/);
+assert.match(settingsHtml, /id="syncPush"/);
+assert.match(settingsHtml, /id="googleLink"/);
+assert.match(settingsHtml, /id="refreshHealth"/);
+assert.match(settingsHtml, /id="keepAwake"/);
+assert.match(settingsHtml, /id="checkUpdates"/);
+assert.match(manifest.permissions.join(","), /identity/);
+assert.match(manifest.permissions.join(","), /alarms/);
+assert.match(manifest.permissions.join(","), /power/);
+assert.match(background, /AI_BRIDGE_POWER_SET/);
+assert.match(background, /AI_BRIDGE_AUTO_UPDATE_SET/);
+assert.doesNotMatch(settingsJs, /bridgeState\s*=\s*.*sessionActive\s*:\s*true/s, "Settings must not synthesize an active relay session");
+assert.doesNotMatch(layoutJs, /AI_BRIDGE_START|AI_BRIDGE_RESUME|bridgeState/, "layout module must not control relay state");
 assert.match(background, /const ALL_SIDES = \["A", "B", "C", "D", "E"\]/);
 assert.match(background, /agentCount: DEFAULT_AGENT_COUNT/);
 assert.match(background, /minimumTurnsForWorkMode\(mode = state\.workMode, agentCount = SIDES\.length\)/);
