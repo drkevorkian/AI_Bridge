@@ -41,7 +41,7 @@ for (const marker of [
 ]) assert.ok(background.includes(marker), `background.js missing critical marker: ${marker}`);
 
 const manifest = JSON.parse(read("manifest.json"));
-assert.equal(manifest.version, "1.17.1", "debug/security release must be versioned as 1.17.1 for this finalize release");
+assert.equal(manifest.version, "1.18.0", "recoded dynamic release must be versioned as 1.18.0");
 assert.ok(Number(manifest.minimum_chrome_version) >= 106, "minimum Chrome must cover Promise-based Identity APIs");
 assert.equal(manifest.content_security_policy?.extension_pages,
   "script-src 'self'; object-src 'none'; base-uri 'none'; frame-ancestors 'none'",
@@ -58,12 +58,12 @@ assert.deepEqual(scripts, [
 for (const script of scripts) assert.equal(fs.existsSync(path.join(root, script)), true, `manifest content script is missing: ${script}`);
 
 const reconnect = read("reconnect-runtime-hardening.js");
-assert.match(reconnect, /EXPECTED_CONTENT_VERSION\s*=\s*"1\.17\.1"/, "reconnect runtime version drifted from manifest");
+assert.match(reconnect, /EXPECTED_CONTENT_VERSION\\s*=\\s*"1\\.18\\.0"/, "reconnect runtime version drifted from manifest");
 assert.match(reconnect, /recovery:\s*"clean-reload"/);
 assert.doesNotMatch(reconnect, /chrome\.scripting\.executeScript/);
 
 const prelude = read("content-runtime-prelude.js");
-assert.match(prelude, /RUNTIME_VERSION\s*=\s*"1\.17\.1"/);
+assert.match(prelude, /RUNTIME_VERSION\\s*=\\s*"1\\.18\\.0"/);
 assert.match(prelude, /waitForProviderSendAcknowledgement/);
 assert.match(prelude, /providerSendAcknowledgement:\s*true/);
 
