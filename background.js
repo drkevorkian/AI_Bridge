@@ -2667,8 +2667,8 @@ async function endBridge(reason = "Stopped") {
 
 async function bindTabsFromMessage(msg) {
   const tabIds = SIDES.map(side => Number(msg[`tab${side}`]));
-  if (tabIds.some(id => !Number.isInteger(id) || id <= 0)) throw new Error("Choose three supported AI tabs.");
-  if (new Set(tabIds).size !== 3) throw new Error("AI A, AI B, and AI C must use three different tabs.");
+  if (tabIds.some(id => !Number.isInteger(id) || id <= 0)) throw new Error(`Choose ${SIDES.length} supported AI tab${SIDES.length === 1 ? "" : "s"}.`);
+  if (new Set(tabIds).size !== tabIds.length) throw new Error("Each logical AI must use a different browser tab. Multiple tabs from the same LLM provider are allowed.");
 
   await Promise.all(tabIds.map(ensureTabListener));
 
@@ -3106,7 +3106,8 @@ function sanitizeCloudSettings(raw, options = {}) {
     layout: ALLOWED_CLOUD_LAYOUTS.has(src.layout) ? src.layout : "studio",
     paneWidth: clampCloudPane(src.paneWidth),
     workMode: normalizeWorkMode(src.workMode),
-    startSide: SIDES.includes(src.startSide) ? src.startSide : "A",
+    agentCount: normalizeAgentCount(src.agentCount, DEFAULT_AGENT_COUNT),
+    startSide: ALL_SIDES.includes(src.startSide) ? src.startSide : "A",
     maxTurns,
     maxCycles,
     checkpointEveryNCycles: clampCheckpointEvery(src.checkpointEveryNCycles),
@@ -3116,6 +3117,8 @@ function sanitizeCloudSettings(raw, options = {}) {
     jobA: String(src.jobA || "").trim().slice(0, 4000),
     jobB: String(src.jobB || "").trim().slice(0, 4000),
     jobC: String(src.jobC || "").trim().slice(0, 4000),
+    jobD: String(src.jobD || "").trim().slice(0, 4000),
+    jobE: String(src.jobE || "").trim().slice(0, 4000),
     teamRules: String(src.teamRules || "").trim().slice(0, 12000),
     history: {
       jobs: sanitizeHistoryForCloud("jobs", src.history?.jobs, 20),
@@ -3728,13 +3731,13 @@ async function applyIdleCloudSettings(settings) {
   if (state.sessionActive) {
     throw new Error("Stop the active Bridge session before pulling cloud settings into this profile.");
   }
-  state.jobA = settings.jobA;
-  state.jobB = settings.jobB;
-  state.jobC = settings.jobC;
+  state.agentCount = setActiveAgentCount(settings.agentCount);
+  state.activeSides = [...SIDES];
+  for (const side of ALL_SIDES) state[`job${side}`] = String(settings[`job${side}`] || "");
   state.teamRules = settings.teamRules;
   state.workMode = settings.workMode;
-  state.startSide = settings.startSide;
-  state.mainSide = settings.startSide;
+  state.startSide = SIDES.includes(settings.startSide) ? settings.startSide : SIDES[0];
+  state.mainSide = state.startSide;
   state.maxTurns = settings.maxTurns;
   state.delayMs = settings.delayMs;
   await saveState();
@@ -4079,11 +4082,16 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
       requireExtensionPage(sender, "Start");
       if (state.sessionActive) throw new Error("A saved session already exists. Resume it or Stop it before starting a new one.");
 
+      const previousState = state;
+      const previousAgentCount = normalizeAgentCount(previousState?.agentCount, DEFAULT_AGENT_COUNT);
       const fresh = cloneDefaultState();
+      fresh.agentCount = normalizeAgentCount(msg.agentCount, DEFAULT_AGENT_COUNT);
+      setActiveAgentCount(fresh.agentCount);
+      fresh.activeSides = [...SIDES];
       fresh.sessionActive = true;
       fresh.running = false;
       fresh.paused = false;
-      fresh.startSide = SIDES.includes(msg.startSide) ? msg.startSide : "A";
+      fresh.startSide = SIDES.includes(msg.startSide) ? msg.startSide : SIDES[0];
       fresh.mainSide = fresh.startSide;
       fresh.pendingMainInterjections = [];
       fresh.workMode = normalizeWorkMode(msg.workMode);
@@ -4114,7 +4122,6 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
         fresh[`job${side}`] = String(msg[`job${side}`] || "").trim();
       }
 
-      const previousState = state;
       // Preserve the durable Vault index while starting a clean routing session.
       fresh.relayArtifacts = artifactSummariesFromStore();
       fresh.activeArtifactIds = [];
@@ -4127,6 +4134,7 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
         }
       } catch (err) {
         state = previousState;
+        setActiveAgentCount(previousAgentCount);
         throw err;
       }
 
