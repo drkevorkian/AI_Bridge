@@ -86,9 +86,11 @@ async function linkGoogle(){
   const { [GOOGLE_CLIENT_KEY]:clientId }=await chrome.storage.local.get(GOOGLE_CLIENT_KEY);
   if(!clientId)throw new Error("Save a Google OAuth client ID first.");
   const verifier=randomVerifier(), challenge=b64url(await sha256(verifier)), redirect=chrome.identity.getRedirectURL("google");
-  const q=new URLSearchParams({client_id:clientId,redirect_uri:redirect,response_type:"code",scope:"https://www.googleapis.com/auth/drive.appdata",code_challenge:challenge,code_challenge_method:"S256",access_type:"online",prompt:"consent"});
+  const state=randomVerifier();
+  const q=new URLSearchParams({client_id:clientId,redirect_uri:redirect,response_type:"code",scope:"https://www.googleapis.com/auth/drive.appdata",code_challenge:challenge,code_challenge_method:"S256",state,access_type:"online",prompt:"consent"});
   const responseUrl=await chrome.identity.launchWebAuthFlow({url:"https://accounts.google.com/o/oauth2/v2/auth?"+q.toString(),interactive:true});
-  const returned=new URL(responseUrl), code=returned.searchParams.get("code"), error=returned.searchParams.get("error");
+  const returned=new URL(responseUrl), code=returned.searchParams.get("code"), error=returned.searchParams.get("error"), returnedState=returned.searchParams.get("state");
+  if(returnedState!==state)throw new Error("Google authorization state validation failed.");
   if(error)throw new Error("Google authorization failed: "+error); if(!code)throw new Error("Google did not return an authorization code.");
   const body=new URLSearchParams({client_id:clientId,code,code_verifier:verifier,grant_type:"authorization_code",redirect_uri:redirect});
   const res=await fetch("https://oauth2.googleapis.com/token",{method:"POST",headers:{"Content-Type":"application/x-www-form-urlencoded"},body});
@@ -147,7 +149,7 @@ async function init(){
   const local=await chrome.storage.local.get([THEME_KEY,LAYOUT_KEY,PANE_WIDTH_KEY,AUTO_UPDATE_KEY,KEEP_AWAKE_KEY,GOOGLE_CLIENT_KEY]);
   applyTheme(local[THEME_KEY]);$("settingsLayout").value=LAYOUTS.has(local[LAYOUT_KEY])?local[LAYOUT_KEY]:"studio";
   const paneWidth=Math.min(70,Math.max(24,Number(local[PANE_WIDTH_KEY])||36));$("paneWidth").value=String(paneWidth);$("paneWidthValue").textContent=Math.round(paneWidth)+"%";
-  $("autoCheckUpdates").checked=local[AUTO_UPDATE_KEY]===true;$("keepAwake").checked=local[KEEP_AWAKE_KEY]===true;$("googleClientId").value=local[GOOGLE_CLIENT_KEY]||"";
+  $("autoCheckUpdates").checked=local[AUTO_UPDATE_KEY]===true;$("keepAwake").checked=local[KEEP_AWAKE_KEY]===true;$("powerStatus").textContent=local[KEEP_AWAKE_KEY]===true?"System awake":"Released";$("googleClientId").value=local[GOOGLE_CLIENT_KEY]||"";
   $("extensionId").textContent=chrome.runtime.id;$("redirectUri").textContent=chrome.identity.getRedirectURL("google");
   const sess=await chrome.storage.session.get(GOOGLE_TOKEN_KEY);$("googleStatus").textContent=sess[GOOGLE_TOKEN_KEY]?.accessToken?"Linked for this Chrome session":"Not linked";
 }
