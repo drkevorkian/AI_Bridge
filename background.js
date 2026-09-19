@@ -2085,6 +2085,24 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   (async () => {
     await stateReady;
 
+    if (msg.type === "AI_BRIDGE_POWER_SET") {
+      await aiBridgeApplyKeepAwake(Boolean(msg.enabled));
+      sendResponse({ ok: true, enabled: Boolean(msg.enabled) });
+      return;
+    }
+
+    if (msg.type === "AI_BRIDGE_AUTO_UPDATE_SET") {
+      await aiBridgeConfigureUpdateAlarm(Boolean(msg.enabled));
+      sendResponse({ ok: true, enabled: Boolean(msg.enabled) });
+      return;
+    }
+
+    if (msg.type === "AI_BRIDGE_SETTINGS_OPEN") {
+      const tab = await chrome.tabs.create({ url: chrome.runtime.getURL("settings.html") });
+      sendResponse({ ok: true, tabId: tab.id });
+      return;
+    }
+
     if (msg.type === "AI_BRIDGE_GET_STATE") {
       sendResponse({
         ok: true,
@@ -2528,30 +2546,6 @@ async function aiBridgeCheckForUpdateNotification() {
     });
   }
 }
-
-chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
-  if (msg?.type === "AI_BRIDGE_POWER_SET") {
-    aiBridgeApplyKeepAwake(Boolean(msg.enabled))
-      .then(() => sendResponse({ ok: true, enabled: Boolean(msg.enabled) }))
-      .catch(error => sendResponse({ ok: false, error: error.message }));
-    return true;
-  }
-
-  if (msg?.type === "AI_BRIDGE_AUTO_UPDATE_SET") {
-    aiBridgeConfigureUpdateAlarm(Boolean(msg.enabled))
-      .then(() => sendResponse({ ok: true, enabled: Boolean(msg.enabled) }))
-      .catch(error => sendResponse({ ok: false, error: error.message }));
-    return true;
-  }
-
-  if (msg?.type === "AI_BRIDGE_SETTINGS_OPEN") {
-    chrome.tabs.create({ url: chrome.runtime.getURL("settings.html") })
-      .then(tab => sendResponse({ ok: true, tabId: tab.id }))
-      .catch(error => sendResponse({ ok: false, error: error.message }));
-    return true;
-  }
-  return false;
-});
 
 chrome.alarms.onAlarm.addListener(alarm => {
   if (alarm.name !== AI_BRIDGE_UPDATE_ALARM) return;
