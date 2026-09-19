@@ -69,7 +69,7 @@ AI Bridge now supports explicit work strategies from the dashboard:
 - **Collaborate** — sequential shared-deliverable work where each AI improves the same result.
 - **Compete** — all active AIs receive the same objective simultaneously and submit independently.
 - **Parallel Independent** — all active AIs work simultaneously on self-contained versions of the same objective without seeing peers during the pass.
-- **Peer Review** — phase 1 collects three independent primary responses; phase 2 sends each AI the other two primary responses and collects three critiques.
+- **Peer Review** — phase 1 collects one independent primary response from every active AI; phase 2 sends each AI the other active primary responses and collects one critique from every active AI.
 
 Turn accounting remains response-based. A complete Compete/Parallel pass uses 3 AI turns; a complete Peer Review cycle uses 6. `-1` is still accepted, but finite settings must be large enough to complete the chosen work cycle. Parallel file capture, ZIP previews, fresh-chat controls, and human-input handling continue to work across these modes.
 
