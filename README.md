@@ -7,8 +7,12 @@ Version 1.18.0 keeps the working v1.16 relay/state engine and rebuilds the missi
 - **All eight themes preserved:** Blizzard Blue, Ghost White, Midnight, Slate, Light, Solarized Light, Ocean, and Terminal.
 - **Dedicated Settings workspace:** appearance, layouts, portable settings, Google Drive app-data sync, provider health, runtime power, and update controls live outside the relay startup path.
 - **Three dashboard layouts:** Studio, Classic, and Focus are applied by a small layout-only module that never rewrites relay state.
+- **Adjustable workspace:** the control pane can be dragged from 24–70% width, reset from the splitter, or changed in Settings; width is included in portable settings.
+- **Team Rules:** standing rules can be applied to all active AI roles, including during a saved/running session, without rebuilding the roster.
+- **Manual Relay recovery:** while paused, AI Bridge can re-read a selected AI tab's last completed visible response and send it to selected active teammates.
+- **Per-AI timing:** each active AI shows its current round timer plus accumulated session work time.
 - **Portable settings:** Chrome Sync Push/Pull stores appearance and reusable team preferences but excludes transcripts, Vault files, access tokens, tab IDs, and active-session state.
-- **Google Drive appDataFolder:** optional OAuth-PKCE flow with a user-supplied client ID; access tokens are kept in session storage and are never synced.
+- **Google Drive appDataFolder:** optional OAuth-PKCE flow with a user-supplied client ID and verified OAuth state; access tokens are kept in session storage and are never synced.
 - **Provider Health:** checks open supported AI tabs and verifies their content scripts respond without blocking Start or mutating relay state.
 - **Keep-awake control:** uses Chrome's power API and can be released immediately from Settings.
 - **Update controls:** manual GitHub version check, ZIP download, and optional daily notification-only checks.
