@@ -2,8 +2,8 @@
   "manifest_version": 3,
   "minimum_chrome_version": "106",
   "name": "AI Bridge",
-  "version": "1.17.1",
-  "description": "Coordinate three AI agents with secure relay, direct-mesh routing, team-cycle timing, stuck recovery, provider-send acknowledgement, reliable completion detection, a Settings tab, GitHub update checks, optional Chrome Sync and Google Drive appDataFolder settings, persistent artifact vault storage, ZIP/file relay, human control, OAuth hardening, system-awake protection during active runs, structural untrusted-peer-data wrapping, and multiple workspace layouts.",
+  "version": "1.18.0",
+  "description": "Coordinate 1–5 logical AI agents across selected AI tabs, including multiple independent tabs from the same provider, with themes, Settings, recovery, manual relay, cloud sync, updates, and workspace layouts.",
   "permissions": [
     "tabs",
     "storage",
