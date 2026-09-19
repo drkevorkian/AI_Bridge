@@ -1,6 +1,10 @@
-const SIDES = ["A", "B", "C"];
+const ALL_SIDES = ["A", "B", "C", "D", "E"];
+const DEFAULT_AGENT_COUNT = 3;
+const MIN_AGENT_COUNT = 1;
+const MAX_AGENT_COUNT = ALL_SIDES.length;
+const SIDES = ALL_SIDES.slice(0, DEFAULT_AGENT_COUNT);
 const STATE_VERSION = 3;
-const CONTENT_VERSION = "1.14.0";
+const CONTENT_VERSION = "1.18.0";
 const WORK_MODES = new Set(["relay", "collaborate", "compete", "parallel", "review", "mesh"]);
 const INFINITE_TURNS = -1;
 const MIN_FINITE_TURNS = 1;
@@ -31,6 +35,7 @@ const DEFAULT_HISTORY = {
 
 const DEFAULT_STATE = {
   stateVersion: STATE_VERSION,
+  agentCount: DEFAULT_AGENT_COUNT,
   sessionActive: false,
   running: false,
   paused: false,
@@ -39,12 +44,18 @@ const DEFAULT_STATE = {
   tabA: null,
   tabB: null,
   tabC: null,
+  tabD: null,
+  tabE: null,
   labelA: "AI A",
   labelB: "AI B",
   labelC: "AI C",
+  labelD: "AI D",
+  labelE: "AI E",
   jobA: "",
   jobB: "",
   jobC: "",
+  jobD: "",
+  jobE: "",
   teamRules: "",
 
   currentSide: null,
@@ -56,8 +67,8 @@ const DEFAULT_STATE = {
   phasePendingSides: [],
   phaseSentSides: [],
   phaseCompletedSides: [],
-  primaryResponseSeqBySide: { A: null, B: null, C: null },
-  reviewResponseSeqBySide: { A: null, B: null, C: null },
+  primaryResponseSeqBySide: { A: null, B: null, C: null, D: null, E: null },
+  reviewResponseSeqBySide: { A: null, B: null, C: null, D: null, E: null },
   pendingHumanQueue: [],
   suppressedHumanRequests: [],
   turn: 0,
@@ -66,31 +77,31 @@ const DEFAULT_STATE = {
   maxCycles: INFINITE_TURNS,
   activeSides: ["A", "B", "C"],
   cycleParticipants: [],
-  totalWorkMsBySide: { A: 0, B: 0, C: 0 },
+  totalWorkMsBySide: { A: 0, B: 0, C: 0, D: 0, E: 0 },
   checkpointEveryNCycles: 5,
   stuckTimeoutMinutes: 30,
   recoveryCheckpoint: null,
   checkpointPending: false,
   checkpointRequestId: null,
   postCheckpointResume: null,
-  generationIdBySide: { A: null, B: null, C: null },
-  recoveryAttemptBySide: { A: 0, B: 0, C: 0 },
-  lastProgressAtBySide: { A: null, B: null, C: null },
+  generationIdBySide: { A: null, B: null, C: null, D: null, E: null },
+  recoveryAttemptBySide: { A: 0, B: 0, C: 0, D: 0, E: 0 },
+  lastProgressAtBySide: { A: null, B: null, C: null, D: null, E: null },
   delayMs: 1500,
   initialPrompt: "",
   sourceFiles: [],
-  sourceDeliveredBySide: { A: false, B: false, C: false },
+  sourceDeliveredBySide: { A: false, B: false, C: false, D: false, E: false },
   relayArtifacts: [],
   activeArtifactIds: [],
-  lastSentArtifactIdsBySide: { A: [], B: [], C: [] },
+  lastSentArtifactIdsBySide: { A: [], B: [], C: [], D: [], E: [] },
 
   lastResponseBySide: {},
   lastSentBySide: {},
-  lastDeliveredSeqBySide: { A: 0, B: 0, C: 0 },
-  roundStartedAtBySide: { A: null, B: null, C: null },
-  roundNumberBySide: { A: 0, B: 0, C: 0 },
-  lastRoundDurationMsBySide: { A: null, B: null, C: null },
-  lastRoundCompletedAtBySide: { A: null, B: null, C: null },
+  lastDeliveredSeqBySide: { A: 0, B: 0, C: 0, D: 0, E: 0 },
+  roundStartedAtBySide: { A: null, B: null, C: null, D: null, E: null },
+  roundNumberBySide: { A: 0, B: 0, C: 0, D: 0, E: 0 },
+  lastRoundDurationMsBySide: { A: null, B: null, C: null, D: null, E: null },
+  lastRoundCompletedAtBySide: { A: null, B: null, C: null, D: null, E: null },
 
   awaitingHuman: false,
   pendingHuman: null,
@@ -131,21 +142,21 @@ function cloneDefaultState() {
   return {
     ...DEFAULT_STATE,
     sourceFiles: [],
-    sourceDeliveredBySide: { A: false, B: false, C: false },
+    sourceDeliveredBySide: { A: false, B: false, C: false, D: false, E: false },
   relayArtifacts: [],
   activeArtifactIds: [],
-  lastSentArtifactIdsBySide: { A: [], B: [], C: [] },
+  lastSentArtifactIdsBySide: { A: [], B: [], C: [], D: [], E: [] },
     lastResponseBySide: {},
     lastSentBySide: {},
-    lastDeliveredSeqBySide: { A: 0, B: 0, C: 0 },
-    roundStartedAtBySide: { A: null, B: null, C: null },
-    roundNumberBySide: { A: 0, B: 0, C: 0 },
-    lastRoundDurationMsBySide: { A: null, B: null, C: null },
-    lastRoundCompletedAtBySide: { A: null, B: null, C: null },
-    totalWorkMsBySide: { A: 0, B: 0, C: 0 },
-    generationIdBySide: { A: null, B: null, C: null },
-    recoveryAttemptBySide: { A: 0, B: 0, C: 0 },
-    lastProgressAtBySide: { A: null, B: null, C: null },
+    lastDeliveredSeqBySide: { A: 0, B: 0, C: 0, D: 0, E: 0 },
+    roundStartedAtBySide: { A: null, B: null, C: null, D: null, E: null },
+    roundNumberBySide: { A: 0, B: 0, C: 0, D: 0, E: 0 },
+    lastRoundDurationMsBySide: { A: null, B: null, C: null, D: null, E: null },
+    lastRoundCompletedAtBySide: { A: null, B: null, C: null, D: null, E: null },
+    totalWorkMsBySide: { A: 0, B: 0, C: 0, D: 0, E: 0 },
+    generationIdBySide: { A: null, B: null, C: null, D: null, E: null },
+    recoveryAttemptBySide: { A: 0, B: 0, C: 0, D: 0, E: 0 },
+    lastProgressAtBySide: { A: null, B: null, C: null, D: null, E: null },
     activeSides: ["A", "B", "C"],
     cycleParticipants: [],
     recoveryCheckpoint: null,
@@ -155,8 +166,8 @@ function cloneDefaultState() {
     phasePendingSides: [],
     phaseSentSides: [],
     phaseCompletedSides: [],
-    primaryResponseSeqBySide: { A: null, B: null, C: null },
-    reviewResponseSeqBySide: { A: null, B: null, C: null },
+    primaryResponseSeqBySide: { A: null, B: null, C: null, D: null, E: null },
+    reviewResponseSeqBySide: { A: null, B: null, C: null, D: null, E: null },
     pendingHumanQueue: [],
     pendingMainInterjections: [],
     suppressedHumanRequests: [],
@@ -165,6 +176,25 @@ function cloneDefaultState() {
   };
 }
 
+
+function normalizeAgentCount(raw, fallback = DEFAULT_AGENT_COUNT) {
+  const value = Number(raw);
+  if (Number.isInteger(value) && value >= MIN_AGENT_COUNT && value <= MAX_AGENT_COUNT) return value;
+  const safeFallback = Number(fallback);
+  return Number.isInteger(safeFallback) && safeFallback >= MIN_AGENT_COUNT && safeFallback <= MAX_AGENT_COUNT
+    ? safeFallback
+    : DEFAULT_AGENT_COUNT;
+}
+
+function setActiveAgentCount(raw) {
+  const count = normalizeAgentCount(raw);
+  SIDES.splice(0, SIDES.length, ...ALL_SIDES.slice(0, count));
+  return count;
+}
+
+function activeRosterLabel() {
+  return SIDES.map(side => `AI ${side}`).join(" → ");
+}
 
 function normalizeWorkMode(raw) {
   const value = String(raw || "relay").toLowerCase();
@@ -179,9 +209,10 @@ function isBatchWorkMode(mode = state.workMode) {
   return mode === "compete" || mode === "parallel" || mode === "review";
 }
 
-function minimumTurnsForWorkMode(mode = state.workMode) {
-  if (mode === "review") return 6;
-  if (mode === "compete" || mode === "parallel") return 3;
+function minimumTurnsForWorkMode(mode = state.workMode, agentCount = SIDES.length) {
+  const count = normalizeAgentCount(agentCount, SIDES.length || DEFAULT_AGENT_COUNT);
+  if (mode === "review") return count * 2;
+  if (mode === "compete" || mode === "parallel") return count;
   return 1;
 }
 
@@ -226,7 +257,9 @@ const DEFAULT_CHECKPOINT_EVERY = 5;
 const DEFAULT_STUCK_MINUTES = 30;
 
 function emptySideMap(value) {
-  return { A: value, B: value, C: value };
+  const out = {};
+  for (const side of SIDES) out[side] = Array.isArray(value) ? [] : value;
+  return out;
 }
 
 function normalizeActiveSides(raw) {
@@ -1111,7 +1144,7 @@ function artifactSummariesFromStore() {
 
 function resetSessionArtifactRouting() {
   state.activeArtifactIds = [];
-  state.lastSentArtifactIdsBySide = { A: [], B: [], C: [] };
+  state.lastSentArtifactIdsBySide = { A: [], B: [], C: [], D: [], E: [] };
 }
 
 function pruneArtifactVault() {
@@ -1141,7 +1174,7 @@ async function clearArtifacts() {
   artifactStore = {};
   state.relayArtifacts = [];
   state.activeArtifactIds = [];
-  state.lastSentArtifactIdsBySide = { A: [], B: [], C: [] };
+  state.lastSentArtifactIdsBySide = { A: [], B: [], C: [], D: [], E: [] };
   await chrome.storage.local.remove("bridgeArtifacts");
 }
 
@@ -1525,7 +1558,7 @@ async function loadState() {
       state.sourceFiles = normalizeSourceFiles(state.sourceFiles);
     } catch (_) {
       state.sourceFiles = [];
-      state.sourceDeliveredBySide = { A: false, B: false, C: false };
+      state.sourceDeliveredBySide = { A: false, B: false, C: false, D: false, E: false };
     }
   } else {
     // Older builds may not have the current three-agent/dashboard state shape.
@@ -2616,7 +2649,7 @@ async function endBridge(reason = "Stopped") {
   state.checkpointPending = false;
   state.checkpointRequestId = null;
   state.postCheckpointResume = null;
-  state.roundStartedAtBySide = { A: null, B: null, C: null };
+  state.roundStartedAtBySide = { A: null, B: null, C: null, D: null, E: null };
   appendLog({ time: Date.now(), type: "system", text: reason });
   await clearWatchdogAlarm();
   await clearAttention();
@@ -4064,7 +4097,7 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
       if (!fresh.initialPrompt) throw new Error("Enter an initial objective or prompt.");
       fresh.teamRules = String(msg.teamRules || "").trim();
       fresh.sourceFiles = normalizeSourceFiles(msg.sourceFiles);
-      fresh.sourceDeliveredBySide = { A: false, B: false, C: false };
+      fresh.sourceDeliveredBySide = { A: false, B: false, C: false, D: false, E: false };
 
       for (const side of SIDES) {
         fresh[`tab${side}`] = Number(msg[`tab${side}`]);
