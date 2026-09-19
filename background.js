@@ -1289,7 +1289,7 @@ function normalizeHistory(raw) {
     jobs: jobs
       .map(item => ({
         time: Number(item?.time) || Date.now(),
-        side: SIDES.includes(item?.side) ? item.side : "A",
+        side: ALL_SIDES.includes(item?.side) ? item.side : "A",
         label: String(item?.label || "AI").slice(0, 80),
         job: String(item?.job || "").trim().slice(0, 4000)
       }))
@@ -1476,6 +1476,8 @@ async function loadState() {
   // enumerate transcripts, Vault bytes, or synced settings via chrome.storage.
   await lockStorageToExtensionPages();
   const { bridgeState, bridgeHistory, bridgeArtifacts } = await chrome.storage.local.get(["bridgeState", "bridgeHistory", "bridgeArtifacts"]);
+  const loadedAgentCount = normalizeAgentCount(bridgeState?.agentCount, DEFAULT_AGENT_COUNT);
+  setActiveAgentCount(loadedAgentCount);
   history = normalizeHistory(bridgeHistory);
   artifactStore = bridgeArtifacts && typeof bridgeArtifacts === "object" ? bridgeArtifacts : {};
 
@@ -1483,48 +1485,57 @@ async function loadState() {
     state = {
       ...cloneDefaultState(),
       ...bridgeState,
+      agentCount: loadedAgentCount,
       sourceFiles: Array.isArray(bridgeState.sourceFiles) ? bridgeState.sourceFiles : [],
       sourceDeliveredBySide: {
         A: false,
         B: false,
         C: false,
+        D: false,
+        E: false,
         ...(bridgeState.sourceDeliveredBySide || {})
       },
       relayArtifacts: Array.isArray(bridgeState.relayArtifacts) ? bridgeState.relayArtifacts : [],
       activeArtifactIds: Array.isArray(bridgeState.activeArtifactIds)
         ? bridgeState.activeArtifactIds
         : (bridgeState.sessionActive && Array.isArray(bridgeState.relayArtifacts) ? bridgeState.relayArtifacts.map(item => item?.id).filter(Boolean) : []),
-      lastSentArtifactIdsBySide: { A: [], B: [], C: [], ...(bridgeState.lastSentArtifactIdsBySide || {}) },
+      lastSentArtifactIdsBySide: { A: [], B: [], C: [], D: [], E: [], ...(bridgeState.lastSentArtifactIdsBySide || {}) },
       lastResponseBySide: bridgeState.lastResponseBySide || {},
       lastSentBySide: bridgeState.lastSentBySide || {},
       lastDeliveredSeqBySide: {
         A: 0,
         B: 0,
         C: 0,
+        D: 0,
+        E: 0,
         ...(bridgeState.lastDeliveredSeqBySide || {})
       },
-      roundStartedAtBySide: { A: null, B: null, C: null, ...(bridgeState.roundStartedAtBySide || {}) },
-      roundNumberBySide: { A: 0, B: 0, C: 0, ...(bridgeState.roundNumberBySide || {}) },
-      lastRoundDurationMsBySide: { A: null, B: null, C: null, ...(bridgeState.lastRoundDurationMsBySide || {}) },
-      lastRoundCompletedAtBySide: { A: null, B: null, C: null, ...(bridgeState.lastRoundCompletedAtBySide || {}) },
-      totalWorkMsBySide: { A: 0, B: 0, C: 0, ...(bridgeState.totalWorkMsBySide || {}) },
-      generationIdBySide: { A: null, B: null, C: null, ...(bridgeState.generationIdBySide || {}) },
-      recoveryAttemptBySide: { A: 0, B: 0, C: 0, ...(bridgeState.recoveryAttemptBySide || {}) },
-      lastProgressAtBySide: { A: null, B: null, C: null, ...(bridgeState.lastProgressAtBySide || {}) },
+      roundStartedAtBySide: { A: null, B: null, C: null, D: null, E: null, ...(bridgeState.roundStartedAtBySide || {}) },
+      roundNumberBySide: { A: 0, B: 0, C: 0, D: 0, E: 0, ...(bridgeState.roundNumberBySide || {}) },
+      lastRoundDurationMsBySide: { A: null, B: null, C: null, D: null, E: null, ...(bridgeState.lastRoundDurationMsBySide || {}) },
+      lastRoundCompletedAtBySide: { A: null, B: null, C: null, D: null, E: null, ...(bridgeState.lastRoundCompletedAtBySide || {}) },
+      totalWorkMsBySide: { A: 0, B: 0, C: 0, D: 0, E: 0, ...(bridgeState.totalWorkMsBySide || {}) },
+      generationIdBySide: { A: null, B: null, C: null, D: null, E: null, ...(bridgeState.generationIdBySide || {}) },
+      recoveryAttemptBySide: { A: 0, B: 0, C: 0, D: 0, E: 0, ...(bridgeState.recoveryAttemptBySide || {}) },
+      lastProgressAtBySide: { A: null, B: null, C: null, D: null, E: null, ...(bridgeState.lastProgressAtBySide || {}) },
       cycleParticipants: Array.isArray(bridgeState.cycleParticipants) ? bridgeState.cycleParticipants.filter(side => SIDES.includes(side)) : [],
       phasePendingSides: Array.isArray(bridgeState.phasePendingSides) ? bridgeState.phasePendingSides.filter(side => SIDES.includes(side)) : [],
       phaseSentSides: Array.isArray(bridgeState.phaseSentSides) ? bridgeState.phaseSentSides.filter(side => SIDES.includes(side)) : [],
       phaseCompletedSides: Array.isArray(bridgeState.phaseCompletedSides) ? bridgeState.phaseCompletedSides.filter(side => SIDES.includes(side)) : [],
-      primaryResponseSeqBySide: { A: null, B: null, C: null, ...(bridgeState.primaryResponseSeqBySide || {}) },
-      reviewResponseSeqBySide: { A: null, B: null, C: null, ...(bridgeState.reviewResponseSeqBySide || {}) },
+      primaryResponseSeqBySide: { A: null, B: null, C: null, D: null, E: null, ...(bridgeState.primaryResponseSeqBySide || {}) },
+      reviewResponseSeqBySide: { A: null, B: null, C: null, D: null, E: null, ...(bridgeState.reviewResponseSeqBySide || {}) },
       pendingHumanQueue: Array.isArray(bridgeState.pendingHumanQueue) ? bridgeState.pendingHumanQueue : [],
       pendingMainInterjections: Array.isArray(bridgeState.pendingMainInterjections) ? bridgeState.pendingMainInterjections : [],
       suppressedHumanRequests: migrateSuppressedHumanRequests(bridgeState),
       transcript: Array.isArray(bridgeState.transcript) ? bridgeState.transcript : [],
       log: Array.isArray(bridgeState.log) ? bridgeState.log : []
     };
+    state.agentCount = setActiveAgentCount(state.agentCount);
+    state.activeSides = [...SIDES];
+    state.startSide = SIDES.includes(state.startSide) ? state.startSide : SIDES[0];
+    state.mainSide = SIDES.includes(state.mainSide) ? state.mainSide : state.startSide;
+    if (state.currentSide && !SIDES.includes(state.currentSide)) state.currentSide = state.startSide;
     state.workMode = normalizeWorkMode(state.workMode);
-    state.mainSide = SIDES.includes(state.mainSide) ? state.mainSide : (SIDES.includes(state.startSide) ? state.startSide : "A");
     if (!isBatchWorkMode(state.workMode)) {
       state.workPhase = state.workMode === "collaborate" ? "collaborate" : (state.workMode === "mesh" ? "mesh" : "relay");
       state.phasePendingSides = [];
@@ -1561,7 +1572,7 @@ async function loadState() {
       state.sourceDeliveredBySide = { A: false, B: false, C: false, D: false, E: false };
     }
   } else {
-    // Older builds may not have the current three-agent/dashboard state shape.
+    // Older builds may not have the current dashboard state shape.
     // Preserve a few useful settings, but start with a clean v1.5 session.
     state = cloneDefaultState();
     if (bridgeState) {
@@ -1576,7 +1587,7 @@ async function loadState() {
   await validateSavedBindings();
 
   // Manifest V3 service workers are disposable. When Chrome wakes this worker
-  // back up, proactively reconnect all three page listeners so a saved running
+  // back up, proactively reconnect all active page listeners so a saved running
   // session can continue without the popup having to be opened first.
   if (state.sessionActive && state.running) {
     try {
@@ -1584,7 +1595,7 @@ async function loadState() {
     } catch (err) {
       state.running = false;
       state.paused = true;
-      state.pauseReason = `Automatic reconnect failed: ${err.message}. Rebind the three tabs and press Resume.`;
+      state.pauseReason = `Automatic reconnect failed: ${err.message}. Rebind all active AI tabs and press Resume.`;
       await saveState();
     }
   }
@@ -3067,7 +3078,7 @@ function sanitizeHistoryForCloud(kind, items, limit) {
   if (kind === "jobs") {
     return list.slice(0, limit).map(item => ({
       time: Number(item?.time) || Date.now(),
-      side: SIDES.includes(item?.side) ? item.side : "A",
+      side: ALL_SIDES.includes(item?.side) ? item.side : "A",
       label: String(item?.label || "AI").slice(0, 80),
       job: String(item?.job || "").trim().slice(0, 4000)
     })).filter(item => item.job);
