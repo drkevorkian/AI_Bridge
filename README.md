@@ -1,4 +1,16 @@
-# AI Bridge 1.11.3 — Direct Mesh + Resumable Human Requests
+# AI Bridge 1.15 — Stable Three-Agent Release
+
+Version 1.15 promotes the known-good three-agent runtime after the rollback from the failed experimental branch. The working relay behavior is intentionally left intact while release metadata is synchronized and repository regression checks are restored.
+
+## 1.15 release notes
+
+- **Known-good runtime preserved:** no dynamic-agent, state-v4, OAuth, provider-health, or other rolled-back experimental runtime code is reintroduced.
+- **Version contract repaired:** `manifest.json`, the background service worker, the content-script handshake, and this README now identify the same release.
+- **Repository integrity restored:** CI now checks JavaScript syntax, manifest/file references, DOM-ID contracts, message-handler coverage, and several high-risk security regressions.
+- **Runaway-loop guard:** regression checks reject service-worker `setInterval` loops and unexpected unconditional `while (true)` loops while preserving the bounded stream-reader loop already used by artifact downloads.
+- **No storage-schema bump:** the persisted state schema remains at version 3 because v1.15 does not change the working state shape.
+
+## 1.11.3 historical release notes
 
 Version 1.11.3 builds on the verified 1.10.2 release with Direct Mesh peer routing, resumable suppressed human requests, and universal role reuse.
 

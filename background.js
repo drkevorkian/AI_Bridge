@@ -1,6 +1,6 @@
 const SIDES = ["A", "B", "C"];
 const STATE_VERSION = 3;
-const CONTENT_VERSION = "1.11.3";
+const CONTENT_VERSION = "1.15";
 const WORK_MODES = new Set(["relay", "collaborate", "compete", "parallel", "review", "mesh"]);
 const INFINITE_TURNS = -1;
 const MIN_FINITE_TURNS = 1;
