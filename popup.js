@@ -68,7 +68,11 @@ chrome.storage.onChanged.addListener((changes, area) => {
   if (area === "local" && changes[THEME_KEY]) applyTheme(changes[THEME_KEY].newValue);
 });
 
-$("openSettings").addEventListener("click", async () => {\n  await chrome.tabs.create({ url: chrome.runtime.getURL("settings.html") });\n});\n\n$("openDashboard").addEventListener("click", async () => {
+$("openSettings").addEventListener("click", async () => {
+  await chrome.tabs.create({ url: chrome.runtime.getURL("settings.html") });
+});
+
+$("openDashboard").addEventListener("click", async () => {
   const res = await chrome.runtime.sendMessage({ type: "AI_BRIDGE_OPEN_DASHBOARD" });
   if (!res?.ok) $("status").textContent = `Could not open dashboard: ${res?.error || "Unknown error"}`;
 });
