@@ -1,8 +1,21 @@
-# AI Bridge 1.16 — Dynamic Multi-Tab Teams
+# AI Bridge 1.18.0 — Rebuilt Settings + Dynamic Teams
 
-Version 1.16 extends the stable v1.15 runtime to a manually selectable 1–5 logical-agent team. Each logical agent is one distinct supported browser tab, and multiple tabs may use the same LLM provider, allowing one provider to contribute multiple independent conversations to the team.
+Version 1.18.0 keeps the working v1.16 relay/state engine and rebuilds the missing user-facing additions as isolated services rather than restoring the broken v1.17 runtime stack.
 
-## 1.16 release notes
+## 1.18.0 release notes
+
+- **All eight themes preserved:** Blizzard Blue, Ghost White, Midnight, Slate, Light, Solarized Light, Ocean, and Terminal.
+- **Dedicated Settings workspace:** appearance, layouts, portable settings, Google Drive app-data sync, provider health, runtime power, and update controls live outside the relay startup path.
+- **Three dashboard layouts:** Studio, Classic, and Focus are applied by a small layout-only module that never rewrites relay state.
+- **Portable settings:** Chrome Sync Push/Pull stores appearance and reusable team preferences but excludes transcripts, Vault files, access tokens, tab IDs, and active-session state.
+- **Google Drive appDataFolder:** optional OAuth-PKCE flow with a user-supplied client ID; access tokens are kept in session storage and are never synced.
+- **Provider Health:** checks open supported AI tabs and verifies their content scripts respond without blocking Start or mutating relay state.
+- **Keep-awake control:** uses Chrome's power API and can be released immediately from Settings.
+- **Update controls:** manual GitHub version check, ZIP download, and optional daily notification-only checks.
+- **Stable dynamic team core:** 1–5 logical agents, including multiple separate tabs from the same LLM provider, remain on the v1.16 state-v3 relay implementation.
+- **No Slice 77 runtime restore:** the old wrapper, state-v4, provider-health gate, viewpoint runtime, cloud-settings-v2, and watchdog stacks are not used.
+
+## 1.16 historical release notes
 
 - **1–5 active agents:** choose how many logical AI slots participate before starting a session. The active relay roster expands from A through E.
 - **Same-LLM multi-tab teams:** ChatGPT, Grok, Gemini, Claude, or Copilot may occupy multiple logical slots as long as every slot uses a different browser tab. This lets one LLM converse with another instance of itself or have more representation in a team.
