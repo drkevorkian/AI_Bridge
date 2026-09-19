@@ -742,6 +742,7 @@ function updateControls(s) {
   $("stop").disabled = !s.sessionActive;
   $("newAllChats").disabled = Boolean(s.sessionActive);
   $("freshOnStart").disabled = Boolean(s.sessionActive);
+  $("agentCount").disabled = Boolean(s.sessionActive);
   $("workMode").disabled = Boolean(s.sessionActive);
   $("sendInterject").disabled = !s.sessionActive || s.awaitingHuman;
   $("interjectText").disabled = !s.sessionActive || s.awaitingHuman;
@@ -854,7 +855,7 @@ async function openFreshChats(sides) {
   if (latestState?.sessionActive) return;
   const chosen = Array.isArray(sides) ? sides : SIDES;
   const tabError = validateActiveTabs();
-  if (chosen.length === 3 && tabError) {
+  if (chosen.length === SIDES.length && tabError) {
     $("status").textContent = tabError;
     return;
   }
@@ -864,7 +865,7 @@ async function openFreshChats(sides) {
     const button = chosen.length === 1 ? $(`newChat${side}`) : null;
     if (button) { oldLabels.set(button, button.textContent); button.textContent = "Opening…"; button.disabled = true; }
   }
-  if (chosen.length === 3) { oldLabels.set($("newAllChats"), $("newAllChats").textContent); $("newAllChats").textContent = "Opening…"; $("newAllChats").disabled = true; }
+  if (chosen.length === SIDES.length) { oldLabels.set($("newAllChats"), $("newAllChats").textContent); $("newAllChats").textContent = "Opening…"; $("newAllChats").disabled = true; }
 
   try {
     const payload = { type: "AI_BRIDGE_NEW_CHATS", sides: chosen };
@@ -896,11 +897,26 @@ async function clearHistory(kind) {
 $("clearJobHistory").addEventListener("click", () => clearHistory("jobs"));
 $("clearCommandHistory").addEventListener("click", () => clearHistory("commands"));
 
-for (const side of SIDES) {
+for (const side of ALL_SIDES) {
   $(`tab${side}`).addEventListener("change", () => { refreshStartLabels(); if (latestState) updateControls(latestState); });
   $(`newChat${side}`).addEventListener("click", () => openFreshChats([side]));
 }
-$("newAllChats").addEventListener("click", () => openFreshChats(SIDES));
+$("newAllChats").addEventListener("click", () => openFreshChats([...SIDES]));
+$("agentCount").addEventListener("change", async event => {
+  if (latestState?.sessionActive) {
+    event.target.value = String(latestState.agentCount || SIDES.length);
+    return;
+  }
+  const requested = normalizeAgentCount(event.target.value);
+  if (tabsById.size && requested > tabsById.size) {
+    $("status").textContent = `Only ${tabsById.size} supported AI tab${tabsById.size === 1 ? "" : "s"} are open.`;
+    event.target.value = String(Math.min(SIDES.length, tabsById.size));
+    return;
+  }
+  setAgentCountUI(requested, { persist: true });
+  await loadTabs({ preserve: true });
+  if (latestState) updateControls(latestState);
+});
 $("workMode").addEventListener("change", () => {
   updateWorkModeUI();
   $("maxTurns").classList.remove("validation-error");
@@ -916,16 +932,17 @@ $("start").addEventListener("click", async () => {
   const initialPrompt = $("prompt").value.trim();
   if (!initialPrompt) return $("status").textContent = "Enter a primary objective or initial prompt.";
 
-  $("status").textContent = "Starting three-AI session…";
+  $("status").textContent = `Starting ${SIDES.length}-AI session…`;
   try {
+    const jobBindings = {};
+    for (const side of SIDES) jobBindings[`job${side}`] = $(`job${side}`).value.trim();
     const res = await chrome.runtime.sendMessage({
       type: "AI_BRIDGE_START",
       ...selectedBindings(),
+      ...jobBindings,
+      agentCount: SIDES.length,
       startSide: $("startSide").value,
       workMode: selectedWorkMode(),
-      jobA: $("jobA").value.trim(),
-      jobB: $("jobB").value.trim(),
-      jobC: $("jobC").value.trim(),
       initialPrompt,
       sourceFiles: selectedSourceFiles.map(file => ({ path: file.path, size: file.size, content: file.content })),
       freshChats: $("freshOnStart").checked,
@@ -948,7 +965,7 @@ $("pause").addEventListener("click", async () => {
 
 $("resume").addEventListener("click", async () => {
   const tabError = validateActiveTabs();
-  if (tabError) return $("status").textContent = `${tabError}\nTo resume, bind all three roles to open AI tabs.`;
+  if (tabError) return $("status").textContent = `${tabError}\nTo resume, bind every active AI role to an open supported tab.`;
 
   $("status").textContent = "Restoring saved session…";
   try {
@@ -984,7 +1001,7 @@ async function resend(side) {
     await refreshState();
   }
 }
-for (const side of SIDES) $(`resend${side}`).addEventListener("click", () => resend(side));
+for (const side of ALL_SIDES) $(`resend${side}`).addEventListener("click", () => resend(side));
 
 $("sendHumanModal").addEventListener("click", async () => {
   const text = $("humanModalResponse").value.trim();
@@ -1136,6 +1153,8 @@ $("jumpLatest").addEventListener("click", () => {
   $("jumpLatest").classList.add("hidden");
 });
 
-Promise.all([loadTheme(), loadTabs({ preserve: false })]).then(refreshState);
+Promise.all([loadTheme(), loadAgentCountPreference()])
+  .then(() => loadTabs({ preserve: false }))
+  .then(refreshState);
 setInterval(refreshState, 750);
 setInterval(() => updateRoundTimers(latestState), 100);
