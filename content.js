@@ -621,10 +621,26 @@
 
   chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
     if (msg.type === "AI_BRIDGE_PING") {
-      sendResponse({ ok: true, host: location.hostname, ready: true, version: "1.16" });
+      sendResponse({ ok: true, host: location.hostname, ready: true, version: "1.18.0" });
       return false;
     }
 
+
+    if (msg.type === "AI_BRIDGE_READ_LAST_RESPONSE") {
+      try {
+        const node = latestResponseNode();
+        const text = latestResponseText(node);
+        sendResponse({
+          ok: Boolean(text),
+          text,
+          active: generationAppearsActive(node),
+          host: location.hostname
+        });
+      } catch (err) {
+        sendResponse({ ok: false, error: err.message || String(err) });
+      }
+      return false;
+    }
 
     if (msg.type === "AI_BRIDGE_NEW_CHAT") {
       openNewConversation()
