@@ -1,15 +1,18 @@
 {
   "manifest_version": 3,
   "name": "AI Bridge",
-  "version": "1.16",
-  "description": "Coordinate 1–5 logical AI agents across selected browser tabs, including multiple independent tabs from the same LLM provider.",
+  "version": "1.18.0",
+  "description": "Coordinate 1–5 logical AI agents across selected tabs, with full themes, layouts, sync, provider health, updates, and power controls.",
   "permissions": [
     "tabs",
     "storage",
     "unlimitedStorage",
     "downloads",
     "notifications",
-    "scripting"
+    "scripting",
+    "identity",
+    "alarms",
+    "power"
   ],
   "host_permissions": [
     "https://chatgpt.com/*",
@@ -25,7 +28,13 @@
     "https://*.anthropic.com/*",
     "https://*.microsoft.com/*",
     "https://x.ai/*",
-    "https://api.x.ai/*"
+    "https://api.x.ai/*",
+    "https://accounts.google.com/*",
+    "https://oauth2.googleapis.com/*",
+    "https://www.googleapis.com/*",
+    "https://api.github.com/*",
+    "https://raw.githubusercontent.com/*",
+    "https://codeload.github.com/*"
   ],
   "background": {
     "service_worker": "background.js"
@@ -55,5 +64,8 @@
   ],
   "icons": {
     "128": "icon128.png"
+  },
+  "content_security_policy": {
+    "extension_pages": "script-src 'self'; object-src 'none'; base-uri 'none'; frame-ancestors 'none'"
   }
 }
