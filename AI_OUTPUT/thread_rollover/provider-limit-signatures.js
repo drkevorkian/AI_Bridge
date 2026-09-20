@@ -5,9 +5,11 @@
  *
  * SECURITY MODEL
  * --------------
- * Provider DOM and model output are untrusted. This module never inspects raw
+ * Provider DOM and model output are untrusted.  This module never inspects raw
  * HTML, executes page data, or treats ordinary assistant-response text as
- * authority. Callers must pre-classify observations into trusted UI regions.
+ * authority.  Callers must pre-classify observations into trusted UI regions
+ * (for example a provider system banner or composer status) before passing
+ * text here.
  */
 (function initProviderLimitSignatures(root, factory) {
   const api = factory();
@@ -45,11 +47,7 @@
       ])
     }),
     claude: Object.freeze({
-      hard: Object.freeze([
-        /conversation is too long/i,
-        /conversation has reached (?:its )?(?:maximum )?length/i,
-        /start a new conversation/i
-      ]),
+      hard: Object.freeze([]),
       exclusions: Object.freeze([
         /usage limit/i,
         /rate limit/i,
@@ -59,11 +57,7 @@
       ])
     }),
     gemini: Object.freeze({
-      hard: Object.freeze([
-        /conversation is too long/i,
-        /conversation has reached (?:its )?(?:maximum )?length/i,
-        /start a new chat/i
-      ]),
+      hard: Object.freeze([]),
       exclusions: Object.freeze([
         /usage limit/i,
         /rate limit/i,
@@ -72,10 +66,7 @@
       ])
     }),
     copilot: Object.freeze({
-      hard: Object.freeze([
-        /conversation is too long/i,
-        /start a new (?:chat|conversation)/i
-      ]),
+      hard: Object.freeze([]),
       exclusions: Object.freeze([
         /rate limit/i,
         /usage limit/i,
@@ -99,11 +90,10 @@
 
   function normalizeRegion(region) {
     if (!region || typeof region !== 'object') return null;
-    return {
-      kind: String(region.kind || '').trim().toLowerCase(),
-      text: normalizeText(region.text),
-      visible: region.visible !== false
-    };
+    const kind = String(region.kind || '').trim().toLowerCase();
+    const text = normalizeText(region.text);
+    const visible = region.visible !== false;
+    return { kind, text, visible };
   }
 
   function classifyThreadLimit(observation) {
@@ -122,12 +112,13 @@
       ? observation.regions.map(normalizeRegion).filter(Boolean)
       : [];
 
+    // Never promote ordinary model/user transcript text into control authority.
     const trusted = regions.filter(region =>
       region.visible && AUTHORITATIVE_REGION_KINDS.has(region.kind) && region.text
     );
+
     const untrustedMatches = regions.some(region =>
-      region.visible &&
-      NON_AUTHORITATIVE_REGION_KINDS.has(region.kind) &&
+      region.visible && NON_AUTHORITATIVE_REGION_KINDS.has(region.kind) &&
       rules.hard.some(pattern => pattern.test(region.text))
     );
 
@@ -158,15 +149,15 @@
         provider,
         state: 'NO_LIMIT_SIGNAL',
         automaticRollover: false,
-        reason: provider === 'grok'
-          ? 'No packaged Grok hard-limit signature is trusted yet.'
+        reason: rules.hard.length === 0
+          ? `No packaged ${provider} hard-limit signature is trusted yet.`
           : 'Authoritative provider UI did not match a packaged hard thread-limit signature.'
       });
     }
 
-    const strongerEvidence =
-      observation?.composer?.present === true &&
-      observation?.composer?.disabled === true;
+    const composerPresent = observation?.composer?.present === true;
+    const composerDisabled = observation?.composer?.disabled === true;
+    const strongerEvidence = composerPresent && composerDisabled;
 
     return Object.freeze({
       provider,
