@@ -1,6 +1,6 @@
-# AI Bridge — Human Test Build
+# AI Bridge — Human Test Build (AI A 1.18.1)
 
-This folder is a runnable **unpacked Chrome extension** copied from the reviewed `AI_OUTPUT/runtime_review/` candidate at commit `1303dab89dcd58fcd4fdea8eca7d379cfd287597`.
+This folder is a runnable **unpacked Chrome extension** promoted from the reviewed `AI_OUTPUT/runtime_review/` candidate.
 
 It is intentionally separate from the production/root extension. Production work is paused while this build is under human testing.
 
@@ -49,3 +49,10 @@ For every issue, record:
 - screenshots or console errors if available.
 
 Do not test against valuable/irreversible provider actions. This is a human-test build, not production integration.
+
+## AI A 1.18.1 fixes
+
+- Dashboard → Settings and Settings → Dashboard now reuse the current extension tab instead of spawning another tab.
+- Removed accidental literal `\\n` text from extension-page markup.
+- Classic is the consistent fallback dashboard layout; Studio, Classic, and Focus selections persist through local storage.
+- Settings confirms the saved dashboard layout before returning to Dashboard.
