@@ -283,6 +283,7 @@
         dispatchId,
         observedAt:Date.now(),
         generationEpoch:registration?.generationEpoch??null,
+        authorityRegistrationId:registration?.authorityRegistrationId??null,
         conversationIdentity:registration?.identity??routeIdentity()
       }).catch(()=>{});
       return;

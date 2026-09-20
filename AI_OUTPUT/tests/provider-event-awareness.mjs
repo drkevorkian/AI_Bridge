@@ -15,6 +15,7 @@ for(const token of [
   'AI_BRIDGE_PROVIDER_EVENT',
   'providerEventCandidateElements',
   'inspectProviderEvents(mutations)',
+  'authorityRegistrationId:registration?.authorityRegistrationId',
   'closest("[data-message-author-role]")'
 ]) assert.ok(content.includes(token),'content missing '+token);
 
@@ -25,6 +26,16 @@ assert.ok(background.includes('PROVIDER_RESPONSE_RECOVERED'),'late provider resp
 assert.doesNotMatch(background,/PROVIDER_EVENT_"?\+?code[\s\S]{0,240}DELIVERY_AMBIGUOUS/,'provider event must not destroy response-capable dispatch state');
 assert.ok(background.includes('recordTranscript("provider-event"'),'provider event must be visible without becoming an AI response');
 assert.ok(background.includes('providerRecovery'),'provider recovery state missing');
+assert.ok(background.includes('reviewValidateProviderEventAuthority'),'provider-event authority validator missing');
+for (const token of [
+  'PROVIDER_EVENT_AUTHORITY_MISSING',
+  'PROVIDER_EVENT_DOCUMENT_MISMATCH',
+  'PROVIDER_EVENT_REGISTRATION_MISMATCH',
+  'PROVIDER_EVENT_GENERATION_MISMATCH',
+  'PROVIDER_EVENT_IDENTITY_MISMATCH',
+  'PROVIDER_EVENT_DISPATCH_GENERATION_MISMATCH',
+  'PROVIDER_EVENT_DISPATCH_IDENTITY_MISMATCH'
+]) assert.ok(background.includes(token),'provider-event authority rejection missing '+token);
 assert.ok(background.includes('entry?.type !== "provider-event"'),'provider events must stay out of AI-to-AI relay context');
 assert.ok(background.includes('MAX_PROVIDER_EVENTS'),'provider event history must be bounded');
 assert.ok(dashboard.includes('entry.type === "provider-event"'),'dashboard provider-event rendering missing');

@@ -2507,6 +2507,37 @@ async function resetSelectedChats(msg, sides = SIDES, { allowActive = false } = 
   return chosen;
 }
 
+function reviewValidateProviderEventAuthority(msg,sender,side,provider,dispatchId){
+  if(sender?.id!==chrome.runtime.id) return {ok:false,reason:"PROVIDER_EVENT_EXTENSION_ID_MISMATCH"};
+  if(sender?.frameId!==0) return {ok:false,reason:"PROVIDER_EVENT_FRAME_MISMATCH"};
+  if(String(sender?.documentLifecycle||"").toLowerCase()!=="active") return {ok:false,reason:"PROVIDER_EVENT_DOCUMENT_NOT_ACTIVE"};
+  if(!sender?.documentId) return {ok:false,reason:"PROVIDER_EVENT_DOCUMENT_ID_MISSING"};
+
+  const live=reviewAuthorityBySide.get(side);
+  if(!live) return {ok:false,reason:"PROVIDER_EVENT_AUTHORITY_MISSING"};
+  if(Number(live.tabId)!==Number(sender.tab?.id)) return {ok:false,reason:"PROVIDER_EVENT_TAB_MISMATCH"};
+  if(String(live.provider||"")!==provider) return {ok:false,reason:"PROVIDER_EVENT_AUTHORITY_PROVIDER_MISMATCH"};
+  if(String(live.documentId||"")!==String(sender.documentId)) return {ok:false,reason:"PROVIDER_EVENT_DOCUMENT_MISMATCH"};
+  if(String(live.authorityRegistrationId||"")!==String(msg.authorityRegistrationId||"")) return {ok:false,reason:"PROVIDER_EVENT_REGISTRATION_MISMATCH"};
+  if(Number(live.generationEpoch)!==Number(msg.generationEpoch)) return {ok:false,reason:"PROVIDER_EVENT_GENERATION_MISMATCH"};
+
+  let eventIdentity;
+  try { eventIdentity=reviewSanitizeIdentity(msg.conversationIdentity); }
+  catch (_) { return {ok:false,reason:"PROVIDER_EVENT_IDENTITY_INVALID"}; }
+  if(!reviewSameIdentity(eventIdentity,live.identity)) return {ok:false,reason:"PROVIDER_EVENT_IDENTITY_MISMATCH"};
+
+  if(dispatchId){
+    const dispatch=reviewLedger.get(dispatchId);
+    if(!dispatch) return {ok:false,reason:"PROVIDER_EVENT_DISPATCH_UNKNOWN"};
+    if(dispatch.side!==side) return {ok:false,reason:"PROVIDER_EVENT_DISPATCH_SIDE_MISMATCH"};
+    if(Number(dispatch.tabId)!==Number(live.tabId)) return {ok:false,reason:"PROVIDER_EVENT_DISPATCH_TAB_MISMATCH"};
+    if(Number(dispatch.generationEpoch)!==Number(live.generationEpoch)) return {ok:false,reason:"PROVIDER_EVENT_DISPATCH_GENERATION_MISMATCH"};
+    if(!reviewSameIdentity(dispatch.conversationIdentity,live.identity)) return {ok:false,reason:"PROVIDER_EVENT_DISPATCH_IDENTITY_MISMATCH"};
+  }
+
+  return {ok:true,live,eventIdentity};
+}
+
 function normalizeProviderEventText(value){
   return String(value||"").replace(/\s+/g," ").trim().slice(0,500);
 }
@@ -2526,6 +2557,19 @@ async function recordProviderEvent(msg,sender){
   if(!text) return {ok:false,ignored:true,reason:"EMPTY_PROVIDER_EVENT"};
 
   const dispatchId=String(msg.dispatchId||"").trim();
+  const authorityCheck=reviewValidateProviderEventAuthority(msg,sender,side,provider,dispatchId);
+  if(!authorityCheck.ok){
+    appendLog({
+      time:Date.now(),
+      type:"provider-event-rejected",
+      side,
+      text:"Rejected untrusted provider event "+code+": "+authorityCheck.reason,
+      dispatchId:dispatchId||null
+    });
+    await saveState();
+    return {ok:false,ignored:true,reason:authorityCheck.reason};
+  }
+
   const event={
     id:"provider-event-"+Date.now()+"-"+side+"-"+state.nextSeq,
     time:Number.isFinite(Number(msg.observedAt))?Number(msg.observedAt):Date.now(),
