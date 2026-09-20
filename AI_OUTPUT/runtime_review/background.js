@@ -3372,7 +3372,32 @@ function reviewAuthorizeThreadLimit(msg, sender) {
   }
   const preSendAssistantText=String(msg?.preSendAssistantText||"").trim();
   if(preSendAssistantText.length>200000) return {ok:false,reason:"THREAD_LIMIT_PROVIDER_SNAPSHOT_TOO_LARGE"};
-  return { ok:true, side, tabId, provider:authority.provider, authority, dispatch, dispatchId, observation, evidence, preSendAssistantText };
+
+  let preSendAssistantObservedAt=null;
+  let preSendAssistantIdentity=null;
+  if(preSendAssistantText){
+    const snapshotObservedAt=Number(msg?.preSendAssistantObservedAt);
+    const limitObservedAt=Number(msg?.observedAt);
+    if(
+      !Number.isFinite(snapshotObservedAt) ||
+      snapshotObservedAt<=0 ||
+      !Number.isFinite(limitObservedAt) ||
+      limitObservedAt<=0 ||
+      snapshotObservedAt>limitObservedAt
+    ) return {ok:false,reason:"THREAD_LIMIT_PROVIDER_SNAPSHOT_TIMESTAMP_INVALID"};
+
+    try { preSendAssistantIdentity=reviewSanitizeIdentity(msg?.preSendAssistantIdentity); }
+    catch (_) { return {ok:false,reason:"THREAD_LIMIT_PROVIDER_SNAPSHOT_IDENTITY_MALFORMED"}; }
+    if(!reviewSameIdentity(preSendAssistantIdentity,authority.identity)){
+      return {ok:false,reason:"THREAD_LIMIT_PROVIDER_SNAPSHOT_IDENTITY_MISMATCH"};
+    }
+    preSendAssistantObservedAt=snapshotObservedAt;
+  }
+
+  return {
+    ok:true,side,tabId,provider:authority.provider,authority,dispatch,dispatchId,
+    observation,evidence,preSendAssistantText,preSendAssistantObservedAt,preSendAssistantIdentity
+  };
 }
 
 async function reviewCreateOrReuseContinuityDispatch(side) {
@@ -3744,8 +3769,11 @@ async function reviewHandleThreadLimit(msg, sender) {
       finalResponseAnchorKind="PROVIDER_SNAPSHOT";
       lastAssistantMessage=snapshotText;
       providerSnapshotHash=await reviewPayloadHash(authorized.side,snapshotText);
-      providerSnapshotObservedAt=Number(msg?.observedAt)||Date.now();
-      providerSnapshotIdentity=reviewSanitizeIdentity(authorized.authority.identity);
+      providerSnapshotObservedAt=authorized.preSendAssistantObservedAt;
+      providerSnapshotIdentity=authorized.preSendAssistantIdentity;
+      if(!Number.isFinite(providerSnapshotObservedAt) || !providerSnapshotIdentity){
+        throw new Error("ROLLOVER_PROVIDER_SNAPSHOT_PROVENANCE_MISSING");
+      }
     }
     if (!lastAssistantMessage) throw new Error("ROLLOVER_LAST_ASSISTANT_RESPONSE_MISSING");
 
