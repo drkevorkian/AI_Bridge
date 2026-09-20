@@ -36,7 +36,7 @@ async function portableSettings(){
     schema:1, savedAt:Date.now(),
     theme:THEMES.has(local[THEME_KEY])?local[THEME_KEY]:"blizzard",
     layout:LAYOUTS.has(local[LAYOUT_KEY])?local[LAYOUT_KEY]:"classic",
-    paneWidth:Math.min(70,Math.max(24,Number(local[PANE_WIDTH_KEY])||36)),
+    paneWidth:Math.min(42,Math.max(20,Number(local[PANE_WIDTH_KEY])||26)),
     agentCount:Number(local[AGENT_COUNT_KEY]||s.agentCount||3),
     teamRules:String(s.teamRules||"").slice(0,12000),
     workMode:String(s.workMode||"relay"), startSide:String(s.startSide||"A"),
@@ -50,7 +50,7 @@ async function applyPortableSettings(p){
   const writes={};
   if(THEMES.has(p.theme)) writes[THEME_KEY]=p.theme;
   if(LAYOUTS.has(p.layout)) writes[LAYOUT_KEY]=p.layout;
-  if(Number.isFinite(Number(p.paneWidth))) writes[PANE_WIDTH_KEY]=Math.min(70,Math.max(24,Number(p.paneWidth)));
+  if(Number.isFinite(Number(p.paneWidth))) writes[PANE_WIDTH_KEY]=Math.min(42,Math.max(20,Number(p.paneWidth)));
   if(Number.isInteger(Number(p.agentCount))&&Number(p.agentCount)>=1&&Number(p.agentCount)<=5) writes[AGENT_COUNT_KEY]=Number(p.agentCount);
   await chrome.storage.local.set(writes);
   const {bridgeState}=await chrome.storage.local.get("bridgeState");
@@ -67,7 +67,7 @@ async function applyPortableSettings(p){
   applyTheme(p.theme);
   $("settingsLayout").value=LAYOUTS.has(p.layout)?p.layout:"classic";
   if(Number.isFinite(Number(p.paneWidth))){
-    const width=Math.min(70,Math.max(24,Number(p.paneWidth)));
+    const width=Math.min(42,Math.max(20,Number(p.paneWidth)));
     $("paneWidth").value=String(width); $("paneWidthValue").textContent=Math.round(width)+"%";
   }
 }
@@ -159,7 +159,7 @@ async function init(){
   const manifest=chrome.runtime.getManifest();const shownVersion=manifest.version_name||manifest.version;$("installedVersion").textContent=shownVersion;$("updateVersion").textContent="Installed "+shownVersion;
   const local=await chrome.storage.local.get([THEME_KEY,LAYOUT_KEY,PANE_WIDTH_KEY,AUTO_UPDATE_KEY,KEEP_AWAKE_KEY,GOOGLE_CLIENT_KEY]);
   applyTheme(local[THEME_KEY]);$("settingsLayout").value=LAYOUTS.has(local[LAYOUT_KEY])?local[LAYOUT_KEY]:"classic";
-  const paneWidth=Math.min(70,Math.max(24,Number(local[PANE_WIDTH_KEY])||36));$("paneWidth").value=String(paneWidth);$("paneWidthValue").textContent=Math.round(paneWidth)+"%";
+  const paneWidth=Math.min(42,Math.max(20,Number(local[PANE_WIDTH_KEY])||26));$("paneWidth").value=String(paneWidth);$("paneWidthValue").textContent=Math.round(paneWidth)+"%";
   $("autoCheckUpdates").checked=local[AUTO_UPDATE_KEY]===true;$("keepAwake").checked=local[KEEP_AWAKE_KEY]===true;$("powerStatus").textContent=local[KEEP_AWAKE_KEY]===true?"System awake":"Released";$("googleClientId").value=local[GOOGLE_CLIENT_KEY]||"";
   $("extensionId").textContent=chrome.runtime.id;$("redirectUri").textContent=chrome.identity.getRedirectURL("google");
   const sess=await chrome.storage.session.get(GOOGLE_TOKEN_KEY);$("googleStatus").textContent=sess[GOOGLE_TOKEN_KEY]?.accessToken?"Linked for this Chrome session":"Not linked";
@@ -169,7 +169,7 @@ function guarded(fn,notice){return async()=>{try{await fn()}catch(e){show(notice
 $("settingsTheme").addEventListener("change",e=>setTheme(e.target.value));
 $("settingsLayout").addEventListener("change",e=>setLayout(e.target.value));
 $("paneWidth").addEventListener("input",e=>{$("paneWidthValue").textContent=e.target.value+"%";});
-$("paneWidth").addEventListener("change",async e=>{const width=Math.min(70,Math.max(24,Number(e.target.value)||36));await chrome.storage.local.set({[PANE_WIDTH_KEY]:width});});
+$("paneWidth").addEventListener("change",async e=>{const width=Math.min(42,Math.max(20,Number(e.target.value)||26));await chrome.storage.local.set({[PANE_WIDTH_KEY]:width});});
 $("openDashboard").addEventListener("click",()=>window.location.assign(chrome.runtime.getURL("dashboard.html")));
 $("syncPush").addEventListener("click",guarded(syncPush,"syncNotice"));$("syncPull").addEventListener("click",guarded(syncPull,"syncNotice"));
 $("saveGoogleClientId").addEventListener("click",guarded(async()=>{const v=$("googleClientId").value.trim();if(v&&!/^[A-Za-z0-9._-]+\.apps\.googleusercontent\.com$/.test(v))throw new Error("That does not look like a Google OAuth client ID.");await chrome.storage.local.set({[GOOGLE_CLIENT_KEY]:v});show("googleNotice","OAuth client ID saved locally.");},"googleNotice"));
