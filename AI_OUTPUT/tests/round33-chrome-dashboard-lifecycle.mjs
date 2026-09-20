@@ -14,7 +14,7 @@ assert.ok(!harness.includes("if (seededStatus === 'DISPATCHING')"));
 assert.ok(harness.includes("createdRecovered.stored.bridgeState?.runtimePhase, 'AWAITING_PROVIDER_RESPONSE'"));
 assert.ok(harness.includes('const createdUi = await assertRunningAwaitingDashboard(cdp, dashboardCreated)'));
 assert.ok(harness.includes('assert.match(createdUi.status, /Runtime:\\s*Awaiting provider response/i)'));
-assert.ok(harness.includes("assert.doesNotMatch(String(state.status || ''), /Runtime:\\s*Paused/i)"));
+assert.ok(harness.includes('assert.doesNotMatch(String(state.status || \'\'), /Runtime:\\s*Paused/i)'));
 
 const dispatchingIndex=harness.indexOf("for (const seededStatus of ['DISPATCHING', 'ACCEPTED'])");
 const currentCloseIndex=harness.indexOf('targetId: currentDashboard.targetId',dispatchingIndex);

@@ -43,8 +43,7 @@
   let lastChangedAt = 0;
   let monitorTimer = null;
   let lastLimitSignature = "";
-  let providerEventBaseline = new Set();
-  const providerEventSignatures = new Map();
+  let lastProviderEventSignature = "";
 
   function trim(map){ while(map.size > MAX_CACHE) map.delete(map.keys().next().value); }
   function rememberCommand(command,result){ byCommand.set(command.commandId,result); trim(byCommand); return result; }
@@ -289,6 +288,78 @@
   }
   function scheduleMonitor(ms=250){ if(monitorTimer) return; monitorTimer=setTimeout(()=>monitor().catch(()=>{}),ms); }
 
+  function normalizeNoticeText(value){
+    return String(value||"").replace(/\u00a0/g," ").replace(/\s+/g," ").trim();
+  }
+  function classifyProviderEvent(rawText){
+    const text=normalizeNoticeText(rawText);
+    if(!text) return null;
+    const rules=[
+      ["MESSAGE_DELIVERY_TIMEOUT",/\bmessage delivery timed out\b.*\bplease try again\b/i,"ERROR",true],
+      ["MESSAGE_SEND_FAILED",/\b(?:message|prompt)\s+(?:failed to send|could not be sent)\b/i,"ERROR",true],
+      ["RESPONSE_GENERATION_ERROR",/\b(?:there was|we encountered)\s+(?:an?\s+)?error\s+(?:generating|while generating)\s+(?:a\s+)?response\b/i,"ERROR",true],
+      ["NETWORK_ERROR",/\bnetwork error\b|\bconnection (?:lost|interrupted)\b/i,"ERROR",true],
+      ["RATE_LIMIT",/\btoo many requests\b|\brate limit\b|\busage limit\b/i,"WARN",false],
+      ["SERVICE_ERROR",/\bsomething went wrong\b|\bservice unavailable\b/i,"ERROR",false]
+    ];
+    for(const [code,re,severity,deliveryAmbiguous] of rules){
+      if(re.test(text)) return Object.freeze({code,severity,deliveryAmbiguous,text:text.slice(0,500)});
+    }
+    return null;
+  }
+  function providerEventCandidateElements(mutations=[]){
+    const out=new Set();
+    const add=node=>{
+      const el=node?.nodeType===Node.TEXT_NODE?node.parentElement:node;
+      if(!(el instanceof Element) || !el.isConnected) return;
+      const semantic=el.matches("[role='alert'],[aria-live='assertive'],[aria-live='polite']");
+      if(el.closest("[data-message-author-role]")) return;
+      if(!semantic && el.querySelector?.("[data-message-author-role]")) return;
+      out.add(el);
+      if(out.size>=40) return;
+      for(const child of el.querySelectorAll?.("[role='alert'],[aria-live='assertive'],[aria-live='polite']")||[]){
+        if(!child.closest("[data-message-author-role]")) out.add(child);
+        if(out.size>=40) break;
+      }
+    };
+    for(const mutation of mutations||[]){
+      add(mutation.target);
+      for(const node of mutation.addedNodes||[]) add(node);
+      if(out.size>=40) break;
+    }
+    if(!out.size){
+      for(const node of document.querySelectorAll("[role='alert'],[aria-live='assertive'],[aria-live='polite']")){
+        if(!node.closest("[data-message-author-role]")) out.add(node);
+        if(out.size>=40) break;
+      }
+    }
+    return [...out];
+  }
+  function inspectProviderEvents(mutations=[]){
+    for(const node of providerEventCandidateElements(mutations)){
+      if(!visible(node)) continue;
+      const event=classifyProviderEvent(node.innerText||node.textContent||"");
+      if(!event) continue;
+      const dispatchId=String(awaitingDispatchId||"");
+      const signature=[event.code,dispatchId,event.text].join("::");
+      if(signature===lastProviderEventSignature) return;
+      lastProviderEventSignature=signature;
+      chrome.runtime.sendMessage({
+        type:"AI_BRIDGE_PROVIDER_EVENT",
+        provider,
+        code:event.code,
+        severity:event.severity,
+        deliveryAmbiguous:event.deliveryAmbiguous,
+        text:event.text,
+        dispatchId,
+        observedAt:Date.now(),
+        generationEpoch:registration?.generationEpoch??null,
+        conversationIdentity:registration?.identity??routeIdentity()
+      }).catch(()=>{});
+      return;
+    }
+  }
+
   function inspectThreadLimit(){
     if(provider!=="chatgpt") return;
     const regions=[...document.querySelectorAll("[role='alert'],[aria-live='assertive'],[aria-live='polite']")].filter(node=>visible(node)&&!node.closest("[data-message-author-role]"));
@@ -305,7 +376,7 @@
     }
   }
 
-  const observer=new MutationObserver(()=>{scheduleMonitor();inspectThreadLimit();});
+  const observer=new MutationObserver(mutations=>{scheduleMonitor();inspectThreadLimit();inspectProviderEvents(mutations);});
   observer.observe(document.documentElement,{childList:true,subtree:true,characterData:true,attributes:true,attributeFilter:["disabled","aria-disabled","data-state","aria-label","data-testid"]});
 
   setInterval(()=>{
@@ -321,6 +392,7 @@
     }
     scheduleMonitor();
     inspectThreadLimit();
+    inspectProviderEvents();
   },750);
 
   chrome.runtime.onMessage.addListener((msg,_sender,sendResponse)=>{

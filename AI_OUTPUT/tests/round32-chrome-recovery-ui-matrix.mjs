@@ -21,9 +21,8 @@ for(const token of [
 
 assert.ok(harness.includes('window.__emitResponse=true'));
 assert.ok(harness.includes('window.__autoConfirm=true;window.__emitResponse=false;true'));
-assert.ok(harness.includes("assert.doesNotMatch(String(state.status || ''), /Running\\s*[—-]\\s*Relay/i)"));
-assert.ok(harness.includes("assert.doesNotMatch(String(state.status || ''), /Runtime:\\s*Paused/i)"));
-assert.ok(harness.includes("positiveUi.status"));
-assert.ok(harness.includes("assertRunningAwaitingDashboard(cdp, dashboardPositive"));
+assert.ok(harness.includes('assert.doesNotMatch(String(state.status || \'\'), /Running\\s*[—-]\\s*Relay/i)'));
+assert.ok(harness.includes('assertRunningAwaitingDashboard(cdp, dashboardPositive'));
+assert.ok(harness.includes('assert.match(positiveUi.status, /Awaiting provider response/i)'));
 
 console.log('round32-chrome-recovery-ui-matrix: PASS');

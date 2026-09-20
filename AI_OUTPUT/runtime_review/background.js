@@ -25,6 +25,15 @@ const MAX_ARTIFACT_PREVIEW_CHARS = 220000;
 const MAX_ARTIFACT_CONTEXT_CHARS = 260000;
 const MAX_ZIP_TEXT_ENTRIES = 80;
 const MAX_ZIP_ENTRY_UNCOMPRESSED_BYTES = 2 * 1024 * 1024;
+const MAX_PROVIDER_EVENTS = 100;
+const PROVIDER_EVENT_POLICY = Object.freeze({
+  MESSAGE_DELIVERY_TIMEOUT: Object.freeze({ severity: "ERROR", ambiguous: true }),
+  MESSAGE_SEND_FAILED: Object.freeze({ severity: "ERROR", ambiguous: true }),
+  RESPONSE_GENERATION_ERROR: Object.freeze({ severity: "ERROR", ambiguous: true }),
+  NETWORK_ERROR: Object.freeze({ severity: "ERROR", ambiguous: true }),
+  RATE_LIMIT: Object.freeze({ severity: "WARN", ambiguous: false }),
+  SERVICE_ERROR: Object.freeze({ severity: "ERROR", ambiguous: false })
+});
 
 const DEFAULT_HISTORY = {
   version: HISTORY_VERSION,
@@ -97,6 +106,7 @@ const DEFAULT_STATE = {
 
   transcript: [],
   nextSeq: 1,
+  providerEvents: [],
   log: []
 };
 
@@ -460,10 +470,12 @@ async function reviewProcessIncomingEnvelope(envelope, { fromParked = false } = 
   }
 
   try {
-    const matchingProviderRecovery = state.providerRecovery?.dispatchId === envelope.dispatchId
-      ? state.providerRecovery
-      : null;
-    const shouldRelay = state.running || matchingProviderRecovery?.resumeRelayAfterResponse === true;
+    const providerRecoveryMatch=Boolean(
+      state.providerRecovery?.active &&
+      String(state.providerRecovery.dispatchId||"")===String(envelope.dispatchId) &&
+      state.providerRecovery.side===envelope.side
+    );
+    const shouldRelay = state.running || providerRecoveryMatch;
     const stateResult = await handleCompletedResponse(envelope.side, envelope.text, {
       relay: false,
       artifacts: envelope.artifacts,
@@ -504,29 +516,15 @@ async function reviewProcessIncomingEnvelope(envelope, { fromParked = false } = 
 
     await reviewParkedStore.finalize(envelope.dispatchId);
 
-    if (matchingProviderRecovery) {
-      state.providerRecovery = null;
-      appendLog({
-        time: Date.now(),
-        type: "provider-recovered",
-        side: envelope.side,
-        dispatchId: envelope.dispatchId,
-        text: "Provider produced a valid response for the original blocked dispatch."
-      });
-      if (shouldRelay && state.sessionActive && !state.awaitingHuman && !stateResult?.finished && !stateResult?.commandError && !pending) {
-        if (isBatchWorkMode() && state.phasePendingSides.length) {
-          state.running = true;
-          state.paused = false;
-          state.pauseReason = "";
-          state.runtimePhase = "AWAITING_PROVIDER_RESPONSE";
-        } else if (stateResult?.paused) {
-          state.pauseReason = "Provider response recovered. Resume when ready.";
-          state.runtimePhase = "PAUSED";
-        }
-      }
+    if (pending && providerRecoveryMatch) {
+      state.providerRecovery={...state.providerRecovery,active:false,resolvedAt:Date.now(),responseCommitted:true};
+      state.running=false;
+      state.paused=true;
+      state.runtimePhase="PROVIDER_RESPONSE_RECOVERED";
+      state.pauseReason="Provider response recovered for AI "+envelope.side+". The response is committed and the next relay turn is durable. Press Resume to continue.";
       await saveState();
+      return {ok:true,providerRecovered:true,paused:true,pending:true};
     }
-
     if (pending) return reviewContinueAfterCommittedResponse(envelope.side);
     state.runtimePhase = state.sessionActive
       ? (state.awaitingHuman || state.paused ? "PAUSED" : "AWAITING_PROVIDER_RESPONSE")
@@ -727,7 +725,9 @@ function cloneDefaultState() {
     suppressedHumanRequests: [],
     runtimePhase: "IDLE",
     nextTurnPending: null,
+    providerRecovery: null,
     transcript: [],
+    providerEvents: [],
     log: []
   };
 }
@@ -1490,6 +1490,7 @@ async function loadState() {
       pendingMainInterjections: Array.isArray(bridgeState.pendingMainInterjections) ? bridgeState.pendingMainInterjections : [],
       suppressedHumanRequests: migrateSuppressedHumanRequests(bridgeState),
       transcript: Array.isArray(bridgeState.transcript) ? bridgeState.transcript : [],
+      providerEvents: Array.isArray(bridgeState.providerEvents) ? bridgeState.providerEvents.slice(-MAX_PROVIDER_EVENTS) : [],
       log: Array.isArray(bridgeState.log) ? bridgeState.log : []
     };
     state.agentCount = setActiveAgentCount(state.agentCount);
@@ -1804,17 +1805,18 @@ function formatEntry(entry) {
 }
 
 function boundedTranscript(entries, maxChars = 48000) {
+  const relayEntries = (Array.isArray(entries) ? entries : []).filter(entry => entry?.type !== "provider-event");
   const parts = [];
   let used = 0;
 
-  for (let i = entries.length - 1; i >= 0; i--) {
-    const part = formatEntry(entries[i]);
+  for (let i = relayEntries.length - 1; i >= 0; i--) {
+    const part = formatEntry(relayEntries[i]);
     if (parts.length && used + part.length > maxChars) break;
     parts.unshift(part);
     used += part.length;
   }
 
-  const omitted = parts.length < entries.length;
+  const omitted = parts.length < relayEntries.length;
   return `${omitted ? "[Earlier transcript entries omitted to keep the recovery message bounded.]\n\n" : ""}${parts.join("\n\n")}`.trim();
 }
 
@@ -2525,6 +2527,86 @@ async function resetSelectedChats(msg, sides = SIDES, { allowActive = false } = 
   return chosen;
 }
 
+function normalizeProviderEventText(value){
+  return String(value||"").replace(/\s+/g," ").trim().slice(0,500);
+}
+
+async function recordProviderEvent(msg,sender){
+  await stateReady;
+  await reviewRuntimeReady;
+  if(!sender?.tab?.id) return {ok:false,ignored:true,reason:"PROVIDER_EVENT_REQUIRES_TAB"};
+  const side=sideForTab(sender.tab.id);
+  if(!side) return {ok:false,ignored:true,reason:"SIDE_NOT_BOUND"};
+  const provider=reviewProviderFromUrl(sender.url||sender.tab?.url);
+  if(!provider || provider!==String(msg.provider||"").toLowerCase()) return {ok:false,ignored:true,reason:"PROVIDER_MISMATCH"};
+  const code=String(msg.code||"").trim().toUpperCase();
+  const policy=PROVIDER_EVENT_POLICY[code];
+  if(!policy) return {ok:false,ignored:true,reason:"UNKNOWN_PROVIDER_EVENT"};
+  const text=normalizeProviderEventText(msg.text);
+  if(!text) return {ok:false,ignored:true,reason:"EMPTY_PROVIDER_EVENT"};
+
+  const dispatchId=String(msg.dispatchId||"").trim();
+  const event={
+    id:"provider-event-"+Date.now()+"-"+side+"-"+state.nextSeq,
+    time:Number.isFinite(Number(msg.observedAt))?Number(msg.observedAt):Date.now(),
+    side,
+    provider,
+    code,
+    severity:policy.severity,
+    text,
+    dispatchId:dispatchId||null
+  };
+  state.providerEvents=Array.isArray(state.providerEvents)?state.providerEvents:[];
+  state.providerEvents.push(event);
+  if(state.providerEvents.length>MAX_PROVIDER_EVENTS) state.providerEvents.splice(0,state.providerEvents.length-MAX_PROVIDER_EVENTS);
+
+  if(state.sessionActive){
+    recordTranscript("provider-event",{
+      side,
+      text,
+      provider,
+      eventCode:code,
+      severity:policy.severity,
+      dispatchId:dispatchId||null
+    });
+  }
+  appendLog({time:event.time,type:"provider-event",side,text:"AI "+side+" "+provider+" event "+code+": "+text,dispatchId:dispatchId||null});
+
+  let recoveryRequired=false;
+  if(dispatchId){
+    const dispatch=reviewLedger.get(dispatchId);
+    recoveryRequired=Boolean(
+      dispatch &&
+      dispatch.side===side &&
+      Number(dispatch.tabId)===Number(sender.tab.id) &&
+      [DISPATCH_STATUS.DISPATCHING,DISPATCH_STATUS.ACCEPTED,DISPATCH_STATUS.AWAITING_RESPONSE].includes(dispatch.status)
+    );
+  }
+
+  if(state.sessionActive && recoveryRequired){
+    state.providerRecovery={
+      active:true,
+      side,
+      provider,
+      code,
+      severity:policy.severity,
+      text,
+      dispatchId,
+      observedAt:event.time
+    };
+    state.running=false;
+    state.paused=true;
+    state.runtimePhase="PROVIDER_RECOVERY_REQUIRED";
+    state.pauseReason="AI "+side+" provider reported "+code+": "+text+" AI Bridge did not resend the prompt automatically; provider recovery is required.";
+    appendLog({time:Date.now(),type:"provider-recovery",side,text:state.pauseReason,dispatchId});
+    await saveState();
+    return {ok:true,recorded:true,paused:true,recoveryRequired:true,event};
+  }
+
+  await saveState();
+  return {ok:true,recorded:true,paused:false,recoveryRequired:false,event};
+}
+
 async function pauseBridge(reason = "Paused by user") {
   if (!state.sessionActive) return;
   state.running = false;
@@ -2878,60 +2960,8 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
     }
 
     if (msg.type === "AI_BRIDGE_PROVIDER_EVENT") {
-      await stateReady;
-      const authorized = reviewAuthorizeProviderEvent(msg, sender);
-      if (!authorized.ok) {
-        appendLog({
-          time: Date.now(),
-          type: "provider-event-rejected",
-          side: sender?.tab?.id ? sideForTab(sender.tab.id) : null,
-          dispatchId: String(msg?.dispatchId || ""),
-          code: String(msg?.code || ""),
-          text: authorized.reason
-        });
-        sendResponse({ ok:false, ignored:true, reason:authorized.reason });
-        return;
-      }
-      const { side, dispatchId, code, policy, dispatch, provider } = authorized;
-      const message = String(msg.message || "").replace(/\s+/g," ").trim().slice(0,500);
-      if (!message) {
-        sendResponse({ ok:false, ignored:true, reason:"EMPTY_PROVIDER_EVENT" });
-        return;
-      }
-      const signature = [dispatchId, code, message].join("::");
-      const duplicate = state.transcript.some(entry => entry?.type === "provider_event" && entry?.eventSignature === signature);
-      if (!duplicate) {
-        const resumeRelayAfterResponse = state.running || state.providerRecovery?.resumeRelayAfterResponse === true;
-        recordTranscript("provider_event", {
-          side,
-          text: message,
-          provider,
-          code,
-          category: policy.category,
-          severity: policy.severity,
-          dispatchId,
-          observedAt: Number.isFinite(Number(msg.observedAt)) ? Number(msg.observedAt) : Date.now(),
-          eventSignature: signature
-        });
-        state.providerRecovery = {
-          side,
-          provider,
-          dispatchId,
-          code,
-          category: policy.category,
-          severity: policy.severity,
-          message,
-          observedAt: Number.isFinite(Number(msg.observedAt)) ? Number(msg.observedAt) : Date.now(),
-          resumeRelayAfterResponse
-        };
-        state.running = false;
-        state.paused = true;
-        state.runtimePhase = "PROVIDER_RECOVERY_REQUIRED";
-        state.pauseReason = "AI " + side + " provider action required: " + message + " AI Bridge did not resend the prompt automatically.";
-        appendLog({ time:Date.now(), type:"provider-event", side, dispatchId, code, text:state.pauseReason });
-        await saveState();
-      }
-      sendResponse({ ok:true, paused:true, duplicate });
+      const result = await recordProviderEvent(msg, sender);
+      sendResponse(result);
       return;
     }
 
@@ -3219,11 +3249,34 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
       }
 
       await bindTabsFromMessage(msg);
+
+      if (state.providerRecovery?.active) {
+        const recoveryDispatch=reviewLedger.get(String(state.providerRecovery.dispatchId||""));
+        if (recoveryDispatch?.status===DISPATCH_STATUS.AWAITING_RESPONSE) {
+          state.providerRecovery={...state.providerRecovery,active:false,resumedAt:Date.now()};
+          state.running=true;
+          state.paused=false;
+          state.pauseReason="";
+          state.runtimePhase="AWAITING_PROVIDER_RESPONSE";
+          await clearAttention();
+          await saveState();
+          sendResponse({ok:true,providerRecovery:"WAITING_SAME_DISPATCH",dispatchId:recoveryDispatch.dispatchId});
+          return;
+        }
+        throw new Error("Provider recovery cannot resume because the original dispatch is no longer awaiting a response.");
+      }
+
       state.running = true;
       state.paused = false;
       state.pauseReason = "";
       await clearAttention();
       await saveState();
+
+      if (state.nextTurnPending) {
+        const recovered=await reviewRecoverNextTurnPending();
+        sendResponse({ok:true,recoveredNextTurn:true,...recovered});
+        return;
+      }
 
       try {
         if (isBatchWorkMode()) {

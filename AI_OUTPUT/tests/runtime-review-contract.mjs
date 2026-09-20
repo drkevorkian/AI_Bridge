@@ -42,8 +42,12 @@ assert.doesNotMatch(content,/^\s*import\s/m);
 assert.doesNotMatch(content,/^\s*export\s/m);
 
 const listenerIndex=background.indexOf('chrome.runtime.onMessage.addListener');
-const awaitIndex=background.indexOf('await stateReady');
-assert.ok(listenerIndex>=0 && awaitIndex>=0 && listenerIndex<awaitIndex,'MV3 listener must register before async state readiness');
+assert.ok(listenerIndex>=0,'MV3 runtime listener missing');
+assert.doesNotMatch(
+  background.slice(0,listenerIndex),
+  /^await stateReady\b/m,
+  'MV3 listener must register before any top-level state-readiness wait'
+);
 
 assert.ok(background.startsWith('importScripts("runtime-core.js");'));
 assert.ok(runtimeCore.includes('DispatchLedger'));
@@ -56,10 +60,19 @@ assert.ok(content.includes('AI_BRIDGE_ACTION'));
 assert.ok(content.includes('NEW_CHAT_UNSUPPORTED'));
 assert.ok(content.includes('UPLOAD_UNSUPPORTED'));
 assert.ok(content.includes('AI_BRIDGE_THREAD_LIMIT'));
-assert.ok(content.includes('provider_events'));
-assert.ok(content.includes('MESSAGE_DELIVERY_TIMEOUT'));
 assert.ok(content.includes('AI_BRIDGE_PROVIDER_EVENT'));
-assert.ok(content.includes('authorityRegistrationId:registration.authorityRegistrationId'));
+assert.ok(content.includes('MESSAGE_DELIVERY_TIMEOUT'));
+assert.ok(background.includes('AI_BRIDGE_PROVIDER_EVENT'));
+assert.ok(background.includes('PROVIDER_EVENT_POLICY'));
+assert.ok(background.includes('providerEvents'));
+assert.ok(background.includes('providerRecovery'));
+assert.ok(background.includes('PROVIDER_RECOVERY_REQUIRED'));
+assert.ok(background.includes('PROVIDER_RESPONSE_RECOVERED'));
+assert.ok(background.includes('WAITING_SAME_DISPATCH'));
+assert.ok(background.includes('entry?.type !== "provider-event"'));
+assert.ok(dashboard.includes('Provider recovery required'));
+assert.ok(dashboard.includes('Provider response recovered'));
+assert.ok(dashboard.includes('provider-event'));
 assert.ok(content.includes('generationEpoch:registration.generationEpoch'));
 assert.ok(content.includes('conversationIdentity:registration.identity'));
 assert.ok(settings.includes('AI_BRIDGE_PROVIDER_HEALTH'));
