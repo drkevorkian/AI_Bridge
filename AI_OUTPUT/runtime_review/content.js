@@ -84,6 +84,7 @@
   let registration = null;
   let lastHref = location.href;
   let awaitingDispatchId = null;
+  let awaitingResponseContext = null;
   let lastResponseSignature = "";
   let lastObserved = "";
   let lastChangedAt = 0;
@@ -236,6 +237,13 @@
     captureProviderEventBaseline();
     sendAgain.click();
     awaitingDispatchId=command.authorityId;
+    awaitingResponseContext=Object.freeze({
+      dispatchId:String(command.authorityId),
+      side:String(command.side||registration.side||"").toUpperCase(),
+      generationEpoch:Number(command.generationEpoch),
+      provider,
+      authorityRegistrationId:String(command.authorityRegistrationId||"")
+    });
     const confirmation=await confirmSend(composer2,text);
     if(!confirmation.confirmed) return attempted;
     return consumeAuthority(command,Object.freeze({ok:true,outcome:"ACTION_CONFIRMED",reason:null,commandId:command.commandId,authorityId:command.authorityId,evidence:confirmation.evidence}));
@@ -350,17 +358,29 @@
     if(signature===lastResponseSignature) return;
     lastResponseSignature=signature;
     const dispatchId=awaitingDispatchId;
+    const responseContext=awaitingResponseContext && awaitingResponseContext.dispatchId===dispatchId
+      ? awaitingResponseContext
+      : (registration ? Object.freeze({
+          dispatchId,
+          side:registration.side,
+          generationEpoch:registration.generationEpoch,
+          provider:registration.provider,
+          authorityRegistrationId:registration.authorityRegistrationId
+        }) : null);
     awaitingDispatchId=null;
+    awaitingResponseContext=null;
     try{
-      if(!registration) return;
+      if(!responseContext) return;
+      const liveIdentity=routeIdentity();
+      if(liveIdentity.provider!==responseContext.provider || liveIdentity.writable!==true) return;
       await chrome.runtime.sendMessage({
         type:"AI_BRIDGE_RESPONSE",
         text,
         completedAt:Date.now(),
         dispatchId,
-        generationEpoch:registration.generationEpoch,
-        conversationIdentity:registration.identity,
-        side:registration.side,
+        generationEpoch:responseContext.generationEpoch,
+        conversationIdentity:liveIdentity,
+        side:responseContext.side,
         artifacts:[]
       });
     }catch(_){}
@@ -385,8 +405,24 @@
       if(!/maximum length for this conversation|you(?:'|’)ve reached the maximum length for this conversation/i.test(text)) continue;
       const signature=text.slice(0,500);
       if(signature===lastLimitSignature) return;
+      if(!registration) return;
+      const liveIdentity=routeIdentity();
+      if(!sameIdentity(liveIdentity,registration.identity)) return;
+      const composer=resolveTrusted(config.composer);
       lastLimitSignature=signature;
-      chrome.runtime.sendMessage({type:"AI_BRIDGE_THREAD_LIMIT",provider,text:signature}).catch(()=>{});
+      chrome.runtime.sendMessage({
+        type:"AI_BRIDGE_THREAD_LIMIT",
+        provider,
+        text:signature,
+        regions:[{kind:"provider-notice",text:signature,visible:true}],
+        composer:{present:Boolean(composer),disabled:Boolean(composer&&!enabled(composer))},
+        dispatchId:awaitingDispatchId,
+        side:registration.side,
+        generationEpoch:registration.generationEpoch,
+        authorityRegistrationId:registration.authorityRegistrationId,
+        conversationIdentity:liveIdentity,
+        observedAt:Date.now()
+      }).catch(()=>{});
       return;
     }
   }
@@ -403,7 +439,8 @@
     if(location.href!==lastHref){
       lastHref=location.href;
       registration=null;
-      awaitingDispatchId=null;
+      if(!awaitingResponseContext) awaitingDispatchId=null;
+      lastLimitSignature="";
       providerEventBaseline=new Set();
       providerEventSignatures.clear();
       byCommand.clear();
@@ -508,6 +545,7 @@
     try{ chrome.runtime.onMessage.removeListener(onRuntimeMessage); }catch(_){}
     registration=null;
     awaitingDispatchId=null;
+    awaitingResponseContext=null;
     providerEventBaseline.clear();
     providerEventSignatures.clear();
     byCommand.clear();
