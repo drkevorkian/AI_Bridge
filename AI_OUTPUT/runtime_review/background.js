@@ -1134,7 +1134,20 @@ async function reviewRegisterSideAuthority(side) {
     && Number(prior.tabId) === tabId
     && String(prior.provider || "") === provider
     && reviewSameIdentity(prior.identity, expectedIdentity);
-  const generationEpoch = equivalent
+  const activeRollover = reviewRollover.get(side);
+  const rolloverSurfacePromotion = Boolean(
+    activeRollover &&
+    !["COMPLETE", "FAILED"].includes(activeRollover.phase) &&
+    prior &&
+    Number(prior.tabId) === tabId &&
+    String(prior.provider || "") === provider &&
+    prior.identity?.kind === "surface" &&
+    expectedIdentity.kind === "conversation" &&
+    expectedIdentity.provider === prior.identity.provider &&
+    expectedIdentity.writable === true &&
+    Number(prior.generationEpoch) === Number(activeRollover.oldAuthority?.generationEpoch || -1) + 1
+  );
+  const generationEpoch = (equivalent || rolloverSurfacePromotion)
     ? Number(prior.generationEpoch)
     : Number(prior?.generationEpoch || 0) + 1;
   const nonce = crypto.randomUUID();
@@ -1176,6 +1189,64 @@ async function reviewRegisterSideAuthority(side) {
   return registration;
 }
 
+async function reviewApplyRegisteredRolloverAuthority(record) {
+  const tx = reviewRollover.get(record?.side);
+  if (!tx || ["COMPLETE", "FAILED"].includes(tx.phase)) return false;
+  if (
+    Number(record.tabId) !== Number(tx.oldAuthority?.tabId) ||
+    String(record.provider) !== String(tx.provider)
+  ) return false;
+
+  const stateName = record.identity?.kind === "conversation"
+    ? AUTHORITY_STATES.CONFIRMED
+    : AUTHORITY_STATES.PROVISIONAL;
+  let authority;
+  try {
+    authority = createConversationAuthority({
+      side: record.side,
+      tabId: record.tabId,
+      generationEpoch: record.generationEpoch,
+      identity: record.identity,
+      state: stateName
+    });
+  } catch (_) {
+    return false;
+  }
+
+  if (tx.phase === "AWAITING_NEW_IDENTITY") {
+    const applied = reviewRolloverOrchestrator.applyIdentityObservation({
+      side: record.side,
+      previousIdentity: tx.oldAuthority.identity,
+      currentIdentity: record.identity,
+      candidateAuthority: authority,
+      now: Date.now()
+    });
+    if (applied?.applied) {
+      await reviewPersistRollover();
+      return true;
+    }
+    return false;
+  }
+
+  if (
+    tx.candidateAuthority?.state === AUTHORITY_STATES.PROVISIONAL &&
+    record.identity?.kind === "conversation"
+  ) {
+    const applied = reviewRolloverOrchestrator.applyIdentityObservation({
+      side: record.side,
+      previousIdentity: tx.candidateAuthority.identity,
+      currentIdentity: record.identity,
+      candidateAuthority: authority,
+      now: Date.now()
+    });
+    if (applied?.applied) {
+      await reviewPersistRollover();
+      return true;
+    }
+  }
+  return false;
+}
+
 function reviewAcceptDocumentRegistration(msg, sender) {
   const side = String(msg?.side || "").toUpperCase();
   const pending = reviewPendingRegistrations.get(side);
@@ -1214,9 +1285,11 @@ function reviewAcceptDocumentRegistration(msg, sender) {
     generationEpoch: record.generationEpoch,
     identity: record.identity
   };
-  reviewPersistAuthorityEpochs()
+  Promise.resolve()
+    .then(() => reviewApplyRegisteredRolloverAuthority(record))
+    .then(() => reviewPersistAuthorityEpochs())
     .then(() => reviewDrainParkedResponses(side))
-    .catch(error => console.error("AI Bridge review authority persistence/drain failed", error));
+    .catch(error => console.error("AI Bridge review authority persistence/rollover/drain failed", error));
   pending.resolve(record);
   return record;
 }
@@ -3560,7 +3633,17 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
     }
 
     if (msg.type === "AI_BRIDGE_DOCUMENT_ROUTE_CHANGED") {
-      if (sender?.tab?.id) reviewInvalidateAuthorityForTab(sender.tab.id);
+      const changedTabId = Number(sender?.tab?.id);
+      const changedSide = Number.isInteger(changedTabId) ? sideForTab(changedTabId) : null;
+      if (Number.isInteger(changedTabId)) reviewInvalidateAuthorityForTab(changedTabId);
+      if (changedSide) {
+        const tx = reviewRollover.get(changedSide);
+        if (tx && !["COMPLETE", "FAILED"].includes(tx.phase)) {
+          reviewRegisterSideAuthority(changedSide).catch(error => {
+            console.warn("AI Bridge rollover route re-registration failed", error);
+          });
+        }
+      }
       sendResponse({ ok: true });
       return;
     }
