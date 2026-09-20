@@ -1,0 +1,15 @@
+import assert from "node:assert/strict";
+import authorityModule from "../thread_rollover/conversation-authority.js";
+const {AUTHORITY_STATES,createConversationAuthority,revokeAuthority,nextGeneration,validateResponseAuthority}=authorityModule;
+const oldIdentity={provider:"chatgpt",kind:"conversation",routeClass:"conversation",threadKey:"old",provisional:false,writable:true};
+const freshIdentity={provider:"chatgpt",kind:"conversation",routeClass:"conversation",threadKey:"new",provisional:false,writable:true};
+const base=createConversationAuthority({side:"B",tabId:10,generationEpoch:7,identity:oldIdentity,state:AUTHORITY_STATES.CONFIRMED});
+assert.equal(validateResponseAuthority({authority:base,senderTabId:10,side:"B",generationEpoch:7,conversationIdentity:oldIdentity}).ok,true);
+assert.equal(validateResponseAuthority({authority:base,senderTabId:10,side:"B",generationEpoch:6,conversationIdentity:oldIdentity}).reason,"GENERATION_MISMATCH");
+assert.equal(validateResponseAuthority({authority:base,senderTabId:10,side:"B",generationEpoch:7,conversationIdentity:freshIdentity}).reason,"CONVERSATION_MISMATCH");
+const revoked=revokeAuthority(base);
+assert.equal(validateResponseAuthority({authority:revoked,senderTabId:10,side:"B",generationEpoch:7,conversationIdentity:oldIdentity}).reason,"AUTHORITY_REVOKED");
+const next=nextGeneration(base,{provider:"chatgpt",kind:"surface",routeClass:"home",threadKey:null,provisional:true,writable:true});
+assert.equal(next.generationEpoch,8);assert.equal(next.state,AUTHORITY_STATES.PROVISIONAL);
+assert.throws(()=>createConversationAuthority({side:"B",tabId:10,generationEpoch:8,identity:{provider:"grok",kind:"share",routeClass:"share",threadKey:"x",writable:false},state:AUTHORITY_STATES.PROVISIONAL}));
+console.log("conversation-authority: PASS");

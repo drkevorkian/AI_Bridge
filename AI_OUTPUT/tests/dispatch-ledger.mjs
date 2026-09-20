@@ -1,0 +1,15 @@
+import assert from "node:assert/strict";
+import ledgerModule from "../thread_rollover/dispatch-ledger.js";
+const {DISPATCH_STATUS,DispatchLedger}=ledgerModule;
+const identity={provider:"chatgpt",kind:"conversation",routeClass:"conversation",threadKey:"abc",writable:true,provisional:false};
+const ledger=new DispatchLedger();
+ledger.create({dispatchId:"d1",side:"B",tabId:10,generationEpoch:4,conversationIdentity:identity,purpose:"RELAY",payloadHash:"hash",createdAt:1});
+assert.throws(()=>ledger.create({dispatchId:"d1",side:"B",tabId:10,generationEpoch:4,conversationIdentity:identity,purpose:"RELAY",payloadHash:"hash",createdAt:1}));
+ledger.transition("d1",DISPATCH_STATUS.DISPATCHING);ledger.transition("d1",DISPATCH_STATUS.ACCEPTED,{acceptedAt:2});ledger.transition("d1",DISPATCH_STATUS.AWAITING_RESPONSE);
+assert.equal(ledger.validateResponse({dispatchId:"d1",side:"B",tabId:10,generationEpoch:4,conversationIdentity:identity}).ok,true);
+assert.equal(ledger.validateResponse({dispatchId:"d1",side:"B",tabId:10,generationEpoch:3,conversationIdentity:identity}).reason,"GENERATION_MISMATCH");
+assert.equal(ledger.validateResponse({dispatchId:"d1",side:"B",tabId:10,generationEpoch:4,conversationIdentity:{...identity,threadKey:"wrong"}}).reason,"CONVERSATION_MISMATCH");
+ledger.transition("d1",DISPATCH_STATUS.RESPONSE_COMMITTED,{completedAt:3});
+assert.equal(ledger.validateResponse({dispatchId:"d1",side:"B",tabId:10,generationEpoch:4,conversationIdentity:identity}).reason,"DISPATCH_NOT_AWAITING_RESPONSE");
+const restored=new DispatchLedger(ledger.snapshot());assert.equal(restored.get("d1").status,DISPATCH_STATUS.RESPONSE_COMMITTED);
+console.log("dispatch-ledger: PASS");

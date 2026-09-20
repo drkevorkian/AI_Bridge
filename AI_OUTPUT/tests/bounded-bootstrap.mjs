@@ -1,0 +1,10 @@
+import assert from "node:assert/strict";
+import bootstrapModule from "../startup_guard/bounded-bootstrap.js";
+const {BoundedBootstrap}=bootstrapModule;
+const sleep=ms=>new Promise(resolve=>setTimeout(resolve,ms));
+const bootstrap=new BoundedBootstrap({storageTimeoutMs:20,validationTimeoutMs:20,reconnectTimeoutMs:20});
+const fast=await bootstrap.initialize({defaults:()=>({ready:false,value:"default"}),readPersistedState:async()=>({value:"saved"}),validateAndMigrate:async saved=>({ready:true,...saved}),reconnectProviders:async()=>({connected:3})});
+assert.equal(fast.controlPlane.ready,true);assert.equal(fast.controlPlane.state.value,"saved");assert.deepEqual(await fast.providerRecovery,{ok:true,result:{connected:3}});
+const slow=await bootstrap.initialize({defaults:()=>({value:"default"}),readPersistedState:async()=>{await sleep(50);return {value:"late"};},validateAndMigrate:async saved=>saved,reconnectProviders:async()=>{await sleep(50);return {connected:3};}});
+assert.equal(slow.controlPlane.ready,true);assert.equal(slow.controlPlane.state.value,"default");assert.equal(slow.controlPlane.diagnostics[0].stage,"storage");assert.equal((await slow.providerRecovery).ok,false);
+console.log("bounded-bootstrap: PASS");
