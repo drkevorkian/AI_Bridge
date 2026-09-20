@@ -47,7 +47,7 @@ export function summarizeProviderHealth({provider,bridgeConnected,documentReadin
   const base={provider:cleanProvider,context:String(context),connectionStatus,actionAuthorityStatus,required};
   if(bridgeConnected!==true)return Object.freeze({...base,status:PROVIDER_STATUS.DISCONNECTED,runnable:false,blocking:Object.freeze([{capability:'bridge',state:'DISCONNECTED'}]),optionalIssues:Object.freeze([])});
   if(actionAuthorityStatus===AUTHORITY_STATUS.REGISTERING)return Object.freeze({...base,status:PROVIDER_STATUS.REGISTERING,runnable:false,blocking:Object.freeze([{capability:'document_authority',state:'REGISTERING'}]),optionalIssues:Object.freeze([])});
-  if(actionAuthorityStatus===AUTHORITY_STATUS.LISTENER_CONNECTED||actionAuthorityStatus===AUTHORITY_STATUS.DISCONNECTED||actionAuthorityStatus===AUTHORITY_STATUS.UNKNOWN)return Object.freeze({...base,status:PROVIDER_STATUS.DEGRADED,runnable:false,blocking:Object.freeze([{capability:'document_authority',state:actionAuthorityStatus}]),optionalIssues:Object.freeze([])});
+  if(actionAuthorityStatus!==AUTHORITY_STATUS.VERIFIED)return Object.freeze({...base,status:PROVIDER_STATUS.DEGRADED,runnable:false,blocking:Object.freeze([{capability:'document_authority',state:actionAuthorityStatus}]),optionalIssues:Object.freeze([])});
   const blocking=[],optionalIssues=[];
   for(const name of required){const state=stateOf(capabilities,name);if(state!=='PASS')blocking.push({capability:name,state});}
   for(const [name,value] of Object.entries(capabilities||{})){if(required.includes(name))continue;const state=String(value?.state||'UNKNOWN').toUpperCase();if(state!=='PASS')optionalIssues.push({capability:name,state});}

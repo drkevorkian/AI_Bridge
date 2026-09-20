@@ -18,7 +18,8 @@ const tests=[
   'round13-storage-transaction.mjs',
   'bounded-bootstrap.mjs',
   'round22-authority-runtime.mjs',
-  'round23-registration-health.mjs'
+  'round23-registration-health.mjs',
+  'round25-provider-health-failclosed.mjs'
 ];
 for(const name of tests){
   const r=spawnSync(process.execPath,[path.join(here,name)],{stdio:'inherit'});
