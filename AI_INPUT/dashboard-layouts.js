@@ -56,7 +56,11 @@
     if(changes[LAYOUT_KEY])applyLayout(changes[LAYOUT_KEY].newValue);
     if(changes[WIDTH_KEY])applyWidth(changes[WIDTH_KEY].newValue);
   });
-  document.getElementById("openSettings")?.addEventListener("click",()=>chrome.tabs.create({url:chrome.runtime.getURL("settings.html")}));
+  function navigateToExtensionPage(page) {
+    const url = chrome.runtime.getURL(page);
+    if (window.location.href !== url) window.location.assign(url);
+  }
+  document.getElementById("openSettings")?.addEventListener("click",()=>navigateToExtensionPage("settings.html"));
 
   const splitter=document.getElementById("paneSplitter");
   const shell=document.querySelector(".app-shell");
