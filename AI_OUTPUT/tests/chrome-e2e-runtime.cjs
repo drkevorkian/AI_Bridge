@@ -352,10 +352,21 @@ async function main() {
       labelA: 'Fixture ChatGPT A',
       labelB: 'Fixture ChatGPT B'
     });
-    assert.equal(resume.transportOk, false, 'Resume should fail closed while an ambiguous dispatch exists');
+    assert.equal(resume.transportOk, true, 'Resume transport should succeed so the runtime can return its fail-closed application result');
+    assert.equal(resume.value?.ok, false, 'Resume should fail closed while an ambiguous dispatch exists');
+    assert.match(String(resume.value?.error || ''), /UNRESOLVED_DISPATCH_BLOCKS_REPLAY|unresolved|ambiguous/i);
+
     await sleep(500);
     const actionCountAfterResume = await evaluate(cdp, providerA.sessionId, 'window.__providerActionCount');
     assert.equal(actionCountAfterResume, actionCountBeforeResume, 'Resume replayed an ambiguous provider action');
+
+    const afterResume = await extensionStorage(cdp, extensionId, ['aiBridgeRuntimeDispatchLedger', 'bridgeState']);
+    const recordsAfterResume = afterResume.aiBridgeRuntimeDispatchLedger?.records || [];
+    assert.equal(recordsAfterResume.length, 1, 'Resume changed the number of durable dispatches');
+    assert.equal(recordsAfterResume[0].dispatchId, recordsAfterKill[0].dispatchId, 'Resume replaced the ambiguous dispatch ID');
+    assert.equal(recordsAfterResume[0].status, 'DELIVERY_AMBIGUOUS', 'Resume changed ambiguous delivery state');
+    assert.equal(afterResume.bridgeState?.paused, true, 'Resume should leave the session paused after fail-closed refusal');
+    assert.equal(afterResume.bridgeState?.running, false, 'Resume should not leave the session running after fail-closed refusal');
 
     const visible = await poll(
       () => evaluate(cdp, dashboardAfter.sessionId, 'document.body.innerText'),
