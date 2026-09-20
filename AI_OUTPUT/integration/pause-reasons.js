@@ -26,6 +26,7 @@ export const PAUSE_REASON=Object.freeze({
   RUNTIME_RECOVERY_VALIDATION_FAILED:'RUNTIME_RECOVERY_VALIDATION_FAILED',
   RUNTIME_RECOVERY_PERSIST_FAILED:'RUNTIME_RECOVERY_PERSIST_FAILED',
   RUNTIME_MUTATION_PERSIST_FAILED:'RUNTIME_MUTATION_PERSIST_FAILED',
+  PROVIDER_ACTION_DELIVERY_AMBIGUOUS:'PROVIDER_ACTION_DELIVERY_AMBIGUOUS',
   RUNTIME_UNMAPPED_SAFETY_STATE:'RUNTIME_UNMAPPED_SAFETY_STATE'
 });
 const META=Object.freeze({
@@ -50,6 +51,7 @@ const META=Object.freeze({
   RUNTIME_RECOVERY_VALIDATION_FAILED:{certainty:ACTION_CERTAINTY.UNKNOWN,message:'Persisted rollover recovery state failed validation. No parked response was replayed automatically.'},
   RUNTIME_RECOVERY_PERSIST_FAILED:{certainty:ACTION_CERTAINTY.UNKNOWN,message:'AI Bridge could not durably persist repaired rollover recovery state. Recovery remains blocked.'},
   RUNTIME_MUTATION_PERSIST_FAILED:{certainty:ACTION_CERTAINTY.UNKNOWN,message:'AI Bridge could not durably save a rollover state change. The in-memory state change was not committed and automatic processing is paused.'},
+  PROVIDER_ACTION_DELIVERY_AMBIGUOUS:{certainty:ACTION_CERTAINTY.ACTION_OUTCOME_AMBIGUOUS,message:'AI Bridge attempted a provider action but could not prove the result. It will not retry automatically.'},
   RUNTIME_UNMAPPED_SAFETY_STATE:{certainty:ACTION_CERTAINTY.UNKNOWN,message:'AI Bridge encountered an unmapped safety state. Automatic action is blocked until the condition is reviewed.'}
 });
 export function isKnownPauseCode(code){return Object.prototype.hasOwnProperty.call(META,String(code||''));}
@@ -71,6 +73,7 @@ export function mapSubsystemReason(reason){
     RECOVERY_SCHEMA_INVALID:PAUSE_REASON.RUNTIME_RECOVERY_VALIDATION_FAILED,
     RECOVERY_PERSIST_FAILED:PAUSE_REASON.RUNTIME_RECOVERY_PERSIST_FAILED,
     MUTATION_PERSIST_FAILED:PAUSE_REASON.RUNTIME_MUTATION_PERSIST_FAILED,
+    DELIVERY_AMBIGUOUS:PAUSE_REASON.PROVIDER_ACTION_DELIVERY_AMBIGUOUS,
     CONTRACT_DISAGREEMENT:PAUSE_REASON.DOM_CONTRACT_DISAGREEMENT
   };
   return map[r]||null;

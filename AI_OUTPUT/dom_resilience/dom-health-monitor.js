@@ -16,12 +16,12 @@ export class DomHealthMonitor{
     const dirtied=new Set();
     for(const r of records){if(!r||typeof r!=='object')continue;const ctx=this.contextClassifier(r.target)||'unknown';
       if(r.type==='characterData'){if(ctx==='response')dirtied.add('response');else if(['provider-notice','composer-status'].includes(ctx))dirtied.add('limit_state');else {dirtied.add('response');dirtied.add('limit_state');}continue;}
-      if(r.type==='attributes'){const a=String(r.attributeName||'');if(['disabled','aria-disabled','data-state'].includes(a)){['composer','send','stop','new_chat'].forEach(x=>dirtied.add(x));dirtied.add('limit_state');}else if(a==='contenteditable')dirtied.add('composer');else if(['aria-label','title','class','data-testid','hidden'].includes(a)){['composer','send','stop','new_chat','upload','limit_state'].forEach(x=>dirtied.add(x));}continue;}
+      if(r.type==='attributes'){const a=String(r.attributeName||'');if(['disabled','aria-disabled','data-state'].includes(a)){['composer','send','stop','upload','new_chat'].forEach(x=>dirtied.add(x));dirtied.add('limit_state');}else if(a==='contenteditable')dirtied.add('composer');else if(['aria-label','title','class','data-testid','hidden'].includes(a)){['composer','send','stop','new_chat','upload','limit_state'].forEach(x=>dirtied.add(x));}continue;}
       if(r.type==='childList'){if(ctx==='response')dirtied.add('response');else if(ctx==='provider-notice')dirtied.add('limit_state');else PROBES.forEach(x=>dirtied.add(x));}
     }
     this.markDirty([...dirtied]);return [...dirtied];
   }
-  routeChanged(){this.markDirty('conversation_identity','new_chat','limit_state','composer','send','stop','response');}
+  routeChanged(){this.markDirty('conversation_identity','new_chat','limit_state','composer','send','stop','upload','response');}
   schedule(){if(this.disposed||!this.visible||this.timer||!this.dirty.size)return;this.timer=this.setTimer(()=>{this.timer=null;this.flush().catch(e=>this.emit({type:'AI_BRIDGE_DOM_HEALTH_ERROR',message:String(e?.message||e).slice(0,160)}));},this.debounceMs);}
   async flush(){if(this.disposed||!this.visible)return[];const pending=[...this.dirty];this.dirty.clear();const results=[];for(const name of pending){try{results.push(sanitizeResult(name,await this.runProbe(name)));}catch(e){results.push(Object.freeze({name,policy:'',state:'FAIL',selectorId:null,rank:null,matchCount:0,reason:'PROBE_ERROR:'+String(e?.message||e).slice(0,120),nodeConnected:false}));}}this.emit({type:'AI_BRIDGE_DOM_HEALTH',results});if(this.dirty.size)this.schedule();return results;}
   setVisible(v){this.visible=Boolean(v);if(this.visible)this.schedule();else if(this.timer){this.clearTimer(this.timer);this.timer=null;}}
