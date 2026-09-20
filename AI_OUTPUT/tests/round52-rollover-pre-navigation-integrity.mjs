@@ -13,6 +13,15 @@ for(const token of [
   "await chrome.tabs.update(tabId, {url:targetUrl,active:true});"
 ]) assert.ok(bg.includes(token),"missing "+token);
 
+const freshStart=bg.indexOf("function freshChatUrlFor");
+const canonicalFnStart=bg.indexOf("function reviewCanonicalRolloverFreshUrl");
+const freshFn=bg.slice(freshStart,canonicalFnStart);
+assert.ok(freshStart>=0&&canonicalFnStart>freshStart,"fresh-chat helper ordering missing");
+assert.ok(freshFn.includes("const provider = reviewProviderFromUrl(url.href);"),"freshChatUrlFor must derive provider through the trusted provider parser");
+assert.ok(freshFn.includes("return reviewCanonicalRolloverFreshUrl(provider);"),"freshChatUrlFor must reuse the canonical provider URL mapping");
+assert.doesNotMatch(freshFn,/return\s+"https?:\/\//,"freshChatUrlFor must not maintain a duplicate literal URL table");
+assert.equal((bg.match(/context\.freshChatUrl/g)||[]).length,1,"persisted freshChatUrl may only appear in the pre-navigation integrity check");
+
 const phase=bg.indexOf("if (tx.phase === ROLLOVER_PHASE.CONTINUITY_PREPARED)");
 const verify=bg.indexOf("reviewVerifyDurableRolloverContext(tx, context, { requireContinuity:true })",phase);
 const revoke=bg.indexOf("const revoked = revokeAuthority(tx.oldAuthority)",phase);
