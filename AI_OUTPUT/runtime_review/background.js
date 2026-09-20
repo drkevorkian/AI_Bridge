@@ -3760,8 +3760,12 @@ async function reviewResumeThreadRollover(side) {
       if (!currentIdentity || reviewSameIdentity(currentIdentity, tx.oldAuthority.identity)) {
         reviewInvalidateAuthorityForTab(tabId);
         const targetUrl = reviewCanonicalRolloverFreshUrl(tx.provider);
-        await chrome.tabs.update(tabId, {url:targetUrl,active:true});
+        const atCanonicalTarget = String(tab?.url || "") === targetUrl;
+        if (!atCanonicalTarget) {
+          await chrome.tabs.update(tabId, {url:targetUrl,active:true});
+        }
         tab = await waitForTabReady(tabId);
+        if (String(tab?.url || "") !== targetUrl) throw new Error("ROLLOVER_FRESH_CHAT_CANONICAL_URL_MISMATCH");
         if (reviewProviderFromUrl(tab?.url) !== tx.provider) throw new Error("ROLLOVER_FRESH_CHAT_PROVIDER_MISMATCH");
         const probe = await chrome.tabs.sendMessage(tabId, {type:"AI_BRIDGE_IDENTITY_PROBE"});
         if (!probe?.ok) throw new Error(probe?.error || "ROLLOVER_FRESH_CHAT_IDENTITY_UNAVAILABLE");
