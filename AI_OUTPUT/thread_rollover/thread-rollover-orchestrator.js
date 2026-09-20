@@ -23,13 +23,15 @@ class ThreadRolloverOrchestrator {
     if(!observation.accepted) return Object.freeze({applied:false,...observation});
     const tx=this.coordinator.get(side);
     if(!tx) throw new Error('No active rollover transaction for side.');
-    if(observation.transition==='NEW_CHAT_SURFACE') {
-      if(tx.phase!=='AWAITING_NEW_IDENTITY') return Object.freeze({applied:false,transition:observation.transition,reason:'WRONG_PHASE'});
+    if(tx.phase==='AWAITING_NEW_IDENTITY') {
       const transaction=this.coordinator.transition(side,'NEW_IDENTITY_VERIFIED',{candidateAuthority},now);
-      return Object.freeze({applied:true,...observation,transaction});
+      return Object.freeze({applied:true,...observation,transaction,directConfirmation:observation.transition==='NEW_CONVERSATION_CONFIRMED'});
+    }
+    if(observation.transition==='NEW_CHAT_SURFACE') {
+      return Object.freeze({applied:false,...observation,reason:'PROVISIONAL_SURFACE_ALREADY_PASSED'});
     }
     const transaction=this.coordinator.promoteCandidateAuthority(side,candidateAuthority,now);
-    return Object.freeze({applied:true,...observation,transaction});
+    return Object.freeze({applied:true,...observation,transaction,directConfirmation:false});
   }
 }
 module.exports={ThreadRolloverOrchestrator};
