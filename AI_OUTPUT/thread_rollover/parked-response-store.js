@@ -2,12 +2,18 @@
 
 const RECORD_STATE=Object.freeze({PARKED:"PARKED",CLAIMED:"CLAIMED"});
 const RECONCILE=Object.freeze({CLEARED:"CLEARED",PAUSE:"PAUSE",NONE:"NONE"});
+const RELEASE_REASON=Object.freeze({RELEASED:"RELEASED",NOT_FOUND:"NOT_FOUND",NOT_CLAIMED:"NOT_CLAIMED",CLAIM_EXPIRED_RECONCILIATION_REQUIRED:"CLAIM_EXPIRED_RECONCILIATION_REQUIRED"});
+const STORE_ERROR_CODE=Object.freeze({RECOVERY_LOAD_FAILED:"RECOVERY_LOAD_FAILED",RECOVERY_ENTRY_LIMIT_EXCEEDED:"RECOVERY_ENTRY_LIMIT_EXCEEDED",RECOVERY_TOTAL_BYTES_EXCEEDED:"RECOVERY_TOTAL_BYTES_EXCEEDED",RECOVERY_DUPLICATE_DISPATCH:"RECOVERY_DUPLICATE_DISPATCH",RECOVERY_SCHEMA_INVALID:"RECOVERY_SCHEMA_INVALID",RECOVERY_PERSIST_FAILED:"RECOVERY_PERSIST_FAILED"});
 const TERMINAL_DISPATCH=new Set(["RESPONSE_COMMITTED","FAILED"]);
 
 function text(value,name){const s=String(value??"").trim();if(!s)throw new TypeError(`${name} must be a non-empty string.`);return s;}
 function integer(value,name,min){const n=Number(value);if(!Number.isInteger(n)||n<min)throw new TypeError(`${name} must be an integer >= ${min}.`);return n;}
 function byteLength(value){const s=JSON.stringify(value);return typeof Buffer!=="undefined"?Buffer.byteLength(s,"utf8"):new TextEncoder().encode(s).length;}
 function clone(value){return value==null?value:JSON.parse(JSON.stringify(value));}
+
+class ParkedResponseStoreError extends Error{
+  constructor(code,message,cause=null){super(String(message||code));this.name="ParkedResponseStoreError";this.code=text(code,"code");if(cause!=null)this.cause=cause;}
+}
 
 class ParkedResponseStore{
   constructor({store,key="aiBridgeParkedResponses",maxEntries=8,maxBytes=262144,maxTotalBytes=null,ttlMs=15000,now=()=>Date.now()}={}){
@@ -29,18 +35,20 @@ class ParkedResponseStore{
     return this._serialize(async()=>{
       this.initialized=false;
       this.records.clear();
-      const raw=await this.store.load(this.key);
+      let raw;
+      try{raw=await this.store.load(this.key);}catch(error){throw new ParkedResponseStoreError(STORE_ERROR_CODE.RECOVERY_LOAD_FAILED,"Failed to load persisted parked-response state.",error);}
       const items=Array.isArray(raw?.records)?raw.records:[];
-      if(items.length>this.maxEntries)throw new Error("Persisted parked-response count exceeds maxEntries.");
+      if(items.length>this.maxEntries)throw new ParkedResponseStoreError(STORE_ERROR_CODE.RECOVERY_ENTRY_LIMIT_EXCEEDED,"Persisted parked-response count exceeds maxEntries.");
       const candidate=new Map();
       for(const item of items){
-        const record=this._sanitizeRecord(item);
-        if(candidate.has(record.dispatchId))throw new Error(`Duplicate persisted parked response: ${record.dispatchId}`);
+        let record;
+        try{record=this._sanitizeRecord(item);}catch(error){throw new ParkedResponseStoreError(STORE_ERROR_CODE.RECOVERY_SCHEMA_INVALID,"Persisted parked-response record failed validation.",error);}
+        if(candidate.has(record.dispatchId))throw new ParkedResponseStoreError(STORE_ERROR_CODE.RECOVERY_DUPLICATE_DISPATCH,`Duplicate persisted parked response: ${record.dispatchId}`);
         candidate.set(record.dispatchId,record);
       }
       const changed=this._pruneExpiredParked(candidate);
-      this._assertAggregateBudget(candidate);
-      if(changed)await this._persistMap(candidate);
+      if(!this._fitsAggregateBudget(candidate))throw new ParkedResponseStoreError(STORE_ERROR_CODE.RECOVERY_TOTAL_BYTES_EXCEEDED,"Persisted parked-response store exceeds maxTotalBytes.");
+      if(changed){try{await this._persistMap(candidate);}catch(error){throw new ParkedResponseStoreError(STORE_ERROR_CODE.RECOVERY_PERSIST_FAILED,"Failed to persist recovered parked-response state.",error);}}
       this.records=candidate;
       this.initialized=true;
       return this.snapshot();
@@ -86,12 +94,13 @@ class ParkedResponseStore{
   async release(dispatchId){
     return this._serialize(async()=>{
       const id=String(dispatchId||"");const current=this.records.get(id);
-      if(!current)return false;
-      if(current.state!==RECORD_STATE.CLAIMED)throw new Error("Only CLAIMED responses can be released.");
-      if(current.expiresAt<=this.now())return false;
+      if(!current)return Object.freeze({released:false,reason:RELEASE_REASON.NOT_FOUND,pause:false,record:null});
+      if(current.state!==RECORD_STATE.CLAIMED)return Object.freeze({released:false,reason:RELEASE_REASON.NOT_CLAIMED,pause:false,record:clone(current)});
+      if(current.expiresAt<=this.now())return Object.freeze({released:false,reason:RELEASE_REASON.CLAIM_EXPIRED_RECONCILIATION_REQUIRED,pause:true,record:clone(current)});
       const updated=Object.freeze({...current,state:RECORD_STATE.PARKED,claimedAt:null});
       const candidate=new Map(this.records);candidate.set(id,updated);this._assertAggregateBudget(candidate);
-      this.records=candidate;await this._persist();return true;
+      this.records=candidate;await this._persist();
+      return Object.freeze({released:true,reason:RELEASE_REASON.RELEASED,pause:false,record:clone(updated)});
     });
   }
 
@@ -135,4 +144,4 @@ class ParkedResponseStore{
   _requireInit(){if(!this.initialized)throw new Error("ParkedResponseStore.init() must complete before use.");}
   _serialize(task,requireInitialized=true){const run=async()=>{if(requireInitialized)this._requireInit();return task();};const next=this._queue.catch(()=>undefined).then(run);this._queue=next.catch(()=>undefined);return next;}
 }
-module.exports={RECORD_STATE,RECONCILE,ParkedResponseStore};
+module.exports={RECORD_STATE,RECONCILE,RELEASE_REASON,STORE_ERROR_CODE,ParkedResponseStoreError,ParkedResponseStore};
