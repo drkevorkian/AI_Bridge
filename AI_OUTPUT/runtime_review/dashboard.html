@@ -46,9 +46,9 @@
         <div class="fresh-chat-row">
           <label class="check-line" for="freshOnStart">
             <input id="freshOnStart" type="checkbox" disabled>
-            <span>Start in fresh AI chats — Manual unavailable</span>
+            <span>Start in fresh AI chats</span>
           </label>
-          <button id="newAllChats" class="tiny ghost" type="button" disabled title="Manual New Chat is unavailable from this control. Automatic rollover remains available for supported providers when a conversation reaches its limit.">New AI chats — Manual unavailable</button>
+          <button id="newAllChats" class="tiny ghost" type="button" disabled title="Open fresh verified provider chats for all active AI roles. Disabled while a Bridge session is active.">New AI chats</button>
         </div>
         <div class="field-help">Uses the selected, already-open AI tabs. Each logical AI must use its own browser tab; multiple tabs may use the same LLM provider.</div>
       </section>
@@ -72,12 +72,12 @@
           <div class="agent-topline">
             <div class="agent-identity"><strong>AI A</strong><div class="agent-timers"><span id="timerTotalA" class="round-timer idle" title="Total working time for this AI in the current session">Total 0s</span><span id="timerCurrentA" class="round-timer idle" title="Current AI turn timer">Current —</span></div></div>
             <div class="agent-actions">
-              <button id="newChatA" class="tiny ghost" type="button" disabled title="Manual New Chat is unavailable from this control. Automatic rollover remains available for supported providers when a conversation reaches its limit.">New chat — Manual unavailable</button>
+              <button id="newChatA" class="tiny ghost" type="button" disabled title="Open a fresh verified provider chat for this AI. Disabled while a Bridge session is active.">New chat</button>
               <button id="resendA" class="tiny ghost" disabled>Resend</button>
             </div>
           </div>
           <select id="tabA" aria-label="AI A tab"></select>
-          <div id="healthA" class="field-help">Connection: — · Authority: — · Relay: — · Rollover: Limited · Artifacts: Limited</div>
+          <div id="healthA" class="field-help">Connection: — · Authority: — · Relay: — · Rollover: Checking · Artifacts: Limited</div>
           <textarea id="jobA" rows="3" placeholder="AI A job / responsibility"></textarea>
         </article>
 
@@ -85,12 +85,12 @@
           <div class="agent-topline">
             <div class="agent-identity"><strong>AI B</strong><div class="agent-timers"><span id="timerTotalB" class="round-timer idle" title="Total working time for this AI in the current session">Total 0s</span><span id="timerCurrentB" class="round-timer idle" title="Current AI turn timer">Current —</span></div></div>
             <div class="agent-actions">
-              <button id="newChatB" class="tiny ghost" type="button" disabled title="Manual New Chat is unavailable from this control. Automatic rollover remains available for supported providers when a conversation reaches its limit.">New chat — Manual unavailable</button>
+              <button id="newChatB" class="tiny ghost" type="button" disabled title="Open a fresh verified provider chat for this AI. Disabled while a Bridge session is active.">New chat</button>
               <button id="resendB" class="tiny ghost" disabled>Resend</button>
             </div>
           </div>
           <select id="tabB" aria-label="AI B tab"></select>
-          <div id="healthB" class="field-help">Connection: — · Authority: — · Relay: — · Rollover: Limited · Artifacts: Limited</div>
+          <div id="healthB" class="field-help">Connection: — · Authority: — · Relay: — · Rollover: Checking · Artifacts: Limited</div>
           <textarea id="jobB" rows="3" placeholder="AI B job / responsibility"></textarea>
         </article>
 
@@ -98,12 +98,12 @@
           <div class="agent-topline">
             <div class="agent-identity"><strong>AI C</strong><div class="agent-timers"><span id="timerTotalC" class="round-timer idle" title="Total working time for this AI in the current session">Total 0s</span><span id="timerCurrentC" class="round-timer idle" title="Current AI turn timer">Current —</span></div></div>
             <div class="agent-actions">
-              <button id="newChatC" class="tiny ghost" type="button" disabled title="Manual New Chat is unavailable from this control. Automatic rollover remains available for supported providers when a conversation reaches its limit.">New chat — Manual unavailable</button>
+              <button id="newChatC" class="tiny ghost" type="button" disabled title="Open a fresh verified provider chat for this AI. Disabled while a Bridge session is active.">New chat</button>
               <button id="resendC" class="tiny ghost" disabled>Resend</button>
             </div>
           </div>
           <select id="tabC" aria-label="AI C tab"></select>
-          <div id="healthC" class="field-help">Connection: — · Authority: — · Relay: — · Rollover: Limited · Artifacts: Limited</div>
+          <div id="healthC" class="field-help">Connection: — · Authority: — · Relay: — · Rollover: Checking · Artifacts: Limited</div>
           <textarea id="jobC" rows="3" placeholder="AI C job / responsibility"></textarea>
         </article>
 
@@ -111,12 +111,12 @@
           <div class="agent-topline">
             <div class="agent-identity"><strong>AI D</strong><div class="agent-timers"><span id="timerTotalD" class="round-timer idle" title="Total working time for this AI in the current session">Total 0s</span><span id="timerCurrentD" class="round-timer idle" title="Current AI turn timer">Current —</span></div></div>
             <div class="agent-actions">
-              <button id="newChatD" class="tiny ghost" type="button" disabled title="Manual New Chat is unavailable from this control. Automatic rollover remains available for supported providers when a conversation reaches its limit.">New chat — Manual unavailable</button>
+              <button id="newChatD" class="tiny ghost" type="button" disabled title="Open a fresh verified provider chat for this AI. Disabled while a Bridge session is active.">New chat</button>
               <button id="resendD" class="tiny ghost" disabled>Resend</button>
             </div>
           </div>
           <select id="tabD" aria-label="AI D tab"></select>
-          <div id="healthD" class="field-help">Connection: — · Authority: — · Relay: — · Rollover: Limited · Artifacts: Limited</div>
+          <div id="healthD" class="field-help">Connection: — · Authority: — · Relay: — · Rollover: Checking · Artifacts: Limited</div>
           <textarea id="jobD" rows="3" placeholder="AI D job / responsibility"></textarea>
         </article>
 
@@ -124,12 +124,12 @@
           <div class="agent-topline">
             <div class="agent-identity"><strong>AI E</strong><div class="agent-timers"><span id="timerTotalE" class="round-timer idle" title="Total working time for this AI in the current session">Total 0s</span><span id="timerCurrentE" class="round-timer idle" title="Current AI turn timer">Current —</span></div></div>
             <div class="agent-actions">
-              <button id="newChatE" class="tiny ghost" type="button" disabled title="Manual New Chat is unavailable from this control. Automatic rollover remains available for supported providers when a conversation reaches its limit.">New chat — Manual unavailable</button>
+              <button id="newChatE" class="tiny ghost" type="button" disabled title="Open a fresh verified provider chat for this AI. Disabled while a Bridge session is active.">New chat</button>
               <button id="resendE" class="tiny ghost" disabled>Resend</button>
             </div>
           </div>
           <select id="tabE" aria-label="AI E tab"></select>
-          <div id="healthE" class="field-help">Connection: — · Authority: — · Relay: — · Rollover: Limited · Artifacts: Limited</div>
+          <div id="healthE" class="field-help">Connection: — · Authority: — · Relay: — · Rollover: Checking · Artifacts: Limited</div>
           <textarea id="jobE" rows="3" placeholder="AI E job / responsibility"></textarea>
         </article>
 
