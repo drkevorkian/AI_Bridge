@@ -21,7 +21,8 @@ const tests=[
   'round23-registration-health.mjs',
   'round25-provider-health-failclosed.mjs',
   'round41-thread-limit-continuity.mjs',
-  'update-system-atomic.mjs'
+  'update-system-atomic.mjs',
+  'round42-content-runtime-lifecycle.mjs'
 ];
 for(const name of tests){
   const r=spawnSync(process.execPath,[path.join(here,name)],{stdio:'inherit'});
