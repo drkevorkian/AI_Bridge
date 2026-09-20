@@ -9,6 +9,14 @@ const tests=[
   'provider-limit-signatures.mjs',
   'agent-participation-guard.mjs',
   'thread-rollover.mjs',
+  'conversation-authority.mjs',
+  'dispatch-ledger.mjs',
+  'round4-backend.mjs',
+  'exactly-once-rollover.mjs',
+  'round8-backend.mjs',
+  'round12-storage-api.mjs',
+  'round13-storage-transaction.mjs',
+  'bounded-bootstrap.mjs',
   'round22-authority-runtime.mjs',
   'round23-registration-health.mjs'
 ];
