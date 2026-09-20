@@ -122,6 +122,17 @@ AI Bridge classifies trusted provider UI failures such as "Message delivery time
 The original dispatch remains response-capable. If the provider/human retries in the provider UI and a valid response later appears, AI Bridge correlates it to the same dispatch. Provider-event transcript entries are displayed for diagnostics but excluded from AI-to-AI prompt context.
 
 
+Current provider-event codes are:
+
+- `MESSAGE_DELIVERY_TIMEOUT`
+- `CONNECTION_INTERRUPTED`
+- `NETWORK_ERROR`
+- `GENERATION_ERROR`
+- `RATE_LIMIT`
+- `USAGE_LIMIT`
+- `AUTH_REQUIRED`
+- `CONTENT_BLOCKED`
+
 ### Provider-event authority
 
 Provider operational events are control-plane inputs. Before a provider event may pause or otherwise change a session, the background verifies the currently registered top-level active document, Chrome documentId, authority-registration token, tab/side/provider, generation epoch, and the full six-field conversation identity against both the live document authority and the dispatch ledger. Stale or mismatched events are rejected and cannot mutate relay state.

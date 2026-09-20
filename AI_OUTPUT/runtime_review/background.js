@@ -26,15 +26,6 @@ const MAX_ARTIFACT_CONTEXT_CHARS = 260000;
 const MAX_ZIP_TEXT_ENTRIES = 80;
 const MAX_ZIP_ENTRY_UNCOMPRESSED_BYTES = 2 * 1024 * 1024;
 const MAX_PROVIDER_EVENTS = 100;
-const PROVIDER_EVENT_POLICY = Object.freeze({
-  MESSAGE_DELIVERY_TIMEOUT: Object.freeze({ severity: "ERROR", ambiguous: true }),
-  MESSAGE_SEND_FAILED: Object.freeze({ severity: "ERROR", ambiguous: true }),
-  RESPONSE_GENERATION_ERROR: Object.freeze({ severity: "ERROR", ambiguous: true }),
-  NETWORK_ERROR: Object.freeze({ severity: "ERROR", ambiguous: true }),
-  RATE_LIMIT: Object.freeze({ severity: "WARN", ambiguous: false }),
-  SERVICE_ERROR: Object.freeze({ severity: "ERROR", ambiguous: false })
-});
-
 const DEFAULT_HISTORY = {
   version: HISTORY_VERSION,
   jobs: [],
@@ -2534,29 +2525,36 @@ function normalizeProviderEventText(value){
 async function recordProviderEvent(msg,sender){
   await stateReady;
   await reviewRuntimeReady;
-  if(!sender?.tab?.id) return {ok:false,ignored:true,reason:"PROVIDER_EVENT_REQUIRES_TAB"};
-  const side=sideForTab(sender.tab.id);
-  if(!side) return {ok:false,ignored:true,reason:"SIDE_NOT_BOUND"};
-  const provider=reviewProviderFromUrl(sender.url||sender.tab?.url);
-  if(!provider || provider!==String(msg.provider||"").toLowerCase()) return {ok:false,ignored:true,reason:"PROVIDER_MISMATCH"};
-  const code=String(msg.code||"").trim().toUpperCase();
-  const policy=PROVIDER_EVENT_POLICY[code];
-  if(!policy) return {ok:false,ignored:true,reason:"UNKNOWN_PROVIDER_EVENT"};
-  const text=normalizeProviderEventText(msg.text);
+
+  // Provider operational events are control-plane inputs. Authorize them
+  // against the exact live document + dispatch before recording anything.
+  const authorized=reviewAuthorizeProviderEvent(msg,sender);
+  if(!authorized.ok) return { ...authorized, ignored:true };
+
+  const {side,provider,code,policy,dispatchId}=authorized;
+  const text=normalizeProviderEventText(msg.message ?? msg.text);
   if(!text) return {ok:false,ignored:true,reason:"EMPTY_PROVIDER_EVENT"};
 
-  const dispatchId=String(msg.dispatchId||"").trim();
   const event={
     id:"provider-event-"+Date.now()+"-"+side+"-"+state.nextSeq,
     time:Number.isFinite(Number(msg.observedAt))?Number(msg.observedAt):Date.now(),
     side,
     provider,
     code,
+    category:policy.category,
     severity:policy.severity,
     text,
-    dispatchId:dispatchId||null
+    dispatchId
   };
   state.providerEvents=Array.isArray(state.providerEvents)?state.providerEvents:[];
+
+  const duplicate=state.providerEvents.some(existing =>
+    existing?.dispatchId===dispatchId &&
+    existing?.code===code &&
+    existing?.text===text
+  );
+  if(duplicate) return {ok:true,recorded:false,duplicate:true,paused:Boolean(state.providerRecovery?.dispatchId===dispatchId)};
+
   state.providerEvents.push(event);
   if(state.providerEvents.length>MAX_PROVIDER_EVENTS) state.providerEvents.splice(0,state.providerEvents.length-MAX_PROVIDER_EVENTS);
 
@@ -2566,45 +2564,31 @@ async function recordProviderEvent(msg,sender){
       text,
       provider,
       eventCode:code,
+      category:policy.category,
       severity:policy.severity,
-      dispatchId:dispatchId||null
+      dispatchId
     });
   }
-  appendLog({time:event.time,type:"provider-event",side,text:"AI "+side+" "+provider+" event "+code+": "+text,dispatchId:dispatchId||null});
+  appendLog({time:event.time,type:"provider-event",side,text:"AI "+side+" "+provider+" event "+code+": "+text,dispatchId});
 
-  let recoveryRequired=false;
-  if(dispatchId){
-    const dispatch=reviewLedger.get(dispatchId);
-    recoveryRequired=Boolean(
-      dispatch &&
-      dispatch.side===side &&
-      Number(dispatch.tabId)===Number(sender.tab.id) &&
-      [DISPATCH_STATUS.DISPATCHING,DISPATCH_STATUS.ACCEPTED,DISPATCH_STATUS.AWAITING_RESPONSE].includes(dispatch.status)
-    );
-  }
-
-  if(state.sessionActive && recoveryRequired){
-    state.providerRecovery={
-      active:true,
-      side,
-      provider,
-      code,
-      severity:policy.severity,
-      text,
-      dispatchId,
-      observedAt:event.time
-    };
-    state.running=false;
-    state.paused=true;
-    state.runtimePhase="PROVIDER_RECOVERY_REQUIRED";
-    state.pauseReason="AI "+side+" provider reported "+code+": "+text+" AI Bridge did not resend the prompt automatically; provider recovery is required.";
-    appendLog({time:Date.now(),type:"provider-recovery",side,text:state.pauseReason,dispatchId});
-    await saveState();
-    return {ok:true,recorded:true,paused:true,recoveryRequired:true,event};
-  }
-
+  state.providerRecovery={
+    active:true,
+    side,
+    provider,
+    code,
+    category:policy.category,
+    severity:policy.severity,
+    text,
+    dispatchId,
+    observedAt:event.time
+  };
+  state.running=false;
+  state.paused=true;
+  state.runtimePhase="PROVIDER_RECOVERY_REQUIRED";
+  state.pauseReason="AI "+side+" provider reported "+code+": "+text+" AI Bridge did not resend the prompt automatically; provider recovery is required.";
+  appendLog({time:Date.now(),type:"provider-recovery",side,text:state.pauseReason,dispatchId});
   await saveState();
-  return {ok:true,recorded:true,paused:false,recoveryRequired:false,event};
+  return {ok:true,recorded:true,paused:true,recoveryRequired:true,event};
 }
 
 async function pauseBridge(reason = "Paused by user") {

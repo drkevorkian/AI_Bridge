@@ -124,3 +124,10 @@ for(const html of ['popup.html','dashboard.html','settings.html']){
   }
 }
 console.log('runtime-review-contract: PASS');
+
+
+assert.equal(background.split('const PROVIDER_EVENT_POLICY = Object.freeze(').length-1,1,'duplicate provider event policy declaration');
+assert.equal(content.split('function classifyProviderEvent(').length-1,1,'duplicate provider event classifier declaration');
+assert.doesNotMatch(content,/function normalizeNoticeText\(/);
+assert.doesNotMatch(content,/inspectProviderEvents\(/);
+assert.ok(background.includes('const authorized=reviewAuthorizeProviderEvent(msg,sender)'));
