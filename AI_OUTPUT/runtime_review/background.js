@@ -501,6 +501,50 @@ async function reviewRestoreUpdateCheckpoint(){
   return {active:true,phase:state.updateCheckpoint?.phase||null};
 }
 
+async function reviewAdoptAwaitingRecoveredContinuation(pending) {
+  if (
+    !pending ||
+    pending.kind !== "SEQUENTIAL_SEND" ||
+    !SIDES.includes(pending.targetSide) ||
+    !pending.outgoing?.text
+  ) return null;
+
+  const payloadHash = await reviewPayloadHash(pending.targetSide, pending.outgoing.text);
+  const createdFloor = Number(pending.createdAt) || 0;
+  const candidates = reviewLedger.snapshot().filter(record =>
+    record.side === pending.targetSide &&
+    record.payloadHash === payloadHash &&
+    record.status === DISPATCH_STATUS.AWAITING_RESPONSE &&
+    Number(record.createdAt) >= createdFloor
+  );
+  if (candidates.length !== 1) return null;
+
+  const dispatch = candidates[0];
+  const authority = await reviewRegisterSideAuthority(pending.targetSide);
+  if (
+    Number(dispatch.tabId) !== Number(authority.tabId) ||
+    Number(dispatch.generationEpoch) !== Number(authority.generationEpoch) ||
+    !reviewSameIdentity(dispatch.conversationIdentity, authority.identity)
+  ) {
+    return null;
+  }
+
+  await reviewClearNextTurnPending(pending.sourceDispatchId);
+  state.running = true;
+  state.paused = false;
+  state.pauseReason = "";
+  state.runtimePhase = "AWAITING_PROVIDER_RESPONSE";
+  await saveState();
+  appendLog({
+    time: Date.now(),
+    type: "recovery",
+    side: pending.targetSide,
+    dispatchId: dispatch.dispatchId,
+    text: "Recovered durable continuation without replay; target dispatch is already awaiting its provider response."
+  });
+  return { ok: true, recovered: true, alreadySent: true, targetSide: pending.targetSide, dispatchId: dispatch.dispatchId };
+}
+
 async function reviewRecoverNextTurnPending() {
   const pending = state.nextTurnPending;
   if (!pending || !state.sessionActive) return { recovered: false };
@@ -577,6 +621,12 @@ async function reviewContinueAfterCommittedResponse(sourceSide) {
   if (!state.sessionActive || !state.running || state.awaitingHuman) return { ok: false, stopped: true };
 
   try {
+    // A worker/session recovery can occur after the target prompt was already
+    // accepted and persisted as AWAITING_RESPONSE but before nextTurnPending
+    // was cleared. Adopt that exact dispatch instead of attempting a replay.
+    const adopted = await reviewAdoptAwaitingRecoveredContinuation(pending);
+    if (adopted) return adopted;
+
     const outgoing = pending.outgoing;
     await sendToSide(pending.targetSide, outgoing.text, {
       deliveredSeq: outgoing.deliveredSeq,
