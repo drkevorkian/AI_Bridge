@@ -33,6 +33,25 @@ function created(id){
   return ledger;
 }
 
+// Continuation provenance must survive persistence so recovery does not rely
+// only on same-side/same-text heuristics.
+{
+  const ledger=new DispatchLedger();
+  ledger.create({
+    dispatchId:"prov",
+    side:"B",
+    tabId:42,
+    generationEpoch:7,
+    conversationIdentity:identity,
+    purpose:"RELAY",
+    payloadHash:"hash-prov",
+    continuationSourceDispatchId:"source-A",
+    createdAt:1000
+  });
+  const restored=new DispatchLedger(ledger.snapshot());
+  assert.equal(restored.get("prov").continuationSourceDispatchId,"source-A");
+}
+
 // Proven background acceptance survives worker restart as AWAITING_RESPONSE.
 {
   const ledger=created("accepted");
@@ -119,7 +138,25 @@ assert.ok(bg.includes("async function reviewReadContentActionProof"));
 assert.ok(bg.includes('type: "AI_BRIDGE_ACTION_STATUS"'));
 assert.ok(bg.includes('"ACTION_CONFIRMED"'));
 assert.ok(bg.includes("RESTART_DELIVERY_AMBIGUOUS_NO_CONTENT_PROOF"));
+assert.ok(bg.includes("function reviewRestartAmbiguities()"));
+assert.ok(bg.includes("startupRestartAmbiguities.length && !state.nextTurnPending"));
+assert.ok(bg.includes("const intentionalPause = state.paused"));
+assert.ok(bg.includes("continuationSourceDispatchId: continuationSourceDispatchId == null ? null"));
+assert.ok(bg.includes("const exact = reusable.length === 1 ? reusable[0] : null"));
 assert.ok(contentScript.includes('if(msg.type==="AI_BRIDGE_ACTION_STATUS")'));
 assert.ok(contentScript.includes('byAuthority.get(action+":"+authorityId)'));
+
+const initStart=bg.indexOf("async function reviewInitializeDurableRuntime");
+const initEnd=bg.indexOf("\nasync function reviewPayloadHash",initStart);
+assert.ok(initStart>=0&&initEnd>initStart,"runtime init block missing");
+const initBlock=bg.slice(initStart,initEnd);
+const dispatchingStart=initBlock.indexOf("record.status === DISPATCH_STATUS.DISPATCHING");
+const dispatchingEnd=initBlock.indexOf("changed = true;",dispatchingStart);
+assert.ok(dispatchingStart>=0&&dispatchingEnd>dispatchingStart,"DISPATCHING restart branch missing");
+assert.doesNotMatch(
+  initBlock.slice(dispatchingStart,dispatchingEnd),
+  /reviewRecoveryPauseReason\s*=/,
+  "DISPATCHING restart must not pause before content-proof recovery runs"
+);
 
 console.log("round44-restart-delivery-recovery: PASS");
