@@ -407,12 +407,13 @@
       if(/usage limit|rate limit|try again in|upload limit|network error|something went wrong/i.test(text)) continue;
       if(!/maximum length for this conversation|you(?:'|’)ve reached the maximum length for this conversation/i.test(text)) continue;
       const signature=text.slice(0,500);
-      if(signature===lastLimitSignature) return;
+      const limitSignatureKey=String(awaitingDispatchId||"none")+"::"+signature;
+      if(limitSignatureKey===lastLimitSignature) return;
       if(!registration) return;
       const liveIdentity=routeIdentity();
       if(!sameIdentity(liveIdentity,registration.identity)) return;
       const composer=resolveTrusted(config.composer);
-      lastLimitSignature=signature;
+      lastLimitSignature=limitSignatureKey;
       chrome.runtime.sendMessage({
         type:"AI_BRIDGE_THREAD_LIMIT",
         provider,
