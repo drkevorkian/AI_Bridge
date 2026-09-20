@@ -15,6 +15,7 @@ for(const token of [
   'AI_BRIDGE_PROVIDER_EVENT',
   'await inspectProviderEvent()',
   'providerEventBaseline',
+  'authorityRegistrationId:registration.authorityRegistrationId',
   'provider_events: "PASS"',
   'PROVIDER_EVENT_ACTIVE'
 ]) assert.ok(content.includes(token),'content missing '+token);
@@ -28,6 +29,11 @@ assert.equal(classify('Message delivery timed out. Please try again.')?.code,'ME
 assert.equal(classify('Connection interrupted. Waiting for the complete answer.')?.code,'CONNECTION_INTERRUPTED');
 assert.equal(classify("You've reached the maximum length for this conversation."),null);
 assert.equal(classify('A normal assistant answer about network design.'),null);
+assert.ok(content.includes('!node.closest("[data-message-author-role=\'assistant\'],[data-message-author-role=\\\"assistant\\\"]")'),'provider-event probes must exclude assistant-message DOM');
+const inspectStart=content.indexOf('async function inspectProviderEvent');
+const inspectEnd=content.indexOf('function responseText',inspectStart);
+const inspectSource=content.slice(inspectStart,inspectEnd);
+assert.doesNotMatch(inspectSource,/responseText\s*\(/,'response bodies must not be treated as operational event probes');
 
 for(const token of [
   'PROVIDER_EVENT_POLICY',

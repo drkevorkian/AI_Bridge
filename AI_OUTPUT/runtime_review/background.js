@@ -5,7 +5,7 @@ const MIN_AGENT_COUNT = 1;
 const MAX_AGENT_COUNT = ALL_SIDES.length;
 const SIDES = ALL_SIDES.slice(0, DEFAULT_AGENT_COUNT);
 const STATE_VERSION = 3;
-const CONTENT_VERSION = "1.18.0-review.3";
+const CONTENT_VERSION = "1.18.0-review.4";
 const WORK_MODES = new Set(["relay", "collaborate", "compete", "parallel", "review", "mesh"]);
 const INFINITE_TURNS = -1;
 const MIN_FINITE_TURNS = 1;
@@ -2781,6 +2781,66 @@ async function handleCompletedResponse(side, text, { relay = true, artifacts = [
   }
 }
 
+function reviewAuthorizeProviderEvent(msg, sender) {
+  if (!state.sessionActive) return { ok:false, reason:"NO_ACTIVE_SESSION" };
+  if (sender?.id !== chrome.runtime.id) return { ok:false, reason:"PROVIDER_EVENT_EXTENSION_ID_MISMATCH" };
+  if (!sender?.tab?.id || sender.frameId !== 0) return { ok:false, reason:"PROVIDER_EVENT_TAB_MISMATCH" };
+  if (String(sender.documentLifecycle || "").toLowerCase() !== "active") return { ok:false, reason:"PROVIDER_EVENT_DOCUMENT_NOT_ACTIVE" };
+  if (!sender.documentId) return { ok:false, reason:"PROVIDER_EVENT_DOCUMENT_ID_MISSING" };
+
+  const side = sideForTab(sender.tab.id);
+  const dispatchId = String(msg?.dispatchId || "");
+  const code = String(msg?.code || "").toUpperCase();
+  const policy = PROVIDER_EVENT_POLICY[code] || null;
+  const dispatch = dispatchId ? reviewLedger.get(dispatchId) : null;
+  const authority = side ? reviewAuthorityBySide.get(side) : null;
+  const allowedStatuses = new Set([
+    DISPATCH_STATUS.DISPATCHING,
+    DISPATCH_STATUS.ACCEPTED,
+    DISPATCH_STATUS.AWAITING_RESPONSE,
+    DISPATCH_STATUS.DELIVERY_AMBIGUOUS
+  ]);
+
+  if (!side || !policy || !dispatch || !authority || !allowedStatuses.has(dispatch.status)) {
+    return { ok:false, reason:"PROVIDER_EVENT_AUTHORITY_REJECTED" };
+  }
+  if (
+    dispatch.side !== side ||
+    authority.side !== side ||
+    Number(dispatch.tabId) !== Number(sender.tab.id) ||
+    Number(authority.tabId) !== Number(sender.tab.id)
+  ) {
+    return { ok:false, reason:"PROVIDER_EVENT_TAB_SIDE_MISMATCH" };
+  }
+
+  const provider = String(msg?.provider || "").toLowerCase();
+  const senderProvider = reviewProviderFromUrl(sender.url || sender.tab?.url);
+  if (!provider || provider !== authority.provider || senderProvider !== authority.provider) {
+    return { ok:false, reason:"PROVIDER_EVENT_PROVIDER_MISMATCH" };
+  }
+  if (String(sender.documentId) !== String(authority.documentId)) {
+    return { ok:false, reason:"PROVIDER_EVENT_DOCUMENT_MISMATCH" };
+  }
+  if (String(msg?.authorityRegistrationId || "") !== String(authority.authorityRegistrationId || "")) {
+    return { ok:false, reason:"PROVIDER_EVENT_REGISTRATION_MISMATCH" };
+  }
+  if (
+    Number(msg?.generationEpoch) !== Number(authority.generationEpoch) ||
+    Number(msg?.generationEpoch) !== Number(dispatch.generationEpoch)
+  ) {
+    return { ok:false, reason:"PROVIDER_EVENT_GENERATION_MISMATCH" };
+  }
+
+  let identity;
+  try { identity = reviewSanitizeIdentity(msg?.conversationIdentity); }
+  catch (_) { return { ok:false, reason:"PROVIDER_EVENT_IDENTITY_INVALID" }; }
+  if (!reviewSameIdentity(identity, authority.identity) || !reviewSameIdentity(identity, dispatch.conversationIdentity)) {
+    return { ok:false, reason:"PROVIDER_EVENT_IDENTITY_MISMATCH" };
+  }
+
+  return Object.freeze({ ok:true, side, dispatchId, code, policy, dispatch, authority, identity, provider });
+}
+
 chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   (async () => {
     if (msg.type === "AI_BRIDGE_POWER_SET") {
@@ -2819,29 +2879,20 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
 
     if (msg.type === "AI_BRIDGE_PROVIDER_EVENT") {
       await stateReady;
-      if (!state.sessionActive || !sender?.tab?.id) {
-        sendResponse({ ok:false, ignored:true, reason:"NO_ACTIVE_SESSION" });
+      const authorized = reviewAuthorizeProviderEvent(msg, sender);
+      if (!authorized.ok) {
+        appendLog({
+          time: Date.now(),
+          type: "provider-event-rejected",
+          side: sender?.tab?.id ? sideForTab(sender.tab.id) : null,
+          dispatchId: String(msg?.dispatchId || ""),
+          code: String(msg?.code || ""),
+          text: authorized.reason
+        });
+        sendResponse({ ok:false, ignored:true, reason:authorized.reason });
         return;
       }
-      const side = sideForTab(sender.tab.id);
-      const dispatchId = String(msg.dispatchId || "");
-      const code = String(msg.code || "").toUpperCase();
-      const policy = PROVIDER_EVENT_POLICY[code] || null;
-      const dispatch = dispatchId ? reviewLedger.get(dispatchId) : null;
-      const allowedStatuses = new Set([
-        DISPATCH_STATUS.DISPATCHING,
-        DISPATCH_STATUS.ACCEPTED,
-        DISPATCH_STATUS.AWAITING_RESPONSE,
-        DISPATCH_STATUS.DELIVERY_AMBIGUOUS
-      ]);
-      if (!side || !policy || !dispatch || dispatch.side !== side || Number(dispatch.tabId) !== Number(sender.tab.id) || !allowedStatuses.has(dispatch.status)) {
-        sendResponse({ ok:false, ignored:true, reason:"PROVIDER_EVENT_AUTHORITY_REJECTED" });
-        return;
-      }
-      if (Number(msg.generationEpoch) !== Number(dispatch.generationEpoch) || !reviewSameIdentity(msg.conversationIdentity, dispatch.conversationIdentity)) {
-        sendResponse({ ok:false, ignored:true, reason:"PROVIDER_EVENT_IDENTITY_REJECTED" });
-        return;
-      }
+      const { side, dispatchId, code, policy, dispatch, provider } = authorized;
       const message = String(msg.message || "").replace(/\s+/g," ").trim().slice(0,500);
       if (!message) {
         sendResponse({ ok:false, ignored:true, reason:"EMPTY_PROVIDER_EVENT" });
@@ -2854,7 +2905,7 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
         recordTranscript("provider_event", {
           side,
           text: message,
-          provider: String(msg.provider || dispatch.conversationIdentity?.provider || ""),
+          provider,
           code,
           category: policy.category,
           severity: policy.severity,
@@ -2864,7 +2915,7 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
         });
         state.providerRecovery = {
           side,
-          provider: String(msg.provider || dispatch.conversationIdentity?.provider || ""),
+          provider,
           dispatchId,
           code,
           category: policy.category,

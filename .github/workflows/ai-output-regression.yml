@@ -99,5 +99,7 @@ jobs:
 
       - name: Round 38 provider operational events
         run: node AI_OUTPUT/tests/round38-provider-operational-events.mjs
+      - name: Round 39 provider event authority
+        run: node AI_OUTPUT/tests/round39-provider-event-authority.mjs
       - name: Real Chrome MV3 E2E
         run: node AI_OUTPUT/tests/chrome-e2e-runtime.cjs

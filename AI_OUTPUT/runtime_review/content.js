@@ -2,7 +2,7 @@
   if (globalThis.__AI_BRIDGE_REVIEW_CONTENT__) return;
   globalThis.__AI_BRIDGE_REVIEW_CONTENT__ = true;
 
-  const VERSION = "1.18.0-review.3";
+  const VERSION = "1.18.0-review.4";
   const host = location.hostname.toLowerCase();
   const provider = host === "chatgpt.com" || host === "chat.openai.com" ? "chatgpt"
     : host === "grok.com" ? "grok"
@@ -203,7 +203,7 @@
   function operationalEventTexts(){
     const texts=[];
     for(const selector of ["[role='alert']","[aria-live='assertive']","[aria-live='polite']"]){
-      let nodes=[]; try{nodes=[...document.querySelectorAll(selector)].filter(visible);}catch(_){}
+      let nodes=[]; try{nodes=[...document.querySelectorAll(selector)].filter(node=>visible(node)&&!node.closest("[data-message-author-role='assistant'],[data-message-author-role=\"assistant\"]"))}catch(_){}
       for(const node of nodes){
         const text=normalizeProviderEventText(node.innerText||node.textContent||"");
         if(text&&!texts.includes(text)) texts.push(text);
@@ -217,8 +217,6 @@
   async function inspectProviderEvent(){
     if(!awaitingDispatchId||!registration) return null;
     const candidates=operationalEventTexts();
-    const response=responseText();
-    if(response) candidates.push(normalizeProviderEventText(response));
     for(const raw of candidates){
       const event=classifyProviderEvent(raw);
       if(!event) continue;
@@ -234,6 +232,7 @@
             provider,
             dispatchId:awaitingDispatchId,
             generationEpoch:registration.generationEpoch,
+            authorityRegistrationId:registration.authorityRegistrationId,
             conversationIdentity:registration.identity,
             side:registration.side,
             code:event.code,
