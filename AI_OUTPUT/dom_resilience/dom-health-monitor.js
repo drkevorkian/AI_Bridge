@@ -6,6 +6,28 @@
 
 export const PROBES = Object.freeze(["composer", "send", "stop", "response", "upload", "new_chat", "limit_state", "conversation_identity"]);
 
+const SAFE_PROBE_FIELDS = Object.freeze(new Set([
+  "policy", "state", "selectorId", "rank", "matchCount", "usableCount",
+  "reason", "nodeConnected", "provider", "capability", "confidence"
+]));
+
+function sanitizeProbeValue(value) {
+  if (value == null || typeof value === "boolean" || typeof value === "number") return value;
+  if (typeof value === "string") return value.slice(0, 200);
+  if (typeof value !== "object" || Array.isArray(value)) return null;
+
+  const clean = {};
+  for (const [key, fieldValue] of Object.entries(value)) {
+    if (!SAFE_PROBE_FIELDS.has(key)) continue;
+    if (fieldValue == null || typeof fieldValue === "boolean" || typeof fieldValue === "number") {
+      clean[key] = fieldValue;
+    } else if (typeof fieldValue === "string") {
+      clean[key] = fieldValue.slice(0, 200);
+    }
+  }
+  return Object.freeze(clean);
+}
+
 function safeProbeName(value) {
   const name = String(value || "");
   return PROBES.includes(name) ? name : null;
@@ -83,7 +105,7 @@ export class DomHealthMonitor {
     const results = [];
     for (const name of pending) {
       try {
-        const value = await this.runProbe(name);
+        const value = sanitizeProbeValue(await this.runProbe(name));
         results.push({ name, ok: true, value });
       } catch (error) {
         results.push({ name, ok: false, error: String(error?.message || error).slice(0, 200) });
