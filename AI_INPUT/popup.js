@@ -1,6 +1,6 @@
 const $ = id => document.getElementById(id);
 const THEME_KEY = "aiBridgeTheme";
-const THEMES = new Set(["blizzard", "ghostwhite", "midnight", "slate", "light", "solarized", "ocean", "terminal"]);
+const THEMES = new Set(["blizzard", "ghostwhite", "midnight", "slate", "light", "solarized", "ocean", "terminal"]);\n\nfunction renderBuildIdentity() {\n  const manifest = chrome.runtime.getManifest();\n  const build = manifest.version_name || manifest.version;\n  const el = $("buildIdentity");\n  if (el) el.textContent = `v${manifest.version} · ${build}`;\n}
 
 function applyTheme(theme) {
   const chosen = THEMES.has(theme) ? theme : "blizzard";
@@ -68,25 +68,8 @@ chrome.storage.onChanged.addListener((changes, area) => {
   if (area === "local" && changes[THEME_KEY]) applyTheme(changes[THEME_KEY].newValue);
 });
 
-async function openWorkspacePage(page) {
-  const targetUrl = chrome.runtime.getURL(page);
-  const dashboardUrl = chrome.runtime.getURL("dashboard.html");
-  const settingsUrl = chrome.runtime.getURL("settings.html");
-  const tabs = await chrome.tabs.query({});
-  const existing = tabs.find(tab => tab.url === dashboardUrl || tab.url === settingsUrl);
-  if (existing?.id) {
-    await chrome.tabs.update(existing.id, { url: targetUrl, active: true });
-    if (existing.windowId) {
-      try { await chrome.windows.update(existing.windowId, { focused: true }); } catch (_) {}
-    }
-    return existing.id;
-  }
-  const created = await chrome.tabs.create({ url: targetUrl });
-  return created.id;
-}
-
 $("openSettings").addEventListener("click", async () => {
-  await openWorkspacePage("settings.html");
+  await chrome.tabs.create({ url: chrome.runtime.getURL("settings.html") });
 });
 
 $("openDashboard").addEventListener("click", async () => {
@@ -106,5 +89,5 @@ $("stop").addEventListener("click", async () => {
   await refresh();
 });
 
-loadTheme().then(refresh);
+renderBuildIdentity();\nloadTheme().then(refresh);
 setInterval(refresh, 900);
