@@ -14,4 +14,6 @@ assert.equal(coord.canAcceptContinuityResponse({side:"B",rolloverId:"r1",dispatc
 assert.equal(coord.canAcceptContinuityResponse({side:"B",rolloverId:"r1",dispatchId:"d-cont",observedIdentity:{...oldIdentity,threadKey:"new"}}).ok,true);
 const restored=new RolloverCoordinator(coord.snapshot());assert.equal(restored.get("B").phase,PHASE.AWAITING_CONTINUITY_RESPONSE);
 assert.throws(()=>restored.begin({rolloverId:"r2",side:"B",provider:"chatgpt",triggeringDispatchId:"d2",oldAuthority,hardLimitEvidence:{}}));
+assert.throws(()=>new RolloverCoordinator([...coord.snapshot(),...coord.snapshot()]));
+assert.throws(()=>new RolloverCoordinator().begin({rolloverId:"rx",side:"C",provider:"chatgpt",triggeringDispatchId:"dx",oldAuthority,hardLimitEvidence:{},startedAt:NaN}));
 console.log("exactly-once-rollover: PASS");

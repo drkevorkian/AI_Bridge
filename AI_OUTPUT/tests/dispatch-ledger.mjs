@@ -12,4 +12,5 @@ assert.equal(ledger.validateResponse({dispatchId:"d1",side:"B",tabId:10,generati
 ledger.transition("d1",DISPATCH_STATUS.RESPONSE_COMMITTED,{completedAt:3});
 assert.equal(ledger.validateResponse({dispatchId:"d1",side:"B",tabId:10,generationEpoch:4,conversationIdentity:identity}).reason,"DISPATCH_NOT_AWAITING_RESPONSE");
 const restored=new DispatchLedger(ledger.snapshot());assert.equal(restored.get("d1").status,DISPATCH_STATUS.RESPONSE_COMMITTED);
+assert.throws(()=>new DispatchLedger([...ledger.snapshot(),...ledger.snapshot()]));
 console.log("dispatch-ledger: PASS");

@@ -16,7 +16,8 @@ class DispatchLedger{
   }
   restore(raw){
     if(!raw||typeof raw!=="object")throw new TypeError("dispatch record must be an object.");
-    const id=requireText(raw.dispatchId,"dispatchId"),status=requireText(raw.status,"status");if(!Object.values(DISPATCH_STATUS).includes(status))throw new TypeError(`Unknown dispatch status: ${status}`);
+    const id=requireText(raw.dispatchId,"dispatchId");if(this._records.has(id))throw new Error(`Duplicate persisted dispatch: ${id}`);
+    const status=requireText(raw.status,"status");if(!Object.values(DISPATCH_STATUS).includes(status))throw new TypeError(`Unknown dispatch status: ${status}`);
     const p=requireText(raw.purpose,"purpose").toUpperCase();if(!PURPOSES.has(p))throw new TypeError(`Unsupported dispatch purpose: ${p}`);
     const r=freezeRecord({dispatchId:id,side:requireText(raw.side,"side").toUpperCase(),tabId:requireInt(raw.tabId,"tabId",1),generationEpoch:requireInt(raw.generationEpoch,"generationEpoch",0),conversationIdentity:normalizeIdentity(raw.conversationIdentity),purpose:p,payloadHash:requireText(raw.payloadHash,"payloadHash"),status,createdAt:requireInt(raw.createdAt,"createdAt",0),acceptedAt:raw.acceptedAt==null?null:requireInt(raw.acceptedAt,"acceptedAt",0),completedAt:raw.completedAt==null?null:requireInt(raw.completedAt,"completedAt",0),failureReason:String(raw.failureReason||"")});
     this._records.set(id,r);return r;
