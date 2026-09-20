@@ -26,15 +26,6 @@ const MAX_ARTIFACT_CONTEXT_CHARS = 260000;
 const MAX_ZIP_TEXT_ENTRIES = 80;
 const MAX_ZIP_ENTRY_UNCOMPRESSED_BYTES = 2 * 1024 * 1024;
 const MAX_PROVIDER_EVENTS = 100;
-const PROVIDER_EVENT_POLICY = Object.freeze({
-  MESSAGE_DELIVERY_TIMEOUT: Object.freeze({ severity: "ERROR", ambiguous: true }),
-  MESSAGE_SEND_FAILED: Object.freeze({ severity: "ERROR", ambiguous: true }),
-  RESPONSE_GENERATION_ERROR: Object.freeze({ severity: "ERROR", ambiguous: true }),
-  NETWORK_ERROR: Object.freeze({ severity: "ERROR", ambiguous: true }),
-  RATE_LIMIT: Object.freeze({ severity: "WARN", ambiguous: false }),
-  SERVICE_ERROR: Object.freeze({ severity: "ERROR", ambiguous: false })
-});
-
 const DEFAULT_HISTORY = {
   version: HISTORY_VERSION,
   jobs: [],
