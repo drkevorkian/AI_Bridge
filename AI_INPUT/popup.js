@@ -1,6 +1,13 @@
 const $ = id => document.getElementById(id);
 const THEME_KEY = "aiBridgeTheme";
-const THEMES = new Set(["blizzard", "ghostwhite", "midnight", "slate", "light", "solarized", "ocean", "terminal"]);\n\nfunction renderBuildIdentity() {\n  const manifest = chrome.runtime.getManifest();\n  const build = manifest.version_name || manifest.version;\n  const el = $("buildIdentity");\n  if (el) el.textContent = `v${manifest.version} · ${build}`;\n}
+const THEMES = new Set(["blizzard", "ghostwhite", "midnight", "slate", "light", "solarized", "ocean", "terminal"]);
+
+function renderBuildIdentity() {
+  const manifest = chrome.runtime.getManifest();
+  const build = manifest.version_name || manifest.version;
+  const el = $("buildIdentity");
+  if (el) el.textContent = `v${manifest.version} · ${build}`;
+}
 
 function applyTheme(theme) {
   const chosen = THEMES.has(theme) ? theme : "blizzard";
@@ -89,5 +96,6 @@ $("stop").addEventListener("click", async () => {
   await refresh();
 });
 
-renderBuildIdentity();\nloadTheme().then(refresh);
+renderBuildIdentity();
+loadTheme().then(refresh);
 setInterval(refresh, 900);
