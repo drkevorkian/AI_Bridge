@@ -2,7 +2,7 @@
   "manifest_version": 3,
   "name": "AI Bridge Review",
   "version": "1.19.1",
-  "description": "AI Bridge reviewed playground build 1.19.1.23-AI-B with full-roster duplicate-tab protection for manual fresh-chat actions.",
+  "description": "AI Bridge reviewed playground build 1.19.1.24-AI-A with trusted manual fresh-chat controls, centralized UI sender authority, and full-roster binding parity across Dashboard and backend.",
   "permissions": [
     "tabs",
     "storage",
@@ -68,5 +68,5 @@
   "content_security_policy": {
     "extension_pages": "script-src 'self'; object-src 'none'; base-uri 'none'; frame-ancestors 'none'"
   },
-  "version_name": "1.19.1.23-AI-B"
+  "version_name": "1.19.1.24-AI-A"
 }
