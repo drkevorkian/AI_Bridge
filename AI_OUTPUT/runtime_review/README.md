@@ -13,7 +13,7 @@ Security/runtime differences from root v1.18:
 - The exact next sequential payload (or batch phase-advance obligation) survives MV3 worker death. When future work is owed, NEXT_TURN_PENDING is persisted before the source dispatch may become RESPONSE_COMMITTED.
 - If continuation persistence fails, the source remains uncommitted; if the source commit fails after the marker is durable, recovery pauses with the marker preserved.
 - Startup detects impossible committed-response-without-continuation states and pauses with RUNTIME_CONTINUATION_STATE_INCONSISTENT instead of guessing.
-- Dashboard exposes runtime progression separately from provider health: Dispatching, Awaiting response, Next turn pending, Recovering next turn, Paused.
+- Dashboard exposes runtime progression separately from provider health: Dispatching, Awaiting response, Next turn pending, Recovering next turn, Provider recovery required, Provider response recovered, Paused.
 - Broad-text New Chat automation is disabled.
 - Synthetic Enter fallback is disabled.
 - Raw Upload is LIMITED until trusted upload authority exists.
@@ -113,3 +113,87 @@ Seeded recovery snapshots now satisfy the same DispatchLedger lifecycle invarian
 - ACCEPTED has acceptedAt and no completedAt.
 
 This prevents the worker from rejecting synthetic crash snapshots during ledger restore before the intended recovery behavior is exercised.
+
+## Provider operational events
+
+AI Bridge now treats provider-side operational notices as control-plane events rather than model responses.
+
+Examples include:
+
+- `MESSAGE_DELIVERY_TIMEOUT` — e.g. **"Message delivery timed out. Please try again."**
+- `MESSAGE_SEND_FAILED`
+- `RESPONSE_GENERATION_ERROR`
+- `NETWORK_ERROR`
+- `RATE_LIMIT`
+- `SERVICE_ERROR`
+
+Provider-event detection is intentionally bounded to trusted provider/system surfaces such as alert and ARIA-live regions. Content inside normal assistant-message transcript DOM is rejected so an LLM quoting an error message cannot trigger recovery behavior.
+
+A provider operational event is recorded separately from an AI response:
+
+- it is persisted in bounded provider-event history;
+- it is rendered as a distinct provider-event card in the Dashboard transcript;
+- it is excluded from AI-to-AI relay context;
+- it does not increment response/turn accounting as though the AI answered.
+
+### Provider recovery and exactly-once behavior
+
+For an operational event tied to the current provider dispatch, AI Bridge does **not** automatically resend the prompt.
+
+Instead:
+
+1. the provider event is recorded;
+2. the session pauses with `PROVIDER_RECOVERY_REQUIRED`;
+3. the original dispatch remains the active response-capable dispatch;
+4. no replacement normal `SEND` is created.
+
+If the provider later produces the real answer for that same dispatch, AI Bridge can commit it under the original dispatch identity. The response is committed, the next-turn obligation is made durable, and the session remains paused as `PROVIDER_RESPONSE_RECOVERED` until the human resumes relay progression.
+
+If Resume is used while the original dispatch is still awaiting a response, AI Bridge returns to waiting on that exact dispatch (`WAITING_SAME_DISPATCH`) rather than replaying the prompt.
+
+This preserves the exactly-once rule even when the provider UI says "try again."
+
+### Provider-event authority boundary
+
+Provider operational events are control-plane inputs and must pass the same document-authority boundary as provider responses/actions before they can mutate relay state.
+
+A trusted event must match the currently verified provider document across:
+
+- Chrome extension/runtime sender identity;
+- top frame;
+- active document lifecycle;
+- `documentId`;
+- logical AI side;
+- provider origin;
+- tab ID;
+- `authorityRegistrationId`;
+- generation epoch;
+- canonical conversation identity;
+- dispatch side/tab/generation/identity when a dispatch ID is present.
+
+Stale documents, old registration tokens, old generations, wrong conversation identities, wrong providers, wrong sides, and unknown dispatch IDs are rejected fail-closed and cannot pause or steer the session.
+
+Rejected control-plane notices may be logged diagnostically as `provider-event-rejected`, but they are not accepted as trusted provider events.
+
+## GitHub Actions review gate
+
+The human controller approved using GitHub Actions for the empirical release gate. The executable review workflow is staged on a review branch under:
+
+`.github/workflows/ai-bridge-regression-review.yml`
+
+Production/root extension integration is still separate and is **not** implied by enabling the workflow.
+
+The review workflow runs the security/runtime regression suite plus the real Chrome MV3 harness. Current review coverage includes:
+
+- security and document-authority regressions;
+- Chrome extension structure and classic-runtime checks;
+- durable exactly-once / continuation ordering;
+- the eight-state MV3 crash/recovery matrix;
+- provider-event awareness;
+- provider-event authority validation;
+- real Chrome MV3 E2E.
+
+The real browser gate has successfully reached a GitHub-hosted current Chrome instance. A prior run reached Chrome 152 and exposed a harness teardown problem (`ENOTEMPTY` while deleting the temporary Chrome profile); cleanup was hardened so teardown can no longer mask the real E2E verdict.
+
+Do not interpret workflow installation or partial execution as a pass. Root production integration remains gated on the complete reviewed workflow and real-Chrome result.
+
