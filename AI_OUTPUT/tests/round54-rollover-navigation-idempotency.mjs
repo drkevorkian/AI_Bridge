@@ -14,7 +14,9 @@ const block=bg.slice(open,next);
 
 for(const token of [
   "const targetUrl = reviewCanonicalRolloverFreshUrl(tx.provider);",
-  'const atCanonicalTarget = String(tab?.url || "") === targetUrl;',
+  'const committedAtCanonicalTarget = String(tab?.url || "") === targetUrl;',
+  'const pendingAtCanonicalTarget = String(tab?.pendingUrl || "") === targetUrl;',
+  "const atCanonicalTarget = committedAtCanonicalTarget || pendingAtCanonicalTarget;",
   "if (!atCanonicalTarget) {",
   "await chrome.tabs.update(tabId, {url:targetUrl,active:true});",
   'if (String(tab?.url || "") !== targetUrl) throw new Error("ROLLOVER_FRESH_CHAT_CANONICAL_URL_MISMATCH");'
@@ -29,5 +31,7 @@ assert.ok(
   "recovery must wait for an already-started canonical navigation"
 );
 assert.equal((block.match(/chrome\.tabs\.update\(/g)||[]).length,1,"OPENING_NEW_CHAT must have one guarded update site");
-assert.equal(manifest.version_name,"1.19.1.17-AI-B");
+assert.equal(manifest.name,"AI Bridge Review");
+assert.equal(manifest.version,"1.19.1");
+assert.ok(Array.isArray(manifest.permissions)&&manifest.permissions.includes("tabs"),"tabs permission is required to observe pendingUrl during navigation recovery");
 console.log("round54-rollover-navigation-idempotency: PASS");
