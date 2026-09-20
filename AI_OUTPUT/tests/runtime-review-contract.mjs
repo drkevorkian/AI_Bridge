@@ -30,6 +30,11 @@ const content=read('content.js');
 const settings=read('settings.js');
 const dashboard=read('dashboard.js');
 const dashboardHtml=read('dashboard.html');
+const backgroundContentVersion=background.match(/const CONTENT_VERSION = "([^"]+)";/)?.[1] || "";
+const contentVersion=content.match(/const VERSION = "([^"]+)";/)?.[1] || "";
+assert.ok(backgroundContentVersion,'background CONTENT_VERSION missing');
+assert.ok(contentVersion,'content VERSION missing');
+assert.equal(backgroundContentVersion,contentVersion,'background/content runtime versions must match exactly');
 
 assert.doesNotMatch(background,/^\s*import\s/m);
 assert.doesNotMatch(background,/^\s*export\s/m);
