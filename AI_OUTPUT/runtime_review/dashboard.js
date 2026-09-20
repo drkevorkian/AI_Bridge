@@ -306,8 +306,6 @@ function hydrateFromState(s) {
   updateWorkModeUI();
   if (Number.isInteger(Number(s.maxTurns))) $("maxTurns").value = String(s.maxTurns);
   if (Number.isFinite(Number(s.delayMs))) $("delayMs").value = String(s.delayMs);
-  $("freshOnStart").checked = false;
-  $("freshOnStart").disabled = true;
   selectedSourceFiles = Array.isArray(s.sourceFiles) ? s.sourceFiles.map(file => ({ ...file })) : [];
   renderSourceFiles();
   renderHistory(s.history);
@@ -767,9 +765,10 @@ function updateControls(s) {
   $("pause").disabled = !s.sessionActive || !s.running || s.awaitingHuman;
   $("resume").disabled = !s.sessionActive || s.running || s.awaitingHuman;
   $("stop").disabled = !s.sessionActive;
-  $("newAllChats").disabled = true;
-  $("freshOnStart").checked = false;
-  $("freshOnStart").disabled = true;
+  const manualFreshAllowed = !s.sessionActive;
+  const activeTabsValid = validateActiveTabs() === null;
+  $("newAllChats").disabled = !manualFreshAllowed || !activeTabsValid;
+  $("freshOnStart").disabled = !manualFreshAllowed || !activeTabsValid;
   $("agentCount").disabled = Boolean(s.sessionActive);
   $("workMode").disabled = Boolean(s.sessionActive);
   $("teamRules").disabled = false;
@@ -781,7 +780,9 @@ function updateControls(s) {
   updateWorkModeUI();
 
   for (const side of SIDES) {
-    $(`newChat${side}`).disabled = true;
+    const tabId = selectedTab(side);
+    const manualTabReady = Number.isInteger(tabId) && tabId > 0 && tabsById.has(tabId);
+    $(`newChat${side}`).disabled = !manualFreshAllowed || !manualTabReady;
     const batchDone = ["compete", "parallel", "review"].includes(s.workMode) && Array.isArray(s.phaseCompletedSides) && s.phaseCompletedSides.includes(side);
     $(`resend${side}`).disabled = !s.sessionActive || !s.running || s.awaitingHuman || !s.lastSentBySide?.[side] || batchDone;
   }
@@ -989,8 +990,57 @@ chrome.storage.onChanged.addListener((changes, area) => {
   if (area === "local" && changes[THEME_KEY]) applyTheme(changes[THEME_KEY].newValue);
 });
 
-async function openFreshChats(_sides) {
-  $("status").textContent = "New Chat is LIMITED — AI Bridge does not currently have trusted provider New Chat authority.";
+async function openFreshChats(rawSides) {
+  const requested = [...new Set((Array.isArray(rawSides) ? rawSides : [])
+    .map(side => String(side || "").toUpperCase()))]
+    .filter(side => SIDES.includes(side));
+  if (!requested.length) {
+    $("status").textContent = "Choose at least one active AI role to open in a fresh chat.";
+    return;
+  }
+  if (latestState?.sessionActive) {
+    $("status").textContent = "Stop the current Bridge session before opening fresh AI chats manually.";
+    return;
+  }
+
+  const missing = requested.filter(side => {
+    const tabId = selectedTab(side);
+    return !Number.isInteger(tabId) || tabId <= 0 || !tabsById.has(tabId);
+  });
+  if (missing.length) {
+    $("status").textContent = `Choose an open supported AI tab for ${missing.map(side => "AI " + side).join(", ")}.`;
+    return;
+  }
+
+  const buttons = requested.map(side => $(`newChat${side}`)).filter(Boolean);
+  const bulkButton = $("newAllChats");
+  for (const button of buttons) button.disabled = true;
+  if (bulkButton) bulkButton.disabled = true;
+
+  const targetLabel = requested.length === 1
+    ? `AI ${requested[0]}`
+    : requested.map(side => `AI ${side}`).join(", ");
+  $("status").textContent = requested.length === 1
+    ? `Opening fresh chat for ${targetLabel}…`
+    : `Opening fresh chats for ${targetLabel}…`;
+
+  try {
+    const res = await chrome.runtime.sendMessage({
+      type: "AI_BRIDGE_NEW_CHATS",
+      sides: requested,
+      ...selectedBindings()
+    });
+    if (!res?.ok) throw new Error(res?.error || "Could not open fresh AI chat.");
+    await loadTabs({ preserve: true });
+    await refreshState();
+    $("status").textContent = requested.length === 1
+      ? `Fresh chat verified for ${targetLabel}.`
+      : `Fresh chats verified for ${targetLabel}.`;
+  } catch (err) {
+    $("status").textContent = `Fresh chat failed: ${err.message}`;
+  } finally {
+    if (latestState) updateControls(latestState);
+  }
 }
 
 async function clearHistory(kind) {
