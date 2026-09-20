@@ -242,7 +242,8 @@
       side:String(command.side||registration.side||"").toUpperCase(),
       generationEpoch:Number(command.generationEpoch),
       provider,
-      authorityRegistrationId:String(command.authorityRegistrationId||"")
+      authorityRegistrationId:String(command.authorityRegistrationId||""),
+      rolloverId:command.rolloverId==null?null:String(command.rolloverId)
     });
     const confirmation=await confirmSend(composer2,text);
     if(!confirmation.confirmed) return attempted;
@@ -365,7 +366,8 @@
           side:registration.side,
           generationEpoch:registration.generationEpoch,
           provider:registration.provider,
-          authorityRegistrationId:registration.authorityRegistrationId
+          authorityRegistrationId:registration.authorityRegistrationId,
+          rolloverId:null
         }) : null);
     awaitingDispatchId=null;
     awaitingResponseContext=null;
@@ -381,6 +383,7 @@
         generationEpoch:responseContext.generationEpoch,
         conversationIdentity:liveIdentity,
         side:responseContext.side,
+        rolloverId:responseContext.rolloverId,
         artifacts:[]
       });
     }catch(_){}
