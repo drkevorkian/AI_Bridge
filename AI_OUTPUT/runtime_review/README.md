@@ -55,3 +55,15 @@ The real-Chrome gate requires both truths after ambiguous-delivery recovery:
 - session: Paused because prior delivery is ambiguous.
 
 The harness also counts response transcript commits and requires zero for the provider-click-before-ACK kill case and after the refused Resume.
+
+
+### Recovery snapshot matrix
+
+The Chrome E2E harness now seeds durable crash snapshots through the DevTools Extensions storage API and validates both backend state and rendered Dashboard state.
+
+Covered snapshots:
+- committed response with no continuation: explicit inconsistency pause;
+- durable continuation with uncommitted source: explicit fail-closed pause;
+- committed response with valid continuation: deterministic recovery, exactly one target provider action, one target dispatch in AWAITING_RESPONSE, continuation marker cleared.
+
+The positive fixture separates SEND confirmation from assistant-response emission so recovery can reach a stable AWAITING_PROVIDER_RESPONSE state without triggering another relay turn.

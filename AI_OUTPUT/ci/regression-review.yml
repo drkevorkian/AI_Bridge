@@ -47,5 +47,7 @@ jobs:
         run: node AI_OUTPUT/tests/runtime-review-pack-smoke.mjs
       - name: Round 31 browser health contract
         run: node AI_OUTPUT/tests/round31-browser-health-contract.mjs
+      - name: Round 32 Chrome recovery UI matrix
+        run: node AI_OUTPUT/tests/round32-chrome-recovery-ui-matrix.mjs
       - name: Real Chrome MV3 E2E
         run: node AI_OUTPUT/tests/chrome-e2e-runtime.cjs
