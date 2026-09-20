@@ -54,9 +54,31 @@ for(const token of [
 ]) assert.ok(trust.includes(token),"trusted extension sender helper missing "+token);
 
 // Provider/content control-plane messages must remain outside the UI set.
-for(const type of [
+const providerTypes=[
   "AI_BRIDGE_DOCUMENT_REGISTER","AI_BRIDGE_DOCUMENT_ROUTE_CHANGED","AI_BRIDGE_PROVIDER_EVENT",
   "AI_BRIDGE_THREAD_LIMIT","AI_BRIDGE_RESPONSE","AI_BRIDGE_FETCH_ARTIFACT"
-]) assert.ok(!setBlock.includes('"'+type+'"'),"provider/content message accidentally requires extension-page sender: "+type);
+];
+for(const type of providerTypes) assert.ok(!setBlock.includes('"'+type+'"'),"provider/content message accidentally requires extension-page sender: "+type);
+
+// Update transaction controls intentionally keep their own explicit trusted
+// extension-page checks because they form a separate atomic-update boundary.
+const updateTypes=[
+  "AI_BRIDGE_UPDATE_PREPARE","AI_BRIDGE_UPDATE_APPLIED",
+  "AI_BRIDGE_UPDATE_CANCEL","AI_BRIDGE_UPDATE_STATUS"
+];
+for(const type of updateTypes){
+  const handler=bg.indexOf('if (msg.type === "'+type+'")',listener);
+  assert.ok(handler>listener,"update control handler missing "+type);
+  const nextHandler=bg.indexOf('if (msg.type === "',handler+1);
+  const block=bg.slice(handler,nextHandler>handler?nextHandler:handler+1200);
+  assert.ok(block.includes("reviewTrustedExtensionPage(sender)"),"update control lacks explicit sender trust: "+type);
+}
+
+// Exhaustive message-surface guard: adding a new handler must require a
+// deliberate classification instead of silently inheriting permissive default.
+const handlerTypes=[...new Set([...bg.matchAll(/msg\.type\s*===\s*"([^"]+)"/g)].map(match=>match[1]))];
+const classified=new Set([...expected,...providerTypes,...updateTypes]);
+const unclassified=handlerTypes.filter(type=>!classified.has(type));
+assert.deepEqual(unclassified,[],"runtime message handlers missing trust classification: "+unclassified.join(", "));
 
 console.log("round58-ui-control-plane-authority: PASS");
