@@ -542,6 +542,33 @@ function reviewTrustedExtensionPage(sender){
   if(sender?.documentLifecycle!=null&&String(sender.documentLifecycle)!=="active")return false;
   return true;
 }
+const REVIEW_UI_CONTROL_TYPES=new Set([
+  "AI_BRIDGE_POWER_SET",
+  "AI_BRIDGE_AUTO_UPDATE_SET",
+  "AI_BRIDGE_SETTINGS_OPEN",
+  "AI_BRIDGE_PROVIDER_HEALTH",
+  "AI_BRIDGE_GET_STATE",
+  "AI_BRIDGE_OPEN_DASHBOARD",
+  "AI_BRIDGE_DOWNLOAD_ARTIFACT",
+  "AI_BRIDGE_CLEAR_ARTIFACTS",
+  "AI_BRIDGE_CLEAR_HISTORY",
+  "AI_BRIDGE_NEW_CHATS",
+  "AI_BRIDGE_START",
+  "AI_BRIDGE_UPDATE_RULES",
+  "AI_BRIDGE_MANUAL_RELAY",
+  "AI_BRIDGE_PAUSE",
+  "AI_BRIDGE_RESUME",
+  "AI_BRIDGE_STOP",
+  "AI_BRIDGE_RESEND",
+  "AI_BRIDGE_HUMAN_REPLY",
+  "AI_BRIDGE_HUMAN_SUPPRESS",
+  "AI_BRIDGE_HUMAN_REOPEN",
+  "AI_BRIDGE_INTERJECT"
+]);
+function reviewUiControlSenderAllowed(msg,sender){
+  const type=String(msg?.type||"");
+  return !REVIEW_UI_CONTROL_TYPES.has(type)||reviewTrustedExtensionPage(sender);
+}
 async function reviewCaptureUpdateBindings(){
   if(!state.sessionActive)return [];
   const bindings=[];
@@ -4392,6 +4419,10 @@ function reviewAuthorizeProviderEvent(msg, sender) {
 
 chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   (async () => {
+    if(!reviewUiControlSenderAllowed(msg,sender)){
+      sendResponse({ok:false,reason:"UI_CONTROL_UNTRUSTED_SENDER"});
+      return;
+    }
     if (msg.type === "AI_BRIDGE_POWER_SET") {
       await aiBridgeApplyKeepAwake(Boolean(msg.enabled));
       sendResponse({ ok: true, enabled: Boolean(msg.enabled) });
@@ -4575,10 +4606,6 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
     }
 
     if (msg.type === "AI_BRIDGE_NEW_CHATS") {
-      if(!reviewTrustedExtensionPage(sender)){
-        sendResponse({ok:false,reason:"NEW_CHAT_CONTROL_UNTRUSTED_SENDER"});
-        return;
-      }
       const sides = Array.isArray(msg.sides) ? msg.sides : SIDES;
       const resetSides = await resetSelectedChats(msg, sides);
       sendResponse({ ok: true, sides: resetSides });
