@@ -2,7 +2,7 @@
 const {buildContinuationPayload}=require("./continuity-payload.js");
 class ThreadRolloverOrchestrator {
   constructor({coordinator,classifyLimit,classifyIdentityTransition}) {
-    if(!coordinator||typeof coordinator.begin!=='function'||typeof coordinator.transition!=='function'||typeof coordinator.get!=='function'||typeof coordinator.promoteCandidateAuthority!=='function') throw new TypeError('A canonical rollover coordinator with candidate promotion is required.');
+    if(!coordinator||typeof coordinator.begin!=='function'||typeof coordinator.transition!=='function'||typeof coordinator.get!=='function'||typeof coordinator.promoteCandidateAuthority!=='function'||typeof coordinator.markFinalResponseCommitted!=='function'||typeof coordinator.prepareContinuity!=='function') throw new TypeError('A canonical rollover coordinator with final-response and continuity staging is required.');
     if(typeof classifyLimit!=='function') throw new TypeError('classifyLimit is required.');
     if(typeof classifyIdentityTransition!=='function') throw new TypeError('classifyIdentityTransition is required.');
     this.coordinator=coordinator;this.classifyLimit=classifyLimit;this.classifyIdentityTransition=classifyIdentityTransition;
@@ -15,22 +15,24 @@ class ThreadRolloverOrchestrator {
   beginManual(input){
     return this.coordinator.begin({rolloverId:input.rolloverId,side:input.side,provider:input.provider,triggeringDispatchId:input.triggeringDispatchId,oldAuthority:input.oldAuthority,hardLimitEvidence:null,triggerMode:'MANUAL',startedAt:input.startedAt});
   }
+  markFinalResponseCommitted({side,dispatchId,completedAt,now}){
+    const tx=this.coordinator.get(side);
+    if(!tx) throw new Error("No active rollover transaction for side.");
+    if(tx.phase!=="LIMIT_DETECTED") throw new Error(`Final response can only be committed during LIMIT_DETECTED; current phase is ${tx.phase}.`);
+    return this.coordinator.markFinalResponseCommitted(side,{dispatchId,completedAt},now);
+  }
   prepareContinuity(input){
     const side=String(input?.side||"").trim().toUpperCase();
     if(!side) throw new TypeError("side is required.");
     const tx=this.coordinator.get(side);
     if(!tx) throw new Error("No active rollover transaction for side.");
-    if(tx.phase==="COMPLETE"||tx.phase==="FAILED"||tx.phase==="DELIVERY_AMBIGUOUS") throw new Error(`Cannot prepare continuity during ${tx.phase}.`);
+    if(tx.phase!=="FINAL_RESPONSE_COMMITTED") throw new Error(`Continuity can only be prepared after the final response commit; current phase is ${tx.phase}.`);
     if(tx.hardLimitEvidence?.state!=="HARD_THREAD_LIMIT"||tx.hardLimitEvidence?.automaticRollover!==true) throw new Error("Automatic continuity requires authoritative hard-limit evidence from the active rollover.");
-    return buildContinuationPayload({
-      title:input.title,
-      messages:input.messages,
-      provider:tx.provider,
-      limitEvidence:tx.hardLimitEvidence,
-      maxChars:input.maxChars
-    });
+    const payload=buildContinuationPayload({title:input.title,messages:input.messages,provider:tx.provider,limitEvidence:tx.hardLimitEvidence,maxChars:input.maxChars});
+    this.coordinator.prepareContinuity(side,payload,input.now);
+    return payload;
   }
-    classifyIdentityObservation(previousIdentity,currentIdentity){
+  classifyIdentityObservation(previousIdentity,currentIdentity){
     const transition=this.classifyIdentityTransition(previousIdentity,currentIdentity);
     return Object.freeze({transition,accepted:transition==='NEW_CHAT_SURFACE'||transition==='NEW_CONVERSATION_CONFIRMED'});
   }
@@ -43,9 +45,7 @@ class ThreadRolloverOrchestrator {
       const transaction=this.coordinator.transition(side,'NEW_IDENTITY_VERIFIED',{candidateAuthority},now);
       return Object.freeze({applied:true,...observation,transaction,directConfirmation:observation.transition==='NEW_CONVERSATION_CONFIRMED'});
     }
-    if(observation.transition==='NEW_CHAT_SURFACE') {
-      return Object.freeze({applied:false,...observation,reason:'PROVISIONAL_SURFACE_ALREADY_PASSED'});
-    }
+    if(observation.transition==='NEW_CHAT_SURFACE') return Object.freeze({applied:false,...observation,reason:'PROVISIONAL_SURFACE_ALREADY_PASSED'});
     const transaction=this.coordinator.promoteCandidateAuthority(side,candidateAuthority,now);
     return Object.freeze({applied:true,...observation,transaction,directConfirmation:false});
   }

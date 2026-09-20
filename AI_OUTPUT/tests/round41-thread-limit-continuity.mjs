@@ -94,13 +94,17 @@ coord.begin({
   hardLimitEvidence:limit,
   startedAt:1
 });
-coord.transition("B", PHASE.OLD_AUTHORITY_REVOKED, { oldAuthority:revoked }, 2);
-coord.transition("B", PHASE.OPENING_NEW_CHAT, {}, 3);
-coord.transition("B", PHASE.AWAITING_NEW_IDENTITY, {}, 4);
-coord.transition("B", PHASE.NEW_IDENTITY_VERIFIED, { candidateAuthority:freshSurface }, 5);
-coord.transition("B", PHASE.CONTINUITY_PENDING, { continuityDispatchId:"d-cont", continuityStatus:"PENDING" }, 6);
-coord.transition("B", PHASE.CONTINUITY_SENT, { continuityStatus:"ACCEPTED" }, 7);
-coord.transition("B", PHASE.AWAITING_CONTINUITY_RESPONSE, {}, 8);
+assert.throws(()=>coord.transition("B",PHASE.OLD_AUTHORITY_REVOKED,{oldAuthority:revoked},2),/final response|Invalid rollover transition/);
+coord.markFinalResponseCommitted("B",{dispatchId:"d-old",completedAt:2},2);
+const preparedPayload=continuity.buildContinuationPayload({title:"Backend Debug Discovery",provider:"chatgpt",limitEvidence:limit,messages});
+coord.prepareContinuity("B",preparedPayload,3);
+coord.transition("B", PHASE.OLD_AUTHORITY_REVOKED, { oldAuthority:revoked }, 4);
+coord.transition("B", PHASE.OPENING_NEW_CHAT, {}, 5);
+coord.transition("B", PHASE.AWAITING_NEW_IDENTITY, {}, 6);
+coord.transition("B", PHASE.NEW_IDENTITY_VERIFIED, { candidateAuthority:freshSurface }, 7);
+coord.transition("B", PHASE.CONTINUITY_PENDING, { continuityDispatchId:"d-cont", continuityStatus:"PENDING" }, 8);
+coord.transition("B", PHASE.CONTINUITY_SENT, { continuityStatus:"ACCEPTED" }, 9);
+coord.transition("B", PHASE.AWAITING_CONTINUITY_RESPONSE, {}, 10);
 
 assert.equal(
   coord.canAcceptContinuityResponse({
@@ -109,7 +113,7 @@ assert.equal(
   "CANDIDATE_CONFIRMATION_PENDING"
 );
 
-coord.promoteCandidateAuthority("B", confirmedConversation, 9);
+coord.promoteCandidateAuthority("B", confirmedConversation, 11);
 
 assert.deepEqual(
   coord.canAcceptContinuityResponse({
@@ -128,16 +132,18 @@ coordReuse.begin({
   hardLimitEvidence:limit,
   startedAt:20
 });
-coordReuse.transition("B", PHASE.OLD_AUTHORITY_REVOKED, { oldAuthority:revoked }, 21);
-coordReuse.transition("B", PHASE.OPENING_NEW_CHAT, {}, 22);
-coordReuse.transition("B", PHASE.AWAITING_NEW_IDENTITY, {}, 23);
-coordReuse.transition("B", PHASE.NEW_IDENTITY_VERIFIED, { candidateAuthority:freshSurface }, 24);
+coordReuse.markFinalResponseCommitted("B",{dispatchId:"d-reuse",completedAt:21},21);
+coordReuse.prepareContinuity("B",preparedPayload,22);
+coordReuse.transition("B", PHASE.OLD_AUTHORITY_REVOKED, { oldAuthority:revoked }, 23);
+coordReuse.transition("B", PHASE.OPENING_NEW_CHAT, {}, 24);
+coordReuse.transition("B", PHASE.AWAITING_NEW_IDENTITY, {}, 25);
+coordReuse.transition("B", PHASE.NEW_IDENTITY_VERIFIED, { candidateAuthority:freshSurface }, 26);
 
 assert.throws(
   () => coordReuse.promoteCandidateAuthority("B", {
     ...confirmedConversation,
     identity:{ ...confirmedConversation.identity, threadKey:"old" }
-  }, 25),
+  }, 27),
   /candidateAuthority did not change conversation identity/
 );
 
