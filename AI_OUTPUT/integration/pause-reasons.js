@@ -1,7 +1,8 @@
 export const ACTION_CERTAINTY=Object.freeze({
   NO_ACTION_TAKEN:'NO_ACTION_TAKEN',
   ACTION_CONFIRMED:'ACTION_CONFIRMED',
-  ACTION_OUTCOME_AMBIGUOUS:'ACTION_OUTCOME_AMBIGUOUS'
+  ACTION_OUTCOME_AMBIGUOUS:'ACTION_OUTCOME_AMBIGUOUS',
+  UNKNOWN:'UNKNOWN'
 });
 export const PAUSE_REASON=Object.freeze({
   DOM_COMPOSER_UNAVAILABLE:'DOM_COMPOSER_UNAVAILABLE',
@@ -17,7 +18,10 @@ export const PAUSE_REASON=Object.freeze({
   ROLLOVER_DISPATCH_UNVERIFIED:'ROLLOVER_DISPATCH_UNVERIFIED',
   ROLLOVER_CLAIM_AMBIGUOUS:'ROLLOVER_CLAIM_AMBIGUOUS',
   ROLLOVER_LIMIT_DETECTOR_UNAVAILABLE:'ROLLOVER_LIMIT_DETECTOR_UNAVAILABLE',
-  ROLLOVER_IDENTITY_UNVERIFIED:'ROLLOVER_IDENTITY_UNVERIFIED'
+  ROLLOVER_IDENTITY_UNVERIFIED:'ROLLOVER_IDENTITY_UNVERIFIED',
+  RUNTIME_RECONNECT_FAILED:'RUNTIME_RECONNECT_FAILED',
+  RUNTIME_RECOVERY_FAILED:'RUNTIME_RECOVERY_FAILED',
+  RUNTIME_UNMAPPED_SAFETY_STATE:'RUNTIME_UNMAPPED_SAFETY_STATE'
 });
 const META=Object.freeze({
   DOM_COMPOSER_UNAVAILABLE:{certainty:ACTION_CERTAINTY.NO_ACTION_TAKEN,message:'Prompt composer could not be verified after the provider page changed. No message was entered.'},
@@ -33,11 +37,15 @@ const META=Object.freeze({
   ROLLOVER_DISPATCH_UNVERIFIED:{certainty:ACTION_CERTAINTY.ACTION_OUTCOME_AMBIGUOUS,message:'The dispatch record needed to verify the previous response is missing. AI Bridge will not replay automatically.'},
   ROLLOVER_CLAIM_AMBIGUOUS:{certainty:ACTION_CERTAINTY.ACTION_OUTCOME_AMBIGUOUS,message:'The previous delivery outcome could not be proven after recovery. AI Bridge will not replay automatically.'},
   ROLLOVER_LIMIT_DETECTOR_UNAVAILABLE:{certainty:ACTION_CERTAINTY.NO_ACTION_TAKEN,message:'Automatic rollover is unavailable because no verified thread-limit detector exists for this provider.'},
-  ROLLOVER_IDENTITY_UNVERIFIED:{certainty:ACTION_CERTAINTY.NO_ACTION_TAKEN,message:'Conversation identity could not be verified after rollover. No automatic continuation occurred.'}
+  ROLLOVER_IDENTITY_UNVERIFIED:{certainty:ACTION_CERTAINTY.NO_ACTION_TAKEN,message:'Conversation identity could not be verified after rollover. No automatic continuation occurred.'},
+  RUNTIME_RECONNECT_FAILED:{certainty:ACTION_CERTAINTY.NO_ACTION_TAKEN,message:'AI Bridge could not reconnect the active provider tabs after service-worker restart. Relay work was not resumed.'},
+  RUNTIME_RECOVERY_FAILED:{certainty:ACTION_CERTAINTY.UNKNOWN,message:'AI Bridge could not safely restore required runtime recovery state. No automatic recovery action will continue.'},
+  RUNTIME_UNMAPPED_SAFETY_STATE:{certainty:ACTION_CERTAINTY.UNKNOWN,message:'AI Bridge encountered an unmapped safety state. Automatic action is blocked until the condition is reviewed.'}
 });
+export function isKnownPauseCode(code){return Object.prototype.hasOwnProperty.call(META,String(code||''));}
 export function pauseMeta(code){
   const c=String(code||'');
-  return Object.freeze({code:c,...(META[c]||{certainty:ACTION_CERTAINTY.NO_ACTION_TAKEN,message:'AI Bridge paused because a required safety condition could not be verified.'})});
+  return Object.freeze({code:isKnownPauseCode(c)?c:PAUSE_REASON.RUNTIME_UNMAPPED_SAFETY_STATE,...(META[c]||META.RUNTIME_UNMAPPED_SAFETY_STATE)});
 }
 export function mapSubsystemReason(reason){
   const r=String(reason||'');
@@ -48,7 +56,6 @@ export function mapSubsystemReason(reason){
     LEDGER_UNAVAILABLE:PAUSE_REASON.ROLLOVER_LEDGER_UNAVAILABLE,
     DISPATCH_MISSING:PAUSE_REASON.ROLLOVER_DISPATCH_UNVERIFIED,
     CLAIM_OUTCOME_AMBIGUOUS:PAUSE_REASON.ROLLOVER_CLAIM_AMBIGUOUS,
-    NO_TRUSTED_AUTHORITY:PAUSE_REASON.DOM_CONTRACT_DISAGREEMENT,
     CONTRACT_DISAGREEMENT:PAUSE_REASON.DOM_CONTRACT_DISAGREEMENT
   };
   return map[r]||null;
