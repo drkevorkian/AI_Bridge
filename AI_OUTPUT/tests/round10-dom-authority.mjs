@@ -1,15 +1,16 @@
 import assert from 'node:assert/strict';
-import {evaluateContracts,resolveActionAuthority,canAuthorizeAction,RANK,HEALTH} from '../dom_resilience/selector-ranking.js';
+import {evaluateContracts,pickAuthority,canAuthorizeAction,RANK,HEALTH} from '../dom_resilience/selector-ranking.js';
 import {DomHealthMonitor,PROBES} from '../dom_resilience/dom-health-monitor.js';
 import {PROVIDER_CONTRACTS,getProviderContracts} from '../dom_resilience/provider-dom-contracts.js';
 import {formatPauseReason} from '../integration/pause-reasons.js';
 const node=()=>({isConnected:true,disabled:false,getBoundingClientRect:()=>({width:10,height:10}),getAttribute:()=>null,hasAttribute:()=>false});
 const a=node(),b=node();
 const contracts=[{id:'a',selector:'#a',rank:RANK.EXACT_SEMANTIC},{id:'b',selector:'#b',rank:RANK.ACCESSIBLE_EXACT}];
-let host={queryAll:s=>s==='#a'?[a]:[a],styleFor:()=>({visibility:'visible',display:'block'})};
-let auth=resolveActionAuthority(evaluateContracts(contracts,host));assert.equal(auth.state,HEALTH.PASS);assert.equal(canAuthorizeAction(auth),true);
-host={queryAll:s=>s==='#a'?[a]:[b],styleFor:()=>({visibility:'visible',display:'block'})};auth=resolveActionAuthority(evaluateContracts(contracts,host));assert.equal(auth.reason,'CONTRACT_DISAGREEMENT');assert.equal(canAuthorizeAction(auth),false);
-const structural=resolveActionAuthority(evaluateContracts([{id:'s',selector:'button',rank:RANK.STRUCTURAL}],{queryAll:()=>[a],styleFor:()=>({visibility:'visible',display:'block'})}));assert.equal(structural.state,HEALTH.FAIL);
+let host={queryAll:s=>s==='#a'?[a]:[],styleFor:()=>({visibility:'visible',display:'block'})};
+let auth=pickAuthority(evaluateContracts(contracts,host));assert.equal(auth.state,HEALTH.PASS);assert.equal(auth.selectorId,'a');assert.equal(canAuthorizeAction(auth),true);
+host={queryAll:()=>[a,b],styleFor:()=>({visibility:'visible',display:'block'})};auth=pickAuthority(evaluateContracts([{id:'ambiguous',selector:'button',rank:RANK.EXACT_SEMANTIC}],host));assert.equal(auth.state,HEALTH.FAIL);assert.equal(canAuthorizeAction(auth),false);
+const structural=pickAuthority(evaluateContracts([{id:'s',selector:'button',rank:RANK.STRUCTURAL}],{queryAll:()=>[a],styleFor:()=>({visibility:'visible',display:'block'})}));assert.equal(structural.state,HEALTH.DEGRADED);assert.equal(canAuthorizeAction(structural),false);
+const broad=pickAuthority(evaluateContracts([{id:'broad',selector:'button',rank:RANK.BROAD_GENERIC}],{queryAll:()=>[a],styleFor:()=>({visibility:'visible',display:'block'})}));assert.equal(broad.state,HEALTH.FAIL);assert.equal(canAuthorizeAction(broad),false);
 assert.equal(getProviderContracts('chatgpt'),PROVIDER_CONTRACTS.chatgpt);
 assert.equal(getProviderContracts('unknown'),null);
 for(const p of ['chatgpt','grok','claude','gemini','copilot']){
