@@ -1,4 +1,4 @@
-# AI Bridge — Human Test Build (AI A 1.18.1)
+# AI Bridge — Human Test Build (AI B 1.19.1)
 
 This folder is a runnable **unpacked Chrome extension** promoted from the reviewed `AI_OUTPUT/runtime_review/` candidate.
 
@@ -50,9 +50,20 @@ For every issue, record:
 
 Do not test against valuable/irreversible provider actions. This is a human-test build, not production integration.
 
-## AI A 1.18.1 fixes
+## AI B 1.19.1 fixes
 
 - Dashboard → Settings and Settings → Dashboard now reuse the current extension tab instead of spawning another tab.
 - Removed accidental literal `\\n` text from extension-page markup.
 - Classic is the consistent fallback dashboard layout; Studio, Classic, and Focus selections persist through local storage.
 - Settings confirms the saved dashboard layout before returning to Dashboard.
+
+
+## Workspace themes in v1.19.1
+
+Classic, Studio, and Focus are intentionally different workspace compositions that share the same AI Bridge color themes, typography, cards, buttons, and controls.
+
+- **Classic — three-pane control room:** Runtime + Team on the left, transcript in the center, Human Interjection and secondary controls on the right.
+- **Studio — transcript left, controls right:** the conversation becomes the primary left workspace while the complete configuration/control dock moves to the right.
+- **Focus — full-screen transcript + runtime rail:** the transcript takes essentially the full browser window. A compact floating rail keeps only Settings and Runtime controls visible.
+
+The pane splitter follows the active workspace theme: Classic resizes the left controls; Studio resizes the right control dock; Focus hides the splitter because the transcript is full-screen.

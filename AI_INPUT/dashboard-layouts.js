@@ -66,7 +66,11 @@
   const shell=document.querySelector(".app-shell");
   if(!splitter||!shell)return;
   let dragging=false;
-  const widthFromX=x=>clamp((x/window.innerWidth)*100);
+  const widthFromX=x=>{
+    const layout=document.documentElement.dataset.layout||"classic";
+    const ratio=layout==="studio" ? ((window.innerWidth-x)/window.innerWidth)*100 : (x/window.innerWidth)*100;
+    return clamp(ratio);
+  };
   splitter.addEventListener("pointerdown",event=>{
     if(event.button!==0)return;
     dragging=true;

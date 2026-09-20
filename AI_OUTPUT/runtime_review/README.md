@@ -147,7 +147,7 @@ Operational-event DOM probes are restricted to visible alert/ARIA-live system su
 
 AI_OUTPUT is the development/playground surface. The corresponding human-test package is mirrored into AI_INPUT after playground validation.
 
-Current playground version: **v1.19.0**.
+Current playground version: **v1.19.1**.
 
 Layout behavior:
 - Classic: Runtime + Team left, transcript center, Human Interjection first on the right followed by remaining controls.
@@ -155,3 +155,14 @@ Layout behavior:
 - Focus: transcript-first layout with only brand/Settings and Runtime in the compact left rail.
 
 Classic is the default when no layout preference is stored. Extension-page navigation between Dashboard and Settings is same-tab navigation. Packaged HTML must not contain literal `\n` text nodes.
+
+
+## Workspace themes in v1.19.1
+
+Classic, Studio, and Focus are intentionally different workspace compositions that share the same AI Bridge color themes, typography, cards, buttons, and controls.
+
+- **Classic — three-pane control room:** Runtime + Team on the left, transcript in the center, Human Interjection and secondary controls on the right.
+- **Studio — transcript left, controls right:** the conversation becomes the primary left workspace while the complete configuration/control dock moves to the right.
+- **Focus — full-screen transcript + runtime rail:** the transcript takes essentially the full browser window. A compact floating rail keeps only Settings and Runtime controls visible.
+
+The pane splitter follows the active workspace theme: Classic resizes the left controls; Studio resizes the right control dock; Focus hides the splitter because the transcript is full-screen.

@@ -21,8 +21,19 @@ for(const base of ['AI_OUTPUT/runtime_review','AI_INPUT']){
   for(const layout of ['classic','studio','focus']) assert.ok(layoutCss.includes('html[data-layout="'+layout+'"] .app-shell'),'missing '+layout+' structure: '+base);
   assert.ok(layoutCss.includes('html[data-layout="focus"] .control-panel>:not(.brand-block):not(.runtime-card)'),'Focus must be transcript-first: '+base);
   assert.ok(settings.includes('LAYOUTS.has(layout)?layout:"classic"'),'Classic setter fallback missing: '+base);
-  assert.equal(manifest.version,'1.19.0');
+  assert.equal(manifest.version,'1.19.1');
 }
-assert.equal(JSON.parse(read('AI_INPUT/manifest.json')).version_name,'1.19.0-human-test');
-assert.equal(JSON.parse(read('AI_OUTPUT/runtime_review/manifest.json')).version_name,'1.19.0-playground');
+assert.equal(JSON.parse(read('AI_INPUT/manifest.json')).version_name,'AI B 1.19.1-human-test');
+assert.equal(JSON.parse(read('AI_OUTPUT/runtime_review/manifest.json')).version_name,'AI B 1.19.1-playground');
 console.log('human-test-ui-regressions: PASS');
+
+for(const base of ['AI_OUTPUT/runtime_review','AI_INPUT']){
+  const css=read(base+'/dashboard-layouts.css');
+  const js=read(base+'/dashboard-layouts.js');
+  const settingsHtml=read(base+'/settings.html');
+  assert.ok(css.includes('grid-column:3;grid-row:1'),'Studio must dock controls on the right: '+base);
+  assert.ok(css.includes('position:fixed;z-index:20;left:14px;top:14px'),'Focus must use a floating runtime rail: '+base);
+  assert.ok(css.includes('grid-column:4;display:block'),'Classic must expose the right-side secondary pane: '+base);
+  assert.ok(js.includes('layout==="studio" ? ((window.innerWidth-x)/window.innerWidth)*100'),'Studio splitter must resize from the right edge: '+base);
+  assert.ok(settingsHtml.includes('Workspace theme'),'Settings must label these as workspace themes: '+base);
+}

@@ -1,8 +1,8 @@
 {
   "manifest_version": 3,
   "name": "AI Bridge Human Test",
-  "version": "1.18.1",
-  "description": "Human-test unpacked build promoted from the reviewed AI_OUTPUT candidate. Not production/root integration.",
+  "version": "1.19.1",
+  "description": "AI Bridge human-test build v1.19.1 with distinct Classic, Studio, and Focus workspace themes.",
   "permissions": [
     "tabs",
     "storage",
@@ -68,5 +68,5 @@
   "content_security_policy": {
     "extension_pages": "script-src 'self'; object-src 'none'; base-uri 'none'; frame-ancestors 'none'"
   },
-  "version_name": "AI A 1.18.1-human-test"
+  "version_name": "AI B 1.19.1-human-test"
 }
