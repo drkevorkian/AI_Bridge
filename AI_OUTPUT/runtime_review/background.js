@@ -187,7 +187,9 @@ async function reviewInitializeDurableRuntime() {
       reviewLedger.transition(record.dispatchId, DISPATCH_STATUS.DELIVERY_AMBIGUOUS, {
         failureReason: "MV3_WORKER_RESTART_DURING_DELIVERY"
       });
-      reviewRecoveryPauseReason = "A provider delivery was interrupted before background acceptance was persisted. AI Bridge will query the surviving content runtime for exact action proof before any recovery.";
+      // Do not pause here. If a durable nextTurnPending exists, loadState()
+      // must first give that exact continuation a chance to recover from the
+      // surviving isolated content runtime's action cache.
       changed = true;
     }
   }
@@ -201,6 +203,13 @@ async function reviewInitializeDurableRuntime() {
     }
   }
 }
+function reviewRestartAmbiguities() {
+  return reviewLedger.snapshot().filter(record =>
+    record.status === DISPATCH_STATUS.DELIVERY_AMBIGUOUS &&
+    record.failureReason === "MV3_WORKER_RESTART_DURING_DELIVERY"
+  );
+}
+
 async function reviewPayloadHash(side, text) {
   const bytes = new TextEncoder().encode(JSON.stringify({ side: String(side), text: String(text || "") }));
   const digest = new Uint8Array(await crypto.subtle.digest("SHA-256", bytes));
@@ -1882,6 +1891,11 @@ async function loadState() {
   await reviewRuntimeReady;
   const updateRestore=await reviewRestoreUpdateCheckpoint();
 
+  const startupRestartAmbiguities = reviewRestartAmbiguities();
+  if (startupRestartAmbiguities.length && !state.nextTurnPending) {
+    reviewRecoveryPauseReason = "A provider delivery was interrupted by a service-worker restart, but there is no durable next-turn record tying it to a safely recoverable continuation. Automatic replay remains blocked.";
+  }
+
   if (await reviewEnforceContinuationConsistency()) {
     reviewRecoveryPauseReason = state.pauseReason;
   }
@@ -1905,12 +1919,24 @@ async function loadState() {
       await Promise.all(SIDES.map(side => reviewRegisterSideAuthority(side)));
       if (state.nextTurnPending) {
         const recovered = await reviewRecoverNextTurnPending();
-        if (recovered?.paused) throw new Error("Next-turn recovery paused.");
+        if (recovered?.paused) {
+          state.running = false;
+          state.paused = true;
+          if (!state.pauseReason) state.pauseReason = recovered.reason || recovered.error || "Next-turn recovery paused.";
+          await saveState();
+        }
+      }
+      const remainingRestartAmbiguities = reviewRestartAmbiguities();
+      if (state.running && remainingRestartAmbiguities.length) {
+        await reviewPauseForAmbiguity("Restart recovery left unresolved provider-delivery ambiguity. Automatic replay remains blocked.");
       }
     } catch (err) {
+      const intentionalPause = state.paused && Boolean(String(state.pauseReason || "").trim());
       state.running = false;
       state.paused = true;
-      state.pauseReason = `Automatic reconnect failed: ${err.message}. Rebind all active AI tabs and press Resume.`;
+      if (!intentionalPause) {
+        state.pauseReason = `Automatic reconnect failed: ${err.message}. Rebind all active AI tabs and press Resume.`;
+      }
       await saveState();
     }
   }
