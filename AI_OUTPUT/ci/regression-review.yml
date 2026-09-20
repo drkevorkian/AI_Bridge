@@ -31,7 +31,11 @@ jobs:
         run: node AI_OUTPUT/tests/security-regression-runner.mjs
       - name: Chrome extension structure
         run: node AI_OUTPUT/tests/chrome-extension-smoke.mjs
+      - name: Runtime review contract
+        run: node AI_OUTPUT/tests/runtime-review-contract.mjs
       - name: Classic runtime contract
         run: node AI_OUTPUT/tests/classic-runtime-contract.mjs
       - name: Chrome pack validation
         run: node AI_OUTPUT/tests/chrome-pack-smoke.mjs
+      - name: Runtime review pack validation
+        run: node AI_OUTPUT/tests/runtime-review-pack-smoke.mjs
