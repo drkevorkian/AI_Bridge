@@ -193,3 +193,27 @@ During DRAINING no new provider action may start, but an already-running respons
 After reload, every bound provider tab is reinjected through the packaged version-aware `content.js` lifecycle without refreshing the provider page. The new document registration must prove the same tab, provider, documentId, generation epoch, and conversation identity captured before mutation. Only then may the checkpoint reach READY_TO_RESUME.
 
 If the service worker dies at any checkpoint phase, the next worker resumes from that same durable phase. A build mismatch, authority mismatch, ambiguous delivery, parked response, provider recovery, or rollover activity fails closed into UPDATE_RECOVERY_FAILED.
+
+
+## Round 62B — native messaging transport
+
+The review implementation now includes:
+
+- `native_host.py` — bounded Chrome stdio framing and fixed `PING/CHECK/APPLY`
+  operations;
+- `install_native_host.py` — current-user Windows/macOS/Linux installer;
+- exact extension-origin validation in both the generated Chrome host manifest
+  and host runtime;
+- no message-controlled repository, ref, URL, or filesystem path;
+- service-worker-only `chrome.runtime.sendNativeMessage()` calls;
+- `APPLY` allowed only after the durable update checkpoint reaches
+  `CHECKPOINTED`.
+
+Windows uses a generated `.bat` launcher, matching Chromium's documented
+native-messaging sample pattern. macOS/Linux use an executable shell launcher.
+The installer binds the host to one exact Chrome extension ID and one exact
+extension root.
+
+The production release RSA public modulus is still intentionally unset.
+Therefore CHECK/APPLY continue to fail closed until the human-approved public
+key is pinned. PING can be used to verify installation independently.

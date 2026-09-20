@@ -542,6 +542,37 @@ function reviewTrustedExtensionPage(sender){
   if(sender?.documentLifecycle!=null&&String(sender.documentLifecycle)!=="active")return false;
   return true;
 }
+const REVIEW_NATIVE_UPDATER_HOST="com.aibridge.updater";
+async function reviewSendNativeUpdater(command,payload={}){
+  const op=String(command||"").toUpperCase();
+  if(!["PING","CHECK","APPLY"].includes(op))return {ok:false,reason:"NATIVE_UPDATE_COMMAND_REJECTED"};
+  const message=op==="APPLY"
+    ? {command:op,checkpointId:String(payload.checkpointId||"")}
+    : {command:op};
+  if(op==="APPLY"&&!message.checkpointId)return {ok:false,reason:"NATIVE_UPDATE_CHECKPOINT_REQUIRED"};
+  try{
+    const result=await chrome.runtime.sendNativeMessage(REVIEW_NATIVE_UPDATER_HOST,message);
+    if(!result||typeof result!=="object")return {ok:false,reason:"NATIVE_UPDATE_RESPONSE_INVALID"};
+    return result;
+  }catch(error){
+    return {ok:false,reason:"NATIVE_UPDATE_HOST_UNAVAILABLE",error:error?.message||String(error)};
+  }
+}
+async function reviewNativeApplyCheckpoint(){
+  const cp=state.updateCheckpoint;
+  if(!cp||cp.phase!==UPDATE_PHASE.CHECKPOINTED)return {ok:false,reason:"UPDATE_NOT_CHECKPOINTED"};
+  const result=await reviewSendNativeUpdater("APPLY",{checkpointId:cp.checkpointId});
+  if(result?.ok!==true)return result;
+  if(String(result.checkpointId||"")!==String(cp.checkpointId))return {ok:false,reason:"NATIVE_UPDATE_CHECKPOINT_MISMATCH"};
+  if(String(result.version||"")!==String(cp.targetVersion)||String(result.build||"")!==String(cp.targetBuild)){
+    return {ok:false,reason:"NATIVE_UPDATE_TARGET_MISMATCH"};
+  }
+  return reviewMarkUpdateApplied({
+    checkpointId:cp.checkpointId,
+    version:result.version,
+    build:result.build
+  });
+}
 const REVIEW_UI_CONTROL_TYPES=new Set([
   "AI_BRIDGE_POWER_SET",
   "AI_BRIDGE_AUTO_UPDATE_SET",
@@ -555,6 +586,9 @@ const REVIEW_UI_CONTROL_TYPES=new Set([
   "AI_BRIDGE_NEW_CHATS",
   "AI_BRIDGE_START",
   "AI_BRIDGE_UPDATE_RULES",
+  "AI_BRIDGE_UPDATE_NATIVE_PING",
+  "AI_BRIDGE_UPDATE_NATIVE_CHECK",
+  "AI_BRIDGE_UPDATE_NATIVE_APPLY",
   "AI_BRIDGE_MANUAL_RELAY",
   "AI_BRIDGE_PAUSE",
   "AI_BRIDGE_RESUME",
@@ -4478,6 +4512,18 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
     if (msg.type === "AI_BRIDGE_UPDATE_STATUS") {
       if(!reviewTrustedExtensionPage(sender)){sendResponse({ok:false,reason:"UPDATE_CONTROL_UNTRUSTED_SENDER"});return;}
       await stateReady;sendResponse({ok:true,checkpoint:state.updateCheckpoint?{...state.updateCheckpoint}:null,boundary:reviewUpdateBoundary()});return;
+    }
+    if (msg.type === "AI_BRIDGE_UPDATE_NATIVE_PING") {
+      if(!reviewTrustedExtensionPage(sender)){sendResponse({ok:false,reason:"UPDATE_CONTROL_UNTRUSTED_SENDER"});return;}
+      sendResponse(await reviewSendNativeUpdater("PING"));return;
+    }
+    if (msg.type === "AI_BRIDGE_UPDATE_NATIVE_CHECK") {
+      if(!reviewTrustedExtensionPage(sender)){sendResponse({ok:false,reason:"UPDATE_CONTROL_UNTRUSTED_SENDER"});return;}
+      sendResponse(await reviewSendNativeUpdater("CHECK"));return;
+    }
+    if (msg.type === "AI_BRIDGE_UPDATE_NATIVE_APPLY") {
+      if(!reviewTrustedExtensionPage(sender)){sendResponse({ok:false,reason:"UPDATE_CONTROL_UNTRUSTED_SENDER"});return;}
+      await stateReady;sendResponse(await reviewNativeApplyCheckpoint());return;
     }
 
     if (msg.type === "AI_BRIDGE_SETTINGS_OPEN") {

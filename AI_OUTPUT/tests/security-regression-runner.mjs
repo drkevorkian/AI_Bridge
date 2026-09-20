@@ -39,6 +39,7 @@ const tests=[
   'round55-narrow-header-and-manual-chat-wording.mjs',
   'round56-pending-navigation-commit-barrier.mjs',
   'update-system-atomic.mjs',
+  'round62-native-messaging-updater.mjs',
   'round42-content-runtime-lifecycle.mjs',
   'round43-next-turn-adoption.mjs',
   'round44-restart-delivery-recovery.mjs',
