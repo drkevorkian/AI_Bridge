@@ -5,6 +5,7 @@ const MIN_AGENT_COUNT = 1;
 const MAX_AGENT_COUNT = ALL_SIDES.length;
 const SIDES = ALL_SIDES.slice(0, DEFAULT_AGENT_COUNT);
 const STATE_VERSION = 3;
+const HUMAN_TEST_BUILD = String(chrome.runtime.getManifest().version_name || chrome.runtime.getManifest().version || "unknown");
 const CONTENT_VERSION = "1.18.0-review.4";
 const WORK_MODES = new Set(["relay", "collaborate", "compete", "parallel", "review", "mesh"]);
 const INFINITE_TURNS = -1;
@@ -632,8 +633,12 @@ async function reviewContinueAfterCommittedResponse(sourceSide) {
     });
     return { ok: true, direct: Boolean(pending.direct), targetSide: pending.targetSide };
   } catch (error) {
-    await pauseBridge("Could not send recovered next turn to AI " + pending.targetSide + ": " + (error?.message || error));
-    return { ok: false, error: error?.message || String(error) };
+    const message = error?.message || String(error);
+    await pauseBridge(
+      "Could not send recovered next turn to AI " + pending.targetSide +
+      ": " + message + " [build=" + HUMAN_TEST_BUILD + "; package=AI_INPUT]"
+    );
+    return { ok: false, error: message, build: HUMAN_TEST_BUILD, package: "AI_INPUT" };
   }
 }
 async function reviewProcessIncomingEnvelope(envelope, { fromParked = false } = {}) {
