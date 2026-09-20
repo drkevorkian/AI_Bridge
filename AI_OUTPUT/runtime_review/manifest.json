@@ -2,7 +2,7 @@
   "manifest_version": 3,
   "name": "AI Bridge Review",
   "version": "1.19.1",
-  "description": "AI Bridge reviewed playground build 1.19.1.17-AI-B with idempotent crash-safe fresh-chat navigation at the rollover boundary.",
+  "description": "AI Bridge reviewed playground build 1.19.1.18-AI-A with pending-navigation-safe rollover recovery, expandable narrow headers, and accurate manual New Chat UX.",
   "permissions": [
     "tabs",
     "storage",
@@ -68,5 +68,5 @@
   "content_security_policy": {
     "extension_pages": "script-src 'self'; object-src 'none'; base-uri 'none'; frame-ancestors 'none'"
   },
-  "version_name": "1.19.1.17-AI-B"
+  "version_name": "1.19.1.18-AI-A"
 }
