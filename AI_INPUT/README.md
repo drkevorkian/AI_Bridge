@@ -1,6 +1,6 @@
-# AI Bridge — AI A 1.19.0 Human Test 2
+# AI Bridge — Human Test Build (AI A 1.18.1)
 
-This folder is a runnable **unpacked Chrome extension** copied from the reviewed `AI_OUTPUT/runtime_review/` candidate at commit `0e86d9b4130053cb4b9247fa92bc3275fb9b2d8a`.
+This folder is a runnable **unpacked Chrome extension** promoted from the reviewed `AI_OUTPUT/runtime_review/` candidate.
 
 It is intentionally separate from the production/root extension. Production work is paused while this build is under human testing.
 
@@ -22,7 +22,7 @@ Classic defaults to a three-pane desktop layout:
 - **Center:** Shared transcript.
 - **Right:** Human Interjection at the top, followed by the remaining controls, Vault, work strategy, sources, limits, and suppressed requests.
 
-Studio and Focus restore the original two-pane arrangement.
+Studio is a full two-pane workspace with all controls on the left. Focus is transcript-first: it keeps only the brand/Settings and Runtime controls in a narrow left rail so the transcript gets most of the screen.
 
 ## Human-test priorities
 
@@ -50,21 +50,9 @@ For every issue, record:
 
 Do not test against valuable/irreversible provider actions. This is a human-test build, not production integration.
 
+## AI A 1.18.1 fixes
 
-## Human-test fixes in 1.19.0
-
-- Dashboard → Settings and Settings → Dashboard now navigate in the same workspace tab.
-- Popup Settings reuses an existing AI Bridge Dashboard/Settings tab when one is already open.
-- Classic/Studio/Focus now share one consistent saved layout preference; Classic is the default when none exists.
-- Classic uses Runtime + Team on the left, transcript center, and Human Interjection first on the right.
-- The stray literal `\n` text has been removed from extension HTML.
-- Classic pane width settings now match the actual 20–42% runtime range with a 26% default.
-
-Build label: **AI A 1.19.0 Human Test 2**.
-
-
-### Workspace-tab navigation fix
-
-Dashboard and Settings now navigate within the same AI Bridge workspace tab. The popup also reuses an existing Dashboard/Settings workspace tab when possible, and background "Open Dashboard" requests convert an existing Settings workspace tab instead of opening a duplicate.
-
-This snapshot is **AI A 1.19.0 Human Test 2**.
+- Dashboard → Settings and Settings → Dashboard now reuse the current extension tab instead of spawning another tab.
+- Removed accidental literal `\\n` text from extension-page markup.
+- Classic is the consistent fallback dashboard layout; Studio, Classic, and Focus selections persist through local storage.
+- Settings confirms the saved dashboard layout before returning to Dashboard.

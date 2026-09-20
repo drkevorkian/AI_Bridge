@@ -17,19 +17,28 @@
       classicMovables.push({node,marker});
     }
   }
-  function syncClassicPanels(value){
+  function syncClassicPanels(layout){
     if(!classicRightPanel||!controlPanel) return;
-    if(value==="classic"){
+    if(layout==="classic"){
       classicRightPanel.hidden=false;
       const human=classicMovables.find(item=>item.node.classList?.contains("interject-panel"));
       if(human) classicRightPanel.appendChild(human.node);
-      for(const item of classicMovables) if(item!==human) classicRightPanel.appendChild(item.node);
+      for(const item of classicMovables){
+        if(item!==human) classicRightPanel.appendChild(item.node);
+      }
       return;
     }
-    for(const item of classicMovables) item.marker.parentNode?.insertBefore(item.node,item.marker.nextSibling);
+    for(const item of classicMovables){
+      item.marker.parentNode?.insertBefore(item.node,item.marker.nextSibling);
+    }
     classicRightPanel.hidden=true;
   }
-  function applyLayout(raw){const value=ALLOWED.has(raw)?raw:"classic";document.documentElement.dataset.layout=value;syncClassicPanels(value);return value}
+  function applyLayout(raw){
+    const value=ALLOWED.has(raw)?raw:"classic";
+    document.documentElement.dataset.layout=value;
+    syncClassicPanels(value);
+    return value;
+  }
   function applyWidth(raw){
     const value=clamp(raw);
     document.documentElement.style.setProperty("--bridge-control-width",value+"vw");
@@ -47,7 +56,11 @@
     if(changes[LAYOUT_KEY])applyLayout(changes[LAYOUT_KEY].newValue);
     if(changes[WIDTH_KEY])applyWidth(changes[WIDTH_KEY].newValue);
   });
-  document.getElementById("openSettings")?.addEventListener("click",()=>window.location.assign(chrome.runtime.getURL("settings.html")));
+  function navigateToExtensionPage(page) {
+    const url = chrome.runtime.getURL(page);
+    if (window.location.href !== url) window.location.assign(url);
+  }
+  document.getElementById("openSettings")?.addEventListener("click",()=>navigateToExtensionPage("settings.html"));
 
   const splitter=document.getElementById("paneSplitter");
   const shell=document.querySelector(".app-shell");

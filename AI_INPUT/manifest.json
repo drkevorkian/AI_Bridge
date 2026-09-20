@@ -1,8 +1,8 @@
 {
   "manifest_version": 3,
   "name": "AI Bridge Human Test",
-  "version": "1.19.0",
-  "description": "Human-test snapshot of AI A 1.19.0-dev.2 from AI_OUTPUT. Load AI_INPUT as an unpacked extension.",
+  "version": "1.18.1",
+  "description": "Human-test unpacked build promoted from the reviewed AI_OUTPUT candidate. Not production/root integration.",
   "permissions": [
     "tabs",
     "storage",
@@ -68,5 +68,5 @@
   "content_security_policy": {
     "extension_pages": "script-src 'self'; object-src 'none'; base-uri 'none'; frame-ancestors 'none'"
   },
-  "version_name": "AI A 1.19.0 Human Test 2"
+  "version_name": "AI A 1.18.1-human-test"
 }
