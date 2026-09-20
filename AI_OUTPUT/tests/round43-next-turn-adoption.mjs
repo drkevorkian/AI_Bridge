@@ -8,10 +8,14 @@ const bg=fs.readFileSync(path.join(here,"../runtime_review/background.js"),"utf8
 
 for(const token of [
   "async function reviewAdoptAwaitingRecoveredContinuation",
-  "record.status === DISPATCH_STATUS.AWAITING_RESPONSE",
+  "DISPATCH_STATUS.ACCEPTED",
+  "DISPATCH_STATUS.AWAITING_RESPONSE",
+  "DISPATCH_STATUS.DELIVERY_AMBIGUOUS",
+  "reviewReadContentActionProof(dispatch)",
+  "reviewLedger.recoverAcceptedAfterRestart",
+  "record.continuationSourceDispatchId",
+  "const sourceId = String(pending.sourceDispatchId)",
   "Number(record.createdAt) >= createdFloor",
-  "record.side === pending.targetSide",
-  "record.payloadHash === payloadHash",
   "Number(dispatch.tabId) !== Number(authority.tabId)",
   "Number(dispatch.generationEpoch) !== Number(authority.generationEpoch)",
   "!reviewSameIdentity(dispatch.conversationIdentity, authority.identity)",
@@ -19,6 +23,7 @@ for(const token of [
   'state.runtimePhase = "AWAITING_PROVIDER_RESPONSE"',
   "alreadySent: true",
   "const adopted = await reviewAdoptAwaitingRecoveredContinuation(pending)",
+  "if (adopted?.blocked)",
   "if (adopted) return adopted"
 ]) assert.ok(bg.includes(token),"missing recovery adoption invariant: "+token);
 
@@ -27,12 +32,17 @@ const helperEnd=bg.indexOf("\nasync function reviewRecoverNextTurnPending",helpe
 assert.ok(helperStart>=0&&helperEnd>helperStart,"adoption helper block missing");
 const helper=bg.slice(helperStart,helperEnd);
 
-assert.doesNotMatch(helper,/DISPATCH_STATUS\.(DISPATCHING|ACCEPTED|DELIVERY_AMBIGUOUS)/,
-  "only proven AWAITING_RESPONSE dispatches may be adopted");
+assert.doesNotMatch(helper,/candidateStatuses[\s\S]{0,220}DISPATCH_STATUS\.DISPATCHING/,
+  "DISPATCHING may not be adopted without first becoming restart ambiguity");
 assert.ok(
   helper.indexOf("reviewRegisterSideAuthority") <
   helper.indexOf("reviewClearNextTurnPending"),
   "current provider authority must be proven before clearing durable continuation"
+);
+assert.ok(
+  helper.indexOf("reviewReadContentActionProof(dispatch)") <
+  helper.indexOf("reviewLedger.recoverAcceptedAfterRestart(dispatch.dispatchId"),
+  "content proof must precede restart-ambiguous ledger recovery"
 );
 
 const continuationStart=bg.indexOf("async function reviewContinueAfterCommittedResponse");
@@ -43,6 +53,10 @@ assert.ok(
   continuation.indexOf("reviewAdoptAwaitingRecoveredContinuation(pending)") <
   continuation.indexOf("await sendToSide(pending.targetSide"),
   "recovery must attempt adoption before any replay"
+);
+assert.ok(
+  continuation.includes("No duplicate prompt was sent."),
+  "blocked recovery must explicitly preserve no-replay behavior"
 );
 
 console.log("round43-next-turn-adoption: PASS");
