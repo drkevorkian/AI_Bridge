@@ -5,7 +5,19 @@ const PURPOSES=new Set(["INITIAL","RELAY","DIRECT","MANUAL","CONTINUITY","HUMAN_
 const TRANSITIONS=Object.freeze({CREATED:new Set(["DISPATCHING","FAILED"]),DISPATCHING:new Set(["ACCEPTED","DELIVERY_AMBIGUOUS","FAILED"]),ACCEPTED:new Set(["AWAITING_RESPONSE","DELIVERY_AMBIGUOUS","FAILED"]),AWAITING_RESPONSE:new Set(["RESPONSE_COMMITTED","DELIVERY_AMBIGUOUS","FAILED"]),RESPONSE_COMMITTED:new Set(),DELIVERY_AMBIGUOUS:new Set(["FAILED"]),FAILED:new Set()});
 function requireText(value,name){const t=String(value??"").trim();if(!t)throw new TypeError(`${name} must be a non-empty string.`);return t;}
 function requireInt(value,name,min=0){const n=Number(value);if(!Number.isInteger(n)||n<min)throw new TypeError(`${name} must be an integer >= ${min}.`);return n;}
-function freezeRecord(r){return Object.freeze({...r,conversationIdentity:r.conversationIdentity});}
+function validateLifecycle(r){
+  const{status,createdAt,acceptedAt,completedAt}=r;
+  if(acceptedAt!==null&&acceptedAt<createdAt)throw new Error("acceptedAt cannot precede createdAt.");
+  if(completedAt!==null&&acceptedAt===null)throw new Error("completedAt requires acceptedAt.");
+  if(completedAt!==null&&completedAt<acceptedAt)throw new Error("completedAt cannot precede acceptedAt.");
+  if(status===DISPATCH_STATUS.CREATED&&(acceptedAt!==null||completedAt!==null))throw new Error("CREATED cannot have acceptance/completion timestamps.");
+  if(status===DISPATCH_STATUS.DISPATCHING&&completedAt!==null)throw new Error("DISPATCHING cannot have completedAt.");
+  if([DISPATCH_STATUS.ACCEPTED,DISPATCH_STATUS.AWAITING_RESPONSE].includes(status)&&(acceptedAt===null||completedAt!==null))throw new Error(`${status} requires acceptedAt and no completedAt.`);
+  if(status===DISPATCH_STATUS.RESPONSE_COMMITTED&&(acceptedAt===null||completedAt===null))throw new Error("RESPONSE_COMMITTED requires acceptedAt and completedAt.");
+  if(status===DISPATCH_STATUS.DELIVERY_AMBIGUOUS&&completedAt!==null)throw new Error("DELIVERY_AMBIGUOUS cannot have completedAt.");
+  return r;
+}
+function freezeRecord(r){return Object.freeze({...validateLifecycle(r),conversationIdentity:r.conversationIdentity});}
 class DispatchLedger{
  constructor(records=[]){this._records=new Map();for(const r of records)this.restore(r);}
  create({dispatchId,side,tabId,generationEpoch,conversationIdentity,purpose,payloadHash,createdAt=Date.now()}={}){const id=requireText(dispatchId,"dispatchId");if(this._records.has(id))throw new Error(`Dispatch ${id} already exists.`);const p=requireText(purpose,"purpose").toUpperCase();if(!PURPOSES.has(p))throw new TypeError(`Unsupported dispatch purpose: ${p}`);const r=freezeRecord({dispatchId:id,side:requireText(side,"side").toUpperCase(),tabId:requireInt(tabId,"tabId",1),generationEpoch:requireInt(generationEpoch,"generationEpoch",0),conversationIdentity:sanitizeIdentity(conversationIdentity),purpose:p,payloadHash:requireText(payloadHash,"payloadHash"),status:DISPATCH_STATUS.CREATED,createdAt:requireInt(createdAt,"createdAt",0),acceptedAt:null,completedAt:null,failureReason:""});this._records.set(id,r);return r;}
