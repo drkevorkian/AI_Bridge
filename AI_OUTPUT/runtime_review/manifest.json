@@ -2,7 +2,7 @@
   "manifest_version": 3,
   "name": "AI Bridge Review",
   "version": "1.19.1",
-  "description": "AI B reviewed AI_OUTPUT playground build v1.19.1. Not production/root integration.",
+  "description": "AI Bridge AI_OUTPUT playground build 1.19.1.03-AI-B. Classic workspace only.",
   "permissions": [
     "tabs",
     "storage",
@@ -68,5 +68,5 @@
   "content_security_policy": {
     "extension_pages": "script-src 'self'; object-src 'none'; base-uri 'none'; frame-ancestors 'none'"
   },
-  "version_name": "AI B 1.19.1-playground"
+  "version_name": "1.19.1.03-AI-B"
 }

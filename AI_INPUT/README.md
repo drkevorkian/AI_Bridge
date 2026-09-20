@@ -1,4 +1,4 @@
-# AI Bridge — Human Test Build (AI B 1.19.1)
+# AI Bridge — Human Test Build 1.19.1.03-AI-B
 
 This folder is a runnable **unpacked Chrome extension** promoted from the reviewed `AI_OUTPUT/runtime_review/` candidate.
 
@@ -22,7 +22,7 @@ Classic defaults to a three-pane desktop layout:
 - **Center:** Shared transcript.
 - **Right:** Human Interjection at the top, followed by the remaining controls, Vault, work strategy, sources, limits, and suppressed requests.
 
-Studio is a full two-pane workspace with all controls on the left. Focus is transcript-first: it keeps only the brand/Settings and Runtime controls in a narrow left rail so the transcript gets most of the screen.
+Classic is the only workspace layout.
 
 ## Human-test priorities
 
@@ -58,12 +58,18 @@ Do not test against valuable/irreversible provider actions. This is a human-test
 - Settings confirms the saved dashboard layout before returning to Dashboard.
 
 
-## Workspace themes in v1.19.1
 
-Classic, Studio, and Focus are intentionally different workspace compositions that share the same AI Bridge color themes, typography, cards, buttons, and controls.
 
-- **Classic — three-pane control room:** Runtime + Team on the left, transcript in the center, Human Interjection and secondary controls on the right.
-- **Studio — transcript left, controls right:** the conversation becomes the primary left workspace while the complete configuration/control dock moves to the right.
-- **Focus — full-screen transcript + runtime rail:** the transcript takes essentially the full browser window. A compact floating rail keeps only Settings and Runtime controls visible.
 
-The pane splitter follows the active workspace theme: Classic resizes the left controls; Studio resizes the right control dock; Focus hides the splitter because the transcript is full-screen.
+## Build identification
+
+Chrome extension version: **1.19.1**
+
+AI Bridge build/subversion: **1.19.1.03-AI-B**
+
+The numeric Chrome version stays standards-compatible. The build/subversion string increments independently so human testing can confirm exactly which AI-produced build is loaded.
+
+
+## Classic-only workspace
+
+Classic is the sole supported workspace composition for this test line. Older stored Studio or Focus selections are automatically migrated to Classic. Color themes remain available independently.
