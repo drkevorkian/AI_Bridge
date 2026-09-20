@@ -201,20 +201,27 @@ function reviewCloneRolloverContexts(raw) {
   return out;
 }
 
+function reviewActiveRolloverSummaries() {
+  return reviewRollover.snapshot()
+    .filter(tx => !["COMPLETE", "FAILED"].includes(tx.phase))
+    .sort((a, b) => Number(a.startedAt || 0) - Number(b.startedAt || 0))
+    .map(tx => Object.freeze({
+      active: true,
+      rolloverId: tx.rolloverId,
+      side: tx.side,
+      provider: tx.provider,
+      phase: tx.phase,
+      previousTitle: tx.continuityPayload?.previousTitle || null,
+      nextTitle: tx.continuityPayload?.nextTitle || null,
+      startedAt: tx.startedAt,
+      updatedAt: tx.updatedAt
+    }));
+}
+
 function reviewActiveRolloverSummary() {
-  const tx = reviewRollover.snapshot().find(item => !["COMPLETE", "FAILED"].includes(item.phase));
-  if (!tx) return null;
-  return Object.freeze({
-    active: true,
-    rolloverId: tx.rolloverId,
-    side: tx.side,
-    provider: tx.provider,
-    phase: tx.phase,
-    previousTitle: tx.continuityPayload?.previousTitle || null,
-    nextTitle: tx.continuityPayload?.nextTitle || null,
-    startedAt: tx.startedAt,
-    updatedAt: tx.updatedAt
-  });
+  const summaries = reviewActiveRolloverSummaries();
+  if (!summaries.length) return null;
+  return Object.freeze({ ...summaries[0], count: summaries.length });
 }
 
 async function reviewPersistRollover() {
@@ -1996,9 +2003,11 @@ function appendLog(entry) {
 }
 
 function clientStateSnapshot({ includeSources = false, afterSeq = null, omitTranscript = false } = {}) {
+  const activeRollovers = reviewActiveRolloverSummaries();
   const snapshot = {
     ...state,
-    threadRollover: reviewActiveRolloverSummary(),
+    threadRollover: activeRollovers.length ? { ...activeRollovers[0], count: activeRollovers.length } : null,
+    threadRollovers: activeRollovers.map(item => ({ ...item })),
     history: {
       jobs: history.jobs.map(item => ({ ...item })),
       commands: history.commands.map(item => ({ ...item }))
@@ -2190,16 +2199,19 @@ async function loadState() {
   await reviewRuntimeReady;
   const updateRestore=await reviewRestoreUpdateCheckpoint();
 
-  const startupRollover = reviewActiveRolloverSummary();
-  if (startupRollover && state.sessionActive) {
+  const startupRollovers = reviewActiveRolloverSummaries();
+  if (startupRollovers.length && state.sessionActive) {
     if (blocksDispatch(state.updateCheckpoint)) {
-      reviewRecoveryPauseReason = "An active thread rollover cannot resume while the live-update checkpoint blocks provider actions.";
+      reviewRecoveryPauseReason = "Active thread rollover cannot resume while the live-update checkpoint blocks provider actions.";
     } else {
-      try {
-        await reviewQueueRollover(() => reviewResumeThreadRollover(startupRollover.side));
-      } catch (error) {
-        await reviewFailThreadRollover(startupRollover.side, error);
-        reviewRecoveryPauseReason = state.pauseReason;
+      for (const startupRollover of startupRollovers) {
+        try {
+          await reviewQueueRollover(() => reviewResumeThreadRollover(startupRollover.side));
+        } catch (error) {
+          await reviewFailThreadRollover(startupRollover.side, error);
+          reviewRecoveryPauseReason = state.pauseReason;
+          break;
+        }
       }
     }
   }
@@ -4573,6 +4585,22 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
       state.pauseReason = "";
       await clearAttention();
       await saveState();
+
+      const activeRollovers = reviewActiveRolloverSummaries();
+      if (activeRollovers.length) {
+        const resumed = [];
+        for (const rollover of activeRollovers) {
+          try {
+            const result = await reviewQueueRollover(() => reviewResumeThreadRollover(rollover.side));
+            resumed.push({ side: rollover.side, ...result });
+          } catch (error) {
+            await reviewFailThreadRollover(rollover.side, error);
+            throw error;
+          }
+        }
+        sendResponse({ ok:true, recoveredRollovers:resumed.length, rollovers:resumed });
+        return;
+      }
 
       if (state.nextTurnPending) {
         const recovered=await reviewRecoverNextTurnPending();
