@@ -164,11 +164,30 @@ async function reviewInitializeDurableRuntime() {
 
   let changed = false;
   for (const record of reviewLedger.snapshot()) {
-    if (record.status === DISPATCH_STATUS.DISPATCHING || record.status === DISPATCH_STATUS.ACCEPTED) {
+    if (record.status === DISPATCH_STATUS.ACCEPTED) {
+      // ACCEPTED means the isolated content runtime already returned
+      // ACTION_CONFIRMED. A service-worker restart cannot make that proven
+      // provider action ambiguous; resume waiting for its response.
+      reviewLedger.recoverAcceptedAfterRestart(record.dispatchId);
+      changed = true;
+      continue;
+    }
+    if (record.status === DISPATCH_STATUS.DELIVERY_AMBIGUOUS &&
+        record.failureReason === "MV3_WORKER_RESTART_DURING_DELIVERY" &&
+        record.acceptedAt != null) {
+      // Repair state written by older review builds that incorrectly
+      // downgraded a proven ACCEPTED dispatch during worker startup.
+      reviewLedger.recoverAcceptedAfterRestart(record.dispatchId);
+      changed = true;
+      continue;
+    }
+    if (record.status === DISPATCH_STATUS.DISPATCHING) {
+      // No background acceptance was persisted. Preserve exactly-once safety
+      // and require content-side action proof before this can be reopened.
       reviewLedger.transition(record.dispatchId, DISPATCH_STATUS.DELIVERY_AMBIGUOUS, {
         failureReason: "MV3_WORKER_RESTART_DURING_DELIVERY"
       });
-      reviewRecoveryPauseReason = "A provider delivery was interrupted by a service-worker restart and may already have been sent. Automatic replay is blocked.";
+      reviewRecoveryPauseReason = "A provider delivery was interrupted before background acceptance was persisted. AI Bridge will query the surviving content runtime for exact action proof before any recovery.";
       changed = true;
     }
   }
@@ -501,6 +520,39 @@ async function reviewRestoreUpdateCheckpoint(){
   return {active:true,phase:state.updateCheckpoint?.phase||null};
 }
 
+async function reviewReadContentActionProof(dispatch) {
+  if (!dispatch || !Number.isInteger(Number(dispatch.tabId))) return null;
+  let response;
+  try {
+    response = await chrome.tabs.sendMessage(Number(dispatch.tabId), {
+      type: "AI_BRIDGE_ACTION_STATUS",
+      action: "SEND",
+      authorityId: String(dispatch.dispatchId)
+    });
+  } catch (_) {
+    return null;
+  }
+  if (
+    response?.ok !== true ||
+    response.found !== true ||
+    String(response.action || "").toUpperCase() !== "SEND" ||
+    String(response.authorityId || "") !== String(dispatch.dispatchId) ||
+    String(response.result?.outcome || "") !== "ACTION_CONFIRMED" ||
+    String(response.side || "").toUpperCase() !== String(dispatch.side || "").toUpperCase() ||
+    Number(response.generationEpoch) !== Number(dispatch.generationEpoch) ||
+    !reviewSameIdentity(response.conversationIdentity, dispatch.conversationIdentity)
+  ) return null;
+
+  return {
+    authorityId: String(dispatch.dispatchId),
+    action: "SEND",
+    outcome: "ACTION_CONFIRMED",
+    side: String(dispatch.side),
+    generationEpoch: Number(dispatch.generationEpoch),
+    conversationIdentity: { ...response.conversationIdentity }
+  };
+}
+
 async function reviewAdoptAwaitingRecoveredContinuation(pending) {
   if (
     !pending ||
@@ -511,22 +563,61 @@ async function reviewAdoptAwaitingRecoveredContinuation(pending) {
 
   const payloadHash = await reviewPayloadHash(pending.targetSide, pending.outgoing.text);
   const createdFloor = Number(pending.createdAt) || 0;
-  const candidates = reviewLedger.snapshot().filter(record =>
+  const candidateStatuses = new Set([
+    DISPATCH_STATUS.ACCEPTED,
+    DISPATCH_STATUS.AWAITING_RESPONSE,
+    DISPATCH_STATUS.DELIVERY_AMBIGUOUS
+  ]);
+  let candidates = reviewLedger.snapshot().filter(record =>
     record.side === pending.targetSide &&
     record.payloadHash === payloadHash &&
-    record.status === DISPATCH_STATUS.AWAITING_RESPONSE &&
+    candidateStatuses.has(record.status) &&
     Number(record.createdAt) >= createdFloor
   );
-  if (candidates.length !== 1) return null;
+  if (!candidates.length) return null;
+  if (candidates.length !== 1) {
+    return {
+      blocked: true,
+      reason: "RECOVERED_CONTINUATION_MULTIPLE_TARGET_DISPATCHES"
+    };
+  }
 
-  const dispatch = candidates[0];
+  let dispatch = candidates[0];
+  if (dispatch.status === DISPATCH_STATUS.ACCEPTED) {
+    dispatch = reviewLedger.recoverAcceptedAfterRestart(dispatch.dispatchId);
+    await reviewPersistLedger();
+  } else if (
+    dispatch.status === DISPATCH_STATUS.DELIVERY_AMBIGUOUS &&
+    dispatch.failureReason === "MV3_WORKER_RESTART_DURING_DELIVERY"
+  ) {
+    let proof = null;
+    if (dispatch.acceptedAt == null) {
+      proof = await reviewReadContentActionProof(dispatch);
+      if (!proof) {
+        return {
+          blocked: true,
+          reason: "RESTART_DELIVERY_AMBIGUOUS_NO_CONTENT_PROOF"
+        };
+      }
+    }
+    dispatch = reviewLedger.recoverAcceptedAfterRestart(dispatch.dispatchId, {
+      contentProof: proof,
+      recoveredAt: Date.now()
+    });
+    await reviewPersistLedger();
+  }
+
+  if (dispatch.status !== DISPATCH_STATUS.AWAITING_RESPONSE) {
+    return { blocked: true, reason: "RECOVERED_CONTINUATION_NOT_AWAITING_RESPONSE" };
+  }
+
   const authority = await reviewRegisterSideAuthority(pending.targetSide);
   if (
     Number(dispatch.tabId) !== Number(authority.tabId) ||
     Number(dispatch.generationEpoch) !== Number(authority.generationEpoch) ||
     !reviewSameIdentity(dispatch.conversationIdentity, authority.identity)
   ) {
-    return null;
+    return { blocked: true, reason: "RECOVERED_CONTINUATION_AUTHORITY_MISMATCH" };
   }
 
   await reviewClearNextTurnPending(pending.sourceDispatchId);
@@ -625,6 +716,12 @@ async function reviewContinueAfterCommittedResponse(sourceSide) {
     // accepted and persisted as AWAITING_RESPONSE but before nextTurnPending
     // was cleared. Adopt that exact dispatch instead of attempting a replay.
     const adopted = await reviewAdoptAwaitingRecoveredContinuation(pending);
+    if (adopted?.blocked) {
+      await reviewPauseForAmbiguity(
+        "Recovered next turn for AI " + pending.targetSide + " remains blocked: " + adopted.reason + ". No duplicate prompt was sent."
+      );
+      return { ok: false, paused: true, error: adopted.reason };
+    }
     if (adopted) return adopted;
 
     const outgoing = pending.outgoing;
