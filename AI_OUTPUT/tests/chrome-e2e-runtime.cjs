@@ -881,9 +881,21 @@ async function main() {
       try { await cdp.send('Target.closeTarget', { targetId: page.targetId }, undefined, 1000); } catch {}
     }
     try { await cdp.send('Browser.close', {}, undefined, 1000); } catch {}
-    if (!proc.killed) proc.kill('SIGTERM');
-    await Promise.race([new Promise(resolve => proc.once('exit', resolve)), sleep(2000)]);
-    fs.rmSync(profile, { recursive: true, force: true });
+    if (proc.exitCode === null && !proc.killed) {
+      try { proc.kill('SIGTERM'); } catch {}
+    }
+    if (proc.exitCode === null) {
+      await Promise.race([new Promise(resolve => proc.once('exit', resolve)), sleep(2500)]);
+    }
+    if (proc.exitCode === null) {
+      try { proc.kill('SIGKILL'); } catch {}
+      await Promise.race([new Promise(resolve => proc.once('exit', resolve)), sleep(1500)]);
+    }
+    try {
+      fs.rmSync(profile, { recursive: true, force: true, maxRetries: 20, retryDelay: 100 });
+    } catch (cleanupError) {
+      console.warn('chrome-e2e-runtime: cleanup warning:', cleanupError?.message || cleanupError);
+    }
   }
 }
 
