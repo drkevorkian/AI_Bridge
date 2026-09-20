@@ -814,10 +814,10 @@ function rolloverStatusText(s) {
     : (to || from || ("AI " + (rollover.side || "?") + " continuation"));
   const phase = String(rollover.phase || "");
   const detail = ({
-    LIMIT_DETECTED: "Conversation limit detected. Freezing relay progression…",
+    LIMIT_DETECTED: "Conversation limit reached. Preparing a seamless continuation…",
     FINAL_RESPONSE_COMMITTED: "Final response saved.",
     CONTINUITY_PREPARED: "Continuity context prepared.",
-    OLD_AUTHORITY_REVOKED: "Previous conversation closed to new relay actions.",
+    OLD_AUTHORITY_REVOKED: "Previous conversation safely finalized.",
     OPENING_NEW_CHAT: "Opening continuation chat…",
     AWAITING_NEW_IDENTITY: "Verifying the new conversation…",
     NEW_IDENTITY_VERIFIED: "New conversation verified.",
