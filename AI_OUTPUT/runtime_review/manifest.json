@@ -2,7 +2,7 @@
   "manifest_version": 3,
   "name": "AI Bridge Review",
   "version": "1.19.1",
-  "description": "AI Bridge reviewed playground build 1.19.1.15-AI-B with pre-navigation rollover context verification and provider-canonical fresh-chat targeting.",
+  "description": "AI Bridge reviewed playground build 1.19.1.16-AI-A with canonical provider-derived rollover navigation, pre-revocation integrity verification, and very-narrow Classic wrapping.",
   "permissions": [
     "tabs",
     "storage",
@@ -68,5 +68,5 @@
   "content_security_policy": {
     "extension_pages": "script-src 'self'; object-src 'none'; base-uri 'none'; frame-ancestors 'none'"
   },
-  "version_name": "1.19.1.15-AI-B"
+  "version_name": "1.19.1.16-AI-A"
 }
