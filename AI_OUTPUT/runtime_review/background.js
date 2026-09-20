@@ -3370,7 +3370,9 @@ function reviewAuthorizeThreadLimit(msg, sender) {
   if (evidence?.state !== "HARD_THREAD_LIMIT" || evidence?.automaticRollover !== true) {
     return { ok:false, reason:"THREAD_LIMIT_EVIDENCE_REJECTED", evidence };
   }
-  return { ok:true, side, tabId, provider:authority.provider, authority, dispatch, dispatchId, observation, evidence };
+  const preSendAssistantText=String(msg?.preSendAssistantText||"").trim();
+  if(preSendAssistantText.length>200000) return {ok:false,reason:"THREAD_LIMIT_PROVIDER_SNAPSHOT_TOO_LARGE"};
+  return { ok:true, side, tabId, provider:authority.provider, authority, dispatch, dispatchId, observation, evidence, preSendAssistantText };
 }
 
 async function reviewCreateOrReuseContinuityDispatch(side) {
@@ -3550,6 +3552,19 @@ async function reviewResumeThreadRollover(side) {
     if (!context || String(context.rolloverId || "") !== String(tx.rolloverId)) throw new Error("ROLLOVER_CONTEXT_MISSING");
 
     if (tx.phase === ROLLOVER_PHASE.LIMIT_DETECTED) {
+      if(context.finalResponseAnchorKind==="PROVIDER_SNAPSHOT"){
+        const snapshotHash=await reviewPayloadHash(side,context.lastAssistantMessage);
+        if(snapshotHash!==context.providerSnapshotHash) throw new Error("ROLLOVER_PROVIDER_SNAPSHOT_HASH_MISMATCH");
+        tx=reviewRolloverOrchestrator.anchorProviderSnapshot({
+          side,
+          contentHash:snapshotHash,
+          observedAt:context.providerSnapshotObservedAt,
+          conversationIdentity:context.providerSnapshotIdentity,
+          now:Date.now()
+        });
+        await reviewPublishRolloverPhase(tx,"Pre-send provider response snapshot anchored before rollover.");
+        continue;
+      }
       const finalDispatch = reviewLedger.get(context.finalResponseDispatchId);
       if (!finalDispatch || finalDispatch.status !== DISPATCH_STATUS.RESPONSE_COMMITTED) {
         throw new Error("ROLLOVER_FINAL_RESPONSE_NOT_COMMITTED");
@@ -3717,8 +3732,21 @@ async function reviewHandleThreadLimit(msg, sender) {
     if (pendingHash !== trigger.payloadHash) throw new Error("ROLLOVER_PENDING_PROMPT_HASH_MISMATCH");
 
     const finalDispatch = reviewLatestCommittedDispatchBefore(authorized.side, trigger.createdAt);
-    if (!finalDispatch) throw new Error("ROLLOVER_NO_PRIOR_COMMITTED_RESPONSE");
-    const lastAssistantMessage = reviewLastAssistantResponseForSide(authorized.side);
+    let finalResponseAnchorKind="DISPATCH";
+    let lastAssistantMessage=reviewLastAssistantResponseForSide(authorized.side);
+    let providerSnapshotHash=null;
+    let providerSnapshotObservedAt=null;
+    let providerSnapshotIdentity=null;
+
+    if(!finalDispatch){
+      const snapshotText=String(authorized.preSendAssistantText||"").trim();
+      if(!snapshotText) throw new Error("ROLLOVER_NO_PRIOR_COMMITTED_RESPONSE_OR_PROVIDER_SNAPSHOT");
+      finalResponseAnchorKind="PROVIDER_SNAPSHOT";
+      lastAssistantMessage=snapshotText;
+      providerSnapshotHash=await reviewPayloadHash(authorized.side,snapshotText);
+      providerSnapshotObservedAt=Number(msg?.observedAt)||Date.now();
+      providerSnapshotIdentity=reviewSanitizeIdentity(authorized.authority.identity);
+    }
     if (!lastAssistantMessage) throw new Error("ROLLOVER_LAST_ASSISTANT_RESPONSE_MISSING");
 
     const tab = await chrome.tabs.get(authorized.tabId);
@@ -3740,7 +3768,11 @@ async function reviewHandleThreadLimit(msg, sender) {
       schema:1,
       rolloverId,
       triggeringDispatchId:trigger.dispatchId,
-      finalResponseDispatchId:finalDispatch.dispatchId,
+      finalResponseDispatchId:finalDispatch?.dispatchId||null,
+      finalResponseAnchorKind,
+      providerSnapshotHash,
+      providerSnapshotObservedAt,
+      providerSnapshotIdentity,
       pendingPrompt,
       pendingPromptHash:trigger.payloadHash,
       lastAssistantMessage,

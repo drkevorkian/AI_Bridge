@@ -167,6 +167,7 @@ const PHASE=Object.freeze({
   FAILED:"FAILED"
 });
 const TRIGGER_MODE=Object.freeze({AUTO:"AUTO",MANUAL:"MANUAL"});
+const FINAL_RESPONSE_ANCHOR_KIND=Object.freeze({DISPATCH:"DISPATCH",PROVIDER_SNAPSHOT:"PROVIDER_SNAPSHOT"});
 const TRANSITIONS=Object.freeze({
   [PHASE.IDLE]:new Set([PHASE.LIMIT_DETECTED]),
   [PHASE.LIMIT_DETECTED]:new Set([PHASE.FINAL_RESPONSE_COMMITTED,PHASE.FAILED]),
@@ -216,6 +217,29 @@ function validateContinuityPayload(payload){
   if(previousTitle===nextTitle)throw new Error("continuityPayload must advance the conversation title.");
   return Object.freeze({...clone(payload),schema,provider,previousTitle,nextTitle,lastAssistantMessage});
 }
+function validateFinalResponseAnchor(raw,provider){
+  if(!raw||typeof raw!=="object"||Array.isArray(raw))throw new TypeError("finalResponseAnchor must be an object.");
+  const kind=text(raw.kind,"finalResponseAnchor.kind").toUpperCase();
+  if(!Object.values(FINAL_RESPONSE_ANCHOR_KIND).includes(kind))throw new TypeError("finalResponseAnchor.kind is invalid.");
+  if(kind===FINAL_RESPONSE_ANCHOR_KIND.DISPATCH){
+    return Object.freeze({
+      kind,
+      dispatchId:text(raw.dispatchId,"finalResponseAnchor.dispatchId"),
+      observedAt:finite(raw.observedAt,"finalResponseAnchor.observedAt")
+    });
+  }
+  const contentHash=text(raw.contentHash,"finalResponseAnchor.contentHash").toLowerCase();
+  if(!/^[a-f0-9]{64}$/.test(contentHash))throw new TypeError("finalResponseAnchor.contentHash must be a SHA-256 hex digest.");
+  const identity=sanitizeIdentity(raw.conversationIdentity);
+  if(identity.provider!==String(provider||"").toLowerCase())throw new Error("finalResponseAnchor provider mismatch.");
+  if(identity.kind!=="conversation"||identity.provisional||!identity.writable)throw new Error("provider snapshot anchor requires confirmed writable conversation identity.");
+  return Object.freeze({
+    kind,
+    contentHash,
+    observedAt:finite(raw.observedAt,"finalResponseAnchor.observedAt"),
+    conversationIdentity:identity
+  });
+}
 function authorityShouldBeRevoked(tx){const origin=tx.phase===PHASE.FAILED?tx.failureFromPhase:tx.phase;return !PRE_REVOCATION.has(origin);}
 function validatePhase(tx){
   const old=createConversationAuthority(tx.oldAuthority);
@@ -224,8 +248,13 @@ function validatePhase(tx){
   if(mustRevoke&&old.state!==AUTHORITY_STATES.REVOKED)throw new Error("rollover phase requires revoked oldAuthority.");
   if(!mustRevoke&&old.state!==AUTHORITY_STATES.CONFIRMED)throw new Error("pre-revocation phase requires confirmed oldAuthority.");
   if(FINAL_RESPONSE_REQUIRED.has(tx.phase)){
-    if(!tx.finalResponseDispatchId)throw new Error(`${tx.phase} requires finalResponseDispatchId.`);
+    const anchor=validateFinalResponseAnchor(tx.finalResponseAnchor,tx.provider);
     if(!Number.isFinite(Number(tx.finalResponseCommittedAt)))throw new Error(`${tx.phase} requires finalResponseCommittedAt.`);
+    if(anchor.kind===FINAL_RESPONSE_ANCHOR_KIND.DISPATCH){
+      if(!tx.finalResponseDispatchId||anchor.dispatchId!==tx.finalResponseDispatchId)throw new Error(`${tx.phase} dispatch anchor does not match finalResponseDispatchId.`);
+    }else if(tx.finalResponseDispatchId!==null){
+      throw new Error(`${tx.phase} provider snapshot anchor cannot claim a Bridge dispatch.`);
+    }
   }
   if(CONTINUITY_PAYLOAD_REQUIRED.has(tx.phase)){
     const payload=validateContinuityPayload(tx.continuityPayload);
@@ -245,7 +274,7 @@ function newTransaction({rolloverId,side,provider,triggeringDispatchId,oldAuthor
   return Object.freeze({
     rolloverId:text(rolloverId,"rolloverId"),side:s,provider:p,triggerMode:mode,
     phase:PHASE.LIMIT_DETECTED,triggeringDispatchId:text(triggeringDispatchId,"triggeringDispatchId"),
-    finalResponseDispatchId:null,finalResponseCommittedAt:null,continuityPayload:null,
+    finalResponseDispatchId:null,finalResponseAnchor:null,finalResponseCommittedAt:null,continuityPayload:null,
     continuityDispatchId:null,continuityStatus:null,oldAuthority:clone(old),candidateAuthority:null,
     hardLimitEvidence:validateEvidence(mode,hardLimitEvidence),startedAt:safeStartedAt,updatedAt:safeStartedAt,
     failureReason:"",failureFromPhase:null
@@ -270,6 +299,13 @@ class RolloverCoordinator{
       rolloverId:text(raw.rolloverId,"rolloverId"),side,provider,triggerMode:mode,phase,
       triggeringDispatchId:text(raw.triggeringDispatchId,"triggeringDispatchId"),
       finalResponseDispatchId:raw.finalResponseDispatchId==null?null:text(raw.finalResponseDispatchId,"finalResponseDispatchId"),
+      finalResponseAnchor:raw.finalResponseAnchor==null
+        ? (raw.finalResponseDispatchId==null?null:{
+            kind:FINAL_RESPONSE_ANCHOR_KIND.DISPATCH,
+            dispatchId:text(raw.finalResponseDispatchId,"finalResponseDispatchId"),
+            observedAt:finite(raw.finalResponseCommittedAt??raw.updatedAt,"finalResponseAnchor.observedAt")
+          })
+        : clone(validateFinalResponseAnchor(raw.finalResponseAnchor,provider)),
       finalResponseCommittedAt:raw.finalResponseCommittedAt==null?null:finite(raw.finalResponseCommittedAt,"finalResponseCommittedAt"),
       continuityPayload:raw.continuityPayload==null?null:clone(validateContinuityPayload(raw.continuityPayload)),
       continuityDispatchId:raw.continuityDispatchId==null?null:text(raw.continuityDispatchId,"continuityDispatchId"),
@@ -289,12 +325,21 @@ class RolloverCoordinator{
     if(!TRANSITIONS[cur.phase].has(next))throw new Error(`Invalid rollover transition ${cur.phase} -> ${next}.`);
     let cleanPatch={...patch};
     if(next===PHASE.FINAL_RESPONSE_COMMITTED){
-      cleanPatch.finalResponseDispatchId=text(patch.finalResponseDispatchId,"finalResponseDispatchId");
-      cleanPatch.finalResponseCommittedAt=finite(patch.finalResponseCommittedAt??now,"finalResponseCommittedAt");
+      const anchor=patch.finalResponseAnchor
+        ? validateFinalResponseAnchor(patch.finalResponseAnchor,cur.provider)
+        : validateFinalResponseAnchor({
+            kind:FINAL_RESPONSE_ANCHOR_KIND.DISPATCH,
+            dispatchId:text(patch.finalResponseDispatchId,"finalResponseDispatchId"),
+            observedAt:patch.finalResponseCommittedAt??now
+          },cur.provider);
+      cleanPatch.finalResponseAnchor=clone(anchor);
+      cleanPatch.finalResponseDispatchId=anchor.kind===FINAL_RESPONSE_ANCHOR_KIND.DISPATCH?anchor.dispatchId:null;
+      cleanPatch.finalResponseCommittedAt=finite(patch.finalResponseCommittedAt??anchor.observedAt??now,"finalResponseCommittedAt");
     }
     if(next===PHASE.CONTINUITY_PREPARED)cleanPatch.continuityPayload=clone(validateContinuityPayload(patch.continuityPayload));
     if(next===PHASE.OLD_AUTHORITY_REVOKED){
-      if(!cur.finalResponseDispatchId||cur.finalResponseCommittedAt==null)throw new Error("Old authority cannot be revoked before the final response is committed.");
+      if(!cur.finalResponseAnchor||cur.finalResponseCommittedAt==null)throw new Error("Old authority cannot be revoked before the final response anchor is durable.");
+      validateFinalResponseAnchor(cur.finalResponseAnchor,cur.provider);
       if(!cur.continuityPayload)throw new Error("Old authority cannot be revoked before continuity is prepared.");
       const a=createConversationAuthority(patch.oldAuthority);
       if(a.state!==AUTHORITY_STATES.REVOKED)throw new Error("OLD_AUTHORITY_REVOKED requires revoked oldAuthority.");
@@ -310,7 +355,26 @@ class RolloverCoordinator{
     validatePhase(u);this._bySide.set(cur.side,u);return u;
   }
   markFinalResponseCommitted(side,{dispatchId,completedAt=Date.now()}={},now=Date.now()){
-    return this.transition(side,PHASE.FINAL_RESPONSE_COMMITTED,{finalResponseDispatchId:text(dispatchId,"dispatchId"),finalResponseCommittedAt:finite(completedAt,"completedAt")},now);
+    const id=text(dispatchId,"dispatchId");
+    const at=finite(completedAt,"completedAt");
+    return this.transition(side,PHASE.FINAL_RESPONSE_COMMITTED,{
+      finalResponseDispatchId:id,
+      finalResponseAnchor:{kind:FINAL_RESPONSE_ANCHOR_KIND.DISPATCH,dispatchId:id,observedAt:at},
+      finalResponseCommittedAt:at
+    },now);
+  }
+  anchorProviderSnapshot(side,{contentHash,observedAt=Date.now(),conversationIdentity}={},now=Date.now()){
+    const at=finite(observedAt,"observedAt");
+    return this.transition(side,PHASE.FINAL_RESPONSE_COMMITTED,{
+      finalResponseDispatchId:null,
+      finalResponseAnchor:{
+        kind:FINAL_RESPONSE_ANCHOR_KIND.PROVIDER_SNAPSHOT,
+        contentHash:text(contentHash,"contentHash").toLowerCase(),
+        observedAt:at,
+        conversationIdentity:sanitizeIdentity(conversationIdentity)
+      },
+      finalResponseCommittedAt:at
+    },now);
   }
   prepareContinuity(side,continuityPayload,now=Date.now()){
     return this.transition(side,PHASE.CONTINUITY_PREPARED,{continuityPayload:validateContinuityPayload(continuityPayload)},now);
@@ -321,7 +385,7 @@ class RolloverCoordinator{
   canAcceptContinuityResponse({side,rolloverId,dispatchId,observedIdentity}={}){const tx=this.get(side);if(!tx)return{ok:false,reason:"NO_ROLLOVER"};if(tx.rolloverId!==String(rolloverId||""))return{ok:false,reason:"ROLLOVER_MISMATCH"};if(tx.phase!==PHASE.AWAITING_CONTINUITY_RESPONSE)return{ok:false,reason:"WRONG_PHASE"};if(tx.continuityDispatchId!==String(dispatchId||""))return{ok:false,reason:"DISPATCH_MISMATCH"};let observed;try{observed=sanitizeIdentity(observedIdentity);}catch(_){return{ok:false,reason:"MALFORMED_IDENTITY"};}if(!observed.writable)return{ok:false,reason:"READ_ONLY_IDENTITY"};if(observed.provider!==tx.provider)return{ok:false,reason:"PROVIDER_MISMATCH"};if(observed.kind!=="conversation")return{ok:false,reason:"PROVISIONAL_RESPONSE_NOT_AUTHORIZED"};if(sameIdentity(observed,tx.oldAuthority.identity))return{ok:false,reason:"STALE_OLD_CONVERSATION"};if(!tx.candidateAuthority)return{ok:false,reason:"CANDIDATE_AUTHORITY_PENDING"};const candidate=createConversationAuthority(tx.candidateAuthority);if(candidate.state===AUTHORITY_STATES.PROVISIONAL)return{ok:false,reason:"CANDIDATE_CONFIRMATION_PENDING"};if(!sameIdentity(observed,candidate.identity))return{ok:false,reason:"CANDIDATE_IDENTITY_MISMATCH"};return{ok:true,reason:"NEW_CONVERSATION_CONFIRMED"};}
   snapshot(){return[...this._bySide.values()].map(clone);}
 }
-module.exports={PHASE,TRIGGER_MODE,RolloverCoordinator};
+module.exports={PHASE,TRIGGER_MODE,FINAL_RESPONSE_ANCHOR_KIND,RolloverCoordinator};
 
   });
 
@@ -452,7 +516,7 @@ module.exports = Object.freeze({
 const {buildContinuationPayload}=require("./continuity-payload.js");
 class ThreadRolloverOrchestrator {
   constructor({coordinator,classifyLimit,classifyIdentityTransition}) {
-    if(!coordinator||typeof coordinator.begin!=='function'||typeof coordinator.transition!=='function'||typeof coordinator.get!=='function'||typeof coordinator.promoteCandidateAuthority!=='function'||typeof coordinator.markFinalResponseCommitted!=='function'||typeof coordinator.prepareContinuity!=='function') throw new TypeError('A canonical rollover coordinator with final-response and continuity staging is required.');
+    if(!coordinator||typeof coordinator.begin!=='function'||typeof coordinator.transition!=='function'||typeof coordinator.get!=='function'||typeof coordinator.promoteCandidateAuthority!=='function'||typeof coordinator.markFinalResponseCommitted!=='function'||typeof coordinator.anchorProviderSnapshot!=='function'||typeof coordinator.prepareContinuity!=='function') throw new TypeError('A canonical rollover coordinator with final-response and continuity staging is required.');
     if(typeof classifyLimit!=='function') throw new TypeError('classifyLimit is required.');
     if(typeof classifyIdentityTransition!=='function') throw new TypeError('classifyIdentityTransition is required.');
     this.coordinator=coordinator;this.classifyLimit=classifyLimit;this.classifyIdentityTransition=classifyIdentityTransition;
@@ -470,6 +534,12 @@ class ThreadRolloverOrchestrator {
     if(!tx) throw new Error("No active rollover transaction for side.");
     if(tx.phase!=="LIMIT_DETECTED") throw new Error(`Final response can only be committed during LIMIT_DETECTED; current phase is ${tx.phase}.`);
     return this.coordinator.markFinalResponseCommitted(side,{dispatchId,completedAt},now);
+  }
+  anchorProviderSnapshot({side,contentHash,observedAt,conversationIdentity,now}){
+    const tx=this.coordinator.get(side);
+    if(!tx) throw new Error("No active rollover transaction for side.");
+    if(tx.phase!=="LIMIT_DETECTED") throw new Error(`Provider snapshot can only anchor LIMIT_DETECTED; current phase is ${tx.phase}.`);
+    return this.coordinator.anchorProviderSnapshot(side,{contentHash,observedAt,conversationIdentity},now);
   }
   prepareContinuity(input){
     const side=String(input?.side||"").trim().toUpperCase();

@@ -2,7 +2,7 @@
 const {buildContinuationPayload}=require("./continuity-payload.js");
 class ThreadRolloverOrchestrator {
   constructor({coordinator,classifyLimit,classifyIdentityTransition}) {
-    if(!coordinator||typeof coordinator.begin!=='function'||typeof coordinator.transition!=='function'||typeof coordinator.get!=='function'||typeof coordinator.promoteCandidateAuthority!=='function'||typeof coordinator.markFinalResponseCommitted!=='function'||typeof coordinator.prepareContinuity!=='function') throw new TypeError('A canonical rollover coordinator with final-response and continuity staging is required.');
+    if(!coordinator||typeof coordinator.begin!=='function'||typeof coordinator.transition!=='function'||typeof coordinator.get!=='function'||typeof coordinator.promoteCandidateAuthority!=='function'||typeof coordinator.markFinalResponseCommitted!=='function'||typeof coordinator.anchorProviderSnapshot!=='function'||typeof coordinator.prepareContinuity!=='function') throw new TypeError('A canonical rollover coordinator with final-response and continuity staging is required.');
     if(typeof classifyLimit!=='function') throw new TypeError('classifyLimit is required.');
     if(typeof classifyIdentityTransition!=='function') throw new TypeError('classifyIdentityTransition is required.');
     this.coordinator=coordinator;this.classifyLimit=classifyLimit;this.classifyIdentityTransition=classifyIdentityTransition;
@@ -20,6 +20,12 @@ class ThreadRolloverOrchestrator {
     if(!tx) throw new Error("No active rollover transaction for side.");
     if(tx.phase!=="LIMIT_DETECTED") throw new Error(`Final response can only be committed during LIMIT_DETECTED; current phase is ${tx.phase}.`);
     return this.coordinator.markFinalResponseCommitted(side,{dispatchId,completedAt},now);
+  }
+  anchorProviderSnapshot({side,contentHash,observedAt,conversationIdentity,now}){
+    const tx=this.coordinator.get(side);
+    if(!tx) throw new Error("No active rollover transaction for side.");
+    if(tx.phase!=="LIMIT_DETECTED") throw new Error(`Provider snapshot can only anchor LIMIT_DETECTED; current phase is ${tx.phase}.`);
+    return this.coordinator.anchorProviderSnapshot(side,{contentHash,observedAt,conversationIdentity},now);
   }
   prepareContinuity(input){
     const side=String(input?.side||"").trim().toUpperCase();

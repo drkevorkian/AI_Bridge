@@ -248,7 +248,8 @@
       generationEpoch:Number(command.generationEpoch),
       provider,
       authorityRegistrationId:String(command.authorityRegistrationId||""),
-      rolloverId:command.rolloverId==null?null:String(command.rolloverId)
+      rolloverId:command.rolloverId==null?null:String(command.rolloverId),
+      preSendAssistantText:String(responseBaseline.text||"").slice(0,200000)
     });
     const confirmation=await confirmSend(composer2,text);
     if(!confirmation.confirmed) return attempted;
@@ -463,7 +464,8 @@
         generationEpoch:registration.generationEpoch,
         authorityRegistrationId:registration.authorityRegistrationId,
         conversationIdentity:liveIdentity,
-        observedAt:Date.now()
+        observedAt:Date.now(),
+        preSendAssistantText:String(awaitingResponseContext?.preSendAssistantText||"").slice(0,200000)
       }).catch(()=>{});
       return;
     }
