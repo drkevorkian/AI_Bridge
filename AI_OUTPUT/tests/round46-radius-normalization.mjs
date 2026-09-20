@@ -6,7 +6,8 @@ import { fileURLToPath } from "node:url";
 const here = path.dirname(fileURLToPath(import.meta.url));
 const review = path.join(here, "../runtime_review");
 
-const files = ["dashboard.css", "popup.css", "settings.css"];
+const tokenFiles = ["dashboard.css", "popup.css", "settings.css"];
+const files = ["dashboard.css", "dashboard-layouts.css", "popup.css", "settings.css"];
 const allowed = new Set([
   "0",
   "50%",
@@ -16,9 +17,8 @@ const allowed = new Set([
   "var(--radius-xl)"
 ]);
 
-for (const name of files) {
+for (const name of tokenFiles) {
   const css = fs.readFileSync(path.join(review, name), "utf8");
-
   assert.ok(
     css.includes("--radius-sm: 4px") || css.includes("--radius-sm:4px"),
     name + ": missing 4px radius token"
@@ -35,7 +35,10 @@ for (const name of files) {
     css.includes("--radius-xl: 10px") || css.includes("--radius-xl:10px"),
     name + ": missing 10px radius token"
   );
+}
 
+for (const name of files) {
+  const css = fs.readFileSync(path.join(review, name), "utf8");
   assert.doesNotMatch(css, /border-radius\s*:\s*999px/i, name + ": capsule radius restored");
 
   const radii = [...css.matchAll(/border-radius\s*:\s*([^;}]+)/gi)].map(match => match[1].trim());
@@ -43,11 +46,13 @@ for (const name of files) {
     assert.ok(allowed.has(radius), name + ": unapproved radius " + radius);
   }
 
-  assert.match(
-    css,
-    /data-theme=["']terminal["'][\s\S]*?border-radius\s*:\s*0/,
-    name + ": Terminal square-corner override missing"
-  );
+  if (name !== "dashboard-layouts.css") {
+    assert.match(
+      css,
+      /data-theme=["']terminal["'][\s\S]*?border-radius\s*:\s*0/,
+      name + ": Terminal square-corner override missing"
+    );
+  }
 }
 
 const dashboard = fs.readFileSync(path.join(review, "dashboard.css"), "utf8");
@@ -59,7 +64,7 @@ assert.match(
   "human-modal-pulse must remain the sole semantic circle"
 );
 
-for (const name of ["popup.css", "settings.css"]) {
+for (const name of ["dashboard-layouts.css", "popup.css", "settings.css"]) {
   const css = fs.readFileSync(path.join(review, name), "utf8");
   assert.doesNotMatch(css, /border-radius\s*:\s*50%/i, name + ": unexpected circle");
 }
