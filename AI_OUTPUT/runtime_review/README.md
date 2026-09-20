@@ -85,3 +85,10 @@ The CREATED reuse scenario also asserts the rendered success state:
 Popup and Settings are closed immediately after their smoke checks so periodic UI polling cannot wake the MV3 worker between stopAllWorkers() and seeded storage injection.
 
 Paused-state recovery assertions now inspect the actual #sessionPill and #status elements instead of broad document.body text. The helper is exported behind a require.main guard and is directly executed by round34-paused-dashboard-helper.cjs, including a negative Running-state case.
+
+
+### CREATED-snapshot dispatch isolation
+
+The target-CREATED recovery scenario uses a fresh synthetic dispatch ID that has never reached the surviving provider-B content document. It preserves the runtime-generated tab, provider identity, generation, conversation identity, and payload hash, but does not reuse an ID already stored in content.js duplicate authority memory.
+
+The harness asserts the CREATED ID differs from the previously delivered positive-recovery dispatch and is absent from all earlier matrix dispatch IDs before waking the worker. This prevents content-side byAuthority duplicate caching from suppressing the intended CREATED delivery.

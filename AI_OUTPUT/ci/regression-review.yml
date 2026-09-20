@@ -53,5 +53,7 @@ jobs:
         run: node AI_OUTPUT/tests/round33-chrome-dashboard-lifecycle.mjs
       - name: Round 34 paused Dashboard helper
         run: node AI_OUTPUT/tests/round34-paused-dashboard-helper.cjs
+      - name: Round 35 CREATED dispatch isolation
+        run: node AI_OUTPUT/tests/round35-created-dispatch-isolation.mjs
       - name: Real Chrome MV3 E2E
         run: node AI_OUTPUT/tests/chrome-e2e-runtime.cjs

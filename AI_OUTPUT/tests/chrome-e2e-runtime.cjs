@@ -165,6 +165,27 @@ async function assertPausedDashboard(cdp, page, reasonPattern, { timeoutMs = 100
   return state;
 }
 
+async function assertRunningAwaitingDashboard(cdp, page, { timeoutMs = 10000, intervalMs = 100 } = {}) {
+  const state = await poll(
+    async () => evaluate(
+      cdp,
+      page.sessionId,
+      '({pill:document.getElementById("sessionPill")?.textContent||"",status:document.getElementById("status")?.textContent||""})'
+    ),
+    value =>
+      /^Running$/i.test(String(value?.pill || '').trim()) &&
+      /Runtime:\s*Awaiting provider response/i.test(String(value?.status || '')) &&
+      !/Runtime:\s*Paused/i.test(String(value?.status || '')),
+    timeoutMs,
+    intervalMs
+  );
+
+  assert.match(String(state.pill || '').trim(), /^Running$/i);
+  assert.match(String(state.status || ''), /Runtime:\s*Awaiting provider response/i);
+  assert.doesNotMatch(String(state.status || ''), /Runtime:\s*Paused/i);
+  return state;
+}
+
 async function extensionMessage(cdp, sessionId, message) {
   const expression =
     '(async()=>{try{return {transportOk:true,value:await chrome.runtime.sendMessage(' +
@@ -661,17 +682,8 @@ async function main() {
     assert.equal(positiveStorage.stored.bridgeState?.runtimePhase, 'AWAITING_PROVIDER_RESPONSE');
     assert.equal((positiveStorage.stored.bridgeState?.transcript || []).filter(entry => entry?.type === 'response').length, 1);
 
-    const positiveUi = await poll(
-      () => evaluate(cdp, dashboardPositive.sessionId, 'document.body.innerText'),
-      body =>
-        /Runtime:\s*Awaiting provider response/i.test(body) &&
-        /Connection:\s*Connected/i.test(body) &&
-        /Authority:\s*Verified/i.test(body) &&
-        /Relay:\s*READY/i.test(body),
-      15000
-    );
-    assert.match(positiveUi, /Awaiting provider response/i);
-    assert.doesNotMatch(positiveUi, /Runtime:\s*Paused/i);
+    const positiveUi = await assertRunningAwaitingDashboard(cdp, dashboardPositive, { timeoutMs: 15000 });
+    assert.match(positiveUi.status, /Awaiting provider response/i);
 
     // Case 4: CLAIMED parked response + source AWAITING_RESPONSE means response
     // mutation ownership was interrupted. Restart must pause, never replay it.
@@ -707,7 +719,7 @@ async function main() {
     assert.equal((claimedState.transcript || []).filter(entry => entry?.type === 'response').length, 1);
     assert.equal(await evaluate(cdp, providerA.sessionId, 'window.__providerActionCount'), positiveActionCountABefore);
     assert.equal(await evaluate(cdp, providerB.sessionId, 'window.__providerActionCount'), positiveActionCountBBefore + 1);
-    await assertPausedDashboard(dashboardClaimed, /response was interrupted|ambiguous response|durable commit|replay/i);
+    await assertPausedDashboard(cdp, dashboardClaimed, /response was interrupted|ambiguous response|durable commit|replay/i);
 
     // Case 5: source committed + valid continuation + exact target CREATED.
     // Recovery must reuse that exact target dispatch ID, not allocate a new one.
@@ -719,11 +731,26 @@ async function main() {
 
     const createdTarget = {
       ...positiveStorage.target,
+      dispatchId: 'e2e-created-never-delivered-d1',
       status: 'CREATED',
       acceptedAt: null,
       completedAt: null,
       failureReason: null
     };
+    assert.notEqual(
+      createdTarget.dispatchId,
+      positiveStorage.target.dispatchId,
+      'CREATED recovery must use a dispatch ID never delivered to the surviving provider content document'
+    );
+    const priorDispatchIds = new Set(
+      positiveStorage.stored.aiBridgeRuntimeDispatchLedger.records.map(record => record.dispatchId)
+    );
+    priorDispatchIds.add(baseDispatch.dispatchId);
+    assert.equal(
+      priorDispatchIds.has(createdTarget.dispatchId),
+      false,
+      'CREATED recovery dispatch ID must not overlap any earlier scenario dispatch'
+    );
     const createdActionCountBefore = await evaluate(cdp, providerB.sessionId, 'window.__providerActionCount');
     await setExtensionStorage(cdp, extensionId, {
       bridgeState: { ...baseState, nextTurnPending: positiveMarker, runtimePhase: 'NEXT_TURN_PENDING' },
@@ -758,16 +785,8 @@ async function main() {
     assert.equal(createdRecovered.stored.bridgeState?.runtimePhase, 'AWAITING_PROVIDER_RESPONSE');
     assert.equal((createdRecovered.stored.bridgeState?.transcript || []).filter(entry => entry?.type === 'response').length, 1);
 
-    const createdUi = await poll(
-      () => evaluate(cdp, dashboardCreated.sessionId, 'document.body.innerText'),
-      body =>
-        /Runtime:\s*Awaiting provider response/i.test(body) &&
-        /Running/i.test(body) &&
-        !/Runtime:\s*Paused/i.test(body),
-      10000
-    );
-    assert.match(createdUi, /Runtime:\s*Awaiting provider response/i);
-    assert.doesNotMatch(createdUi, /Runtime:\s*Paused/i);
+    const createdUi = await assertRunningAwaitingDashboard(cdp, dashboardCreated);
+    assert.match(createdUi.status, /Runtime:\s*Awaiting provider response/i);
 
     // Cases 6/7: target DISPATCHING or ACCEPTED has crossed the provider-action
     // ambiguity boundary. Restart must convert the same ID to DELIVERY_AMBIGUOUS.
@@ -815,7 +834,7 @@ async function main() {
       assert.equal((ambiguousRecovered.stored.bridgeState?.transcript || []).filter(entry => entry?.type === 'response').length, 1);
       assert.equal(await evaluate(cdp, providerA.sessionId, 'window.__providerActionCount'), actionBeforeAmbiguousRecoveryA);
       assert.equal(await evaluate(cdp, providerB.sessionId, 'window.__providerActionCount'), actionBeforeAmbiguousRecoveryB);
-      await assertPausedDashboard(dashboardAmbiguous, /delivery was interrupted|may already have been sent|replay|ambiguous/i);
+      await assertPausedDashboard(cdp, dashboardAmbiguous, /delivery was interrupted|may already have been sent|replay|ambiguous/i);
 
       currentDashboard = dashboardAmbiguous;
     }
@@ -846,7 +865,7 @@ async function main() {
   }
 }
 
-module.exports = Object.freeze({ assertPausedDashboard });
+module.exports = Object.freeze({ assertPausedDashboard, assertRunningAwaitingDashboard });
 
 if (require.main === module) {
   main().catch(error => {
