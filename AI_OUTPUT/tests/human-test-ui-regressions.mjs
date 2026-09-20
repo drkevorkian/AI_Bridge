@@ -2,27 +2,75 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
 import {fileURLToPath} from 'node:url';
+
 const here=path.dirname(fileURLToPath(import.meta.url));
 const repo=path.resolve(here,'../..');
+const bases=['AI_OUTPUT/runtime_review','AI_INPUT'];
+const EXPECTED_VERSION='1.19.1';
+const EXPECTED_BUILD='1.19.1.04-AI-A';
 const read=p=>fs.readFileSync(path.join(repo,p),'utf8');
-for(const base of ['AI_OUTPUT/runtime_review','AI_INPUT']){
+
+function walkTextFiles(root){
+  const out=[];
+  for(const entry of fs.readdirSync(root,{withFileTypes:true})){
+    const full=path.join(root,entry.name);
+    if(entry.isDirectory()) out.push(...walkTextFiles(full));
+    else if(/\.(?:js|mjs|cjs|json|html|css|md|txt)$/i.test(entry.name)) out.push(full);
+  }
+  return out;
+}
+
+for(const base of bases){
+  const manifest=JSON.parse(read(base+'/manifest.json'));
   const dashboard=read(base+'/dashboard.html');
+  const dashboardJs=read(base+'/dashboard.js');
   const popup=read(base+'/popup.html');
+  const popupJs=read(base+'/popup.js');
   const layouts=read(base+'/dashboard-layouts.js');
   const layoutCss=read(base+'/dashboard-layouts.css');
   const settings=read(base+'/settings.js');
-  const manifest=JSON.parse(read(base+'/manifest.json'));
+  const settingsHtml=read(base+'/settings.html');
+
+  assert.equal(manifest.version,EXPECTED_VERSION,base+' numeric version mismatch');
+  assert.equal(manifest.version_name,EXPECTED_BUILD,base+' build mismatch');
+
   assert.doesNotMatch(dashboard,/\\n/,'dashboard contains literal \\n: '+base);
   assert.doesNotMatch(popup,/\\n/,'popup contains literal \\n: '+base);
-  assert.ok(layouts.includes('window.location.assign(chrome.runtime.getURL("settings.html"))'),'Dashboard Settings must navigate same tab: '+base);
-  assert.ok(settings.includes('window.location.assign(chrome.runtime.getURL("dashboard.html"))'),'Settings Dashboard must navigate same tab: '+base);
+
+  assert.match(layouts,/window\.location\.assign\(chrome\.runtime\.getURL\("settings\.html"\)\)/,'Dashboard Settings must navigate same tab: '+base);
+  assert.match(settings,/window\.location\.assign\(chrome\.runtime\.getURL\("dashboard\.html"\)\)/,'Settings Dashboard must navigate same tab: '+base);
   assert.doesNotMatch(layouts,/openSettings[^\n]*chrome\.tabs\.create/,'Dashboard Settings still creates tabs: '+base);
   assert.doesNotMatch(settings,/openDashboard[^\n]*chrome\.tabs\.create/,'Settings Dashboard still creates tabs: '+base);
-  for(const layout of ['classic','studio','focus']) assert.ok(layoutCss.includes('html[data-layout="'+layout+'"] .app-shell'),'missing '+layout+' structure: '+base);
-  assert.ok(layoutCss.includes('html[data-layout="focus"] .control-panel>:not(.brand-block):not(.runtime-card)'),'Focus must be transcript-first: '+base);
-  assert.ok(settings.includes('LAYOUTS.has(layout)?layout:"classic"'),'Classic setter fallback missing: '+base);
-  assert.equal(manifest.version,'1.19.0');
+
+  assert.match(layoutCss,/html\[data-layout="classic"\] \.app-shell/,'Classic workspace missing: '+base);
+  assert.doesNotMatch(layoutCss,/data-layout="studio"/i,'Studio workspace CSS still exists: '+base);
+  assert.doesNotMatch(layoutCss,/data-layout="focus"/i,'Focus workspace CSS still exists: '+base);
+  assert.doesNotMatch(layouts,/["']studio["']/i,'Studio workspace JS still exists: '+base);
+  assert.doesNotMatch(layouts,/["']focus["']/i,'Focus workspace JS still exists: '+base);
+  assert.match(settings,/const LAYOUTS = new Set\(\["classic"\]\)/,'Settings must be Classic-only: '+base);
+  assert.doesNotMatch(settingsHtml,/value="studio"|value="focus"/i,'Removed workspace choices still visible: '+base);
+
+  assert.match(popup,/id="buildIdentity"/,'Popup build identity surface missing: '+base);
+  assert.match(dashboard,/id="buildIdentity"/,'Dashboard build identity surface missing: '+base);
+  assert.match(settingsHtml,/id="installedVersion"/,'Settings version surface missing: '+base);
+  assert.match(settingsHtml,/id="installedBuild"/,'Settings build surface missing: '+base);
+
+  for(const source of [popupJs,dashboardJs,settings]){
+    assert.match(source,/chrome\.runtime\.getManifest\(\)/,'Visible build identity must come from manifest: '+base);
+  }
+  assert.doesNotMatch(popup,/themes, layouts,/i,'Popup still advertises removed layouts: '+base);
+
+  const root=path.join(repo,base);
+  for(const file of walkTextFiles(root)){
+    const text=fs.readFileSync(file,'utf8');
+    assert.doesNotMatch(text,/AI A 1\.18\.1|1\.18\.1-human-test|Human Test Build \(AI A 1\.18\.1\)/,
+      'stale 1.18.1 package identity remains in '+path.relative(repo,file));
+  }
 }
-assert.equal(JSON.parse(read('AI_INPUT/manifest.json')).version_name,'1.19.0-human-test');
-assert.equal(JSON.parse(read('AI_OUTPUT/runtime_review/manifest.json')).version_name,'1.19.0-playground');
-console.log('human-test-ui-regressions: PASS');
+
+const inputManifest=JSON.parse(read('AI_INPUT/manifest.json'));
+const outputManifest=JSON.parse(read('AI_OUTPUT/runtime_review/manifest.json'));
+assert.equal(inputManifest.version,outputManifest.version,'AI_INPUT and AI_OUTPUT version mismatch');
+assert.equal(inputManifest.version_name,outputManifest.version_name,'AI_INPUT and AI_OUTPUT build mismatch');
+
+console.log('human-test-ui-regressions: PASS',EXPECTED_VERSION,EXPECTED_BUILD);
