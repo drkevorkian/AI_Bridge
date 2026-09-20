@@ -238,6 +238,8 @@
     consumeAuthority(command,attempted);
     captureProviderEventBaseline();
     const responseBaseline=responseObservation();
+    const responseBaselineObservedAt=Date.now();
+    const responseBaselineIdentity=identityAfterDraft;
     awaitingResponseBaselineNode=responseBaseline.node;
     awaitingResponseBaselineText=responseBaseline.text;
     sendAgain.click();
@@ -249,7 +251,9 @@
       provider,
       authorityRegistrationId:String(command.authorityRegistrationId||""),
       rolloverId:command.rolloverId==null?null:String(command.rolloverId),
-      preSendAssistantText:String(responseBaseline.text||"").slice(0,200000)
+      preSendAssistantText:String(responseBaseline.text||"").slice(0,200000),
+      preSendAssistantObservedAt:responseBaselineObservedAt,
+      preSendAssistantIdentity:responseBaselineIdentity
     });
     const confirmation=await confirmSend(composer2,text);
     if(!confirmation.confirmed) return attempted;
@@ -465,7 +469,9 @@
         authorityRegistrationId:registration.authorityRegistrationId,
         conversationIdentity:liveIdentity,
         observedAt:Date.now(),
-        preSendAssistantText:String(awaitingResponseContext?.preSendAssistantText||"").slice(0,200000)
+        preSendAssistantText:String(awaitingResponseContext?.preSendAssistantText||"").slice(0,200000),
+        preSendAssistantObservedAt:Number(awaitingResponseContext?.preSendAssistantObservedAt)||null,
+        preSendAssistantIdentity:awaitingResponseContext?.preSendAssistantIdentity||null
       }).catch(()=>{});
       return;
     }
