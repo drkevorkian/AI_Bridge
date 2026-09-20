@@ -7,21 +7,27 @@ const here=path.dirname(fileURLToPath(import.meta.url));
 const root=path.resolve(here,"..");
 const bg=fs.readFileSync(path.join(root,"runtime_review","background.js"),"utf8");
 
-const start=bg.indexOf('if (msg.type === "AI_BRIDGE_NEW_CHATS")');
-const end=bg.indexOf('if (msg.type === "AI_BRIDGE_START")',start);
-assert.ok(start>=0&&end>start,"AI_BRIDGE_NEW_CHATS handler missing");
-const block=bg.slice(start,end);
+const setStart=bg.indexOf("const REVIEW_UI_CONTROL_TYPES=new Set(");
+const helperStart=bg.indexOf("function reviewUiControlSenderAllowed",setStart);
+assert.ok(setStart>=0&&helperStart>setStart,"UI control trust set missing");
+const setBlock=bg.slice(setStart,helperStart);
+assert.ok(setBlock.includes('"AI_BRIDGE_NEW_CHATS"'),"manual New Chat must be a privileged UI control");
 
-assert.ok(block.includes('reviewTrustedExtensionPage(sender)'),"manual New Chat must require trusted extension-page authority");
-assert.ok(block.includes('NEW_CHAT_CONTROL_UNTRUSTED_SENDER'),"manual New Chat must fail closed for untrusted senders");
-assert.ok(block.indexOf('reviewTrustedExtensionPage(sender)')<block.indexOf('resetSelectedChats(msg, sides)'),
-  "sender trust must be checked before any tab reset/navigation");
+const listener=bg.indexOf("chrome.runtime.onMessage.addListener");
+const gate=bg.indexOf("reviewUiControlSenderAllowed(msg,sender)",listener);
+const handler=bg.indexOf('if (msg.type === "AI_BRIDGE_NEW_CHATS")',listener);
+assert.ok(listener>=0&&gate>listener&&handler>gate,"trusted UI sender gate must run before manual New Chat handler");
+assert.ok(bg.includes('reason:"UI_CONTROL_UNTRUSTED_SENDER"'),"manual New Chat must fail closed through the UI control gate");
 
-const trustStart=bg.indexOf('function reviewTrustedExtensionPage(sender)');
-const trustEnd=bg.indexOf('async function reviewCaptureUpdateBindings',trustStart);
+const handlerEnd=bg.indexOf('if (msg.type === "AI_BRIDGE_START")',handler);
+assert.ok(handlerEnd>handler,"manual New Chat handler boundary missing");
+const block=bg.slice(handler,handlerEnd);
+assert.ok(block.includes("resetSelectedChats(msg, sides)"),"manual New Chat must use the trusted reset path");
+
+const trustStart=bg.indexOf("function reviewTrustedExtensionPage(sender)");
+const trustEnd=bg.indexOf("const REVIEW_UI_CONTROL_TYPES",trustStart);
 assert.ok(trustStart>=0&&trustEnd>trustStart,"trusted extension-page authority helper missing");
 const trust=bg.slice(trustStart,trustEnd);
-
 for(const token of [
   'sender?.id!==extensionId',
   'senderUrl.startsWith(extensionOrigin+"/")',
@@ -30,5 +36,6 @@ for(const token of [
   'String(sender.documentLifecycle)!=="active"'
 ]) assert.ok(trust.includes(token),"trusted sender helper missing "+token);
 
-assert.doesNotMatch(block,/sender\?\.tab\)\s*return false/,"tab-hosted Dashboard/Settings must remain trusted when origin is extension-local");
+assert.doesNotMatch(trust,/sender\?\.tab\)\s*return false/,"tab-hosted Dashboard/Settings must remain trusted when origin is extension-local");
+
 console.log("round57-manual-new-chat-sender-authority: PASS");
