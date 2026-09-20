@@ -520,6 +520,11 @@ input, select, textarea { border-radius: var(--radius-md); transition: border-co
     align-items: flex-start;
   }
 
+  .workspace-header {
+    height: auto;
+    min-height: 82px;
+  }
+
   .agent-identity,
   .transcript-title {
     min-width: 0;
