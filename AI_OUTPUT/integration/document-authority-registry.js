@@ -1,5 +1,7 @@
 function requiredText(v,name,max=240){const s=String(v??'').trim();if(!s)throw new TypeError(name+' required.');return s.slice(0,max);}
 function originAllowed(url,provider){let host;try{host=new URL(String(url||'')).hostname;}catch{return false;}const allowed={chatgpt:new Set(['chatgpt.com','chat.openai.com']),grok:new Set(['grok.com']),claude:new Set(['claude.ai']),gemini:new Set(['gemini.google.com']),copilot:new Set(['copilot.microsoft.com'])};return allowed[String(provider||'').toLowerCase()]?.has(host)||false;}
+function sameIdentity(a,b){if(!a||!b)return a===b;return ['provider','threadKey','routeClass'].every(k=>String(a[k]??'')===String(b[k]??''));}
+function equivalentAuthority(prior,{provider,tabId,documentId,observedIdentity}){return prior.provider===provider&&prior.tabId===tabId&&prior.documentId===documentId&&sameIdentity(prior.observedIdentity,observedIdentity);}
 export const DOCUMENT_READINESS=Object.freeze({DISCONNECTED:'DISCONNECTED',LISTENER_CONNECTED:'LISTENER_CONNECTED',DOCUMENT_AUTHORITY_VERIFIED:'DOCUMENT_AUTHORITY_VERIFIED'});
 export class DocumentAuthorityRegistry{
   constructor(){this.bySide=new Map();this.connectivity=new Map();}
@@ -15,8 +17,11 @@ export class DocumentAuthorityRegistry{
     if(!originAllowed(sender.origin||sender.url||sender.tab.url,cleanProvider))throw new Error('REGISTER_PROVIDER_ORIGIN_MISMATCH');
     if(observedIdentity&&String(observedIdentity.provider||'').toLowerCase()!==cleanProvider)throw new Error('REGISTER_IDENTITY_PROVIDER_MISMATCH');
     const generation=Number(generationEpoch);if(!Number.isInteger(generation)||generation<0)throw new Error('REGISTER_INVALID_GENERATION');
-    const prior=this.bySide.get(cleanSide);if(prior&&generation<prior.generationEpoch)throw new Error('REGISTER_STALE_GENERATION');
-    const record=Object.freeze({side:cleanSide,provider:cleanProvider,tabId:sender.tab.id,documentId,authorityRegistrationId:registrationId,frameId:0,lifecycle:'active',generationEpoch:generation,observedIdentity:observedIdentity?Object.freeze({...observedIdentity}):null,registeredAt:Date.now()});
+    const normalizedIdentity=observedIdentity?Object.freeze({...observedIdentity}):null;
+    const prior=this.bySide.get(cleanSide);
+    if(prior&&generation<prior.generationEpoch)throw new Error('REGISTER_STALE_GENERATION');
+    if(prior&&generation===prior.generationEpoch&&!equivalentAuthority(prior,{provider:cleanProvider,tabId:sender.tab.id,documentId,observedIdentity:normalizedIdentity}))throw new Error('REGISTER_GENERATION_AUTHORITY_CONFLICT');
+    const record=Object.freeze({side:cleanSide,provider:cleanProvider,tabId:sender.tab.id,documentId,authorityRegistrationId:registrationId,frameId:0,lifecycle:'active',generationEpoch:generation,observedIdentity:normalizedIdentity,registeredAt:Date.now()});
     this.bySide.set(cleanSide,record);this.connectivity.set(cleanSide,Object.freeze({side:cleanSide,tabId:sender.tab.id,state:DOCUMENT_READINESS.DOCUMENT_AUTHORITY_VERIFIED}));return record;
   }
   get(side){return this.bySide.get(String(side||'').toUpperCase())||null;}
