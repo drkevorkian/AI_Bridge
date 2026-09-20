@@ -2496,7 +2496,43 @@ async function waitForTabReady(tabId, timeoutMs = 20000) {
 async function resetChatTab(tabId) {
   const id = Number(tabId);
   if (!Number.isInteger(id) || id <= 0) throw new Error("Choose an open AI tab first.");
-  throw new Error("Trusted New Chat authority is not available for this provider in the review runtime. No navigation or broad-text click was attempted.");
+
+  const before = await chrome.tabs.get(id);
+  const provider = reviewProviderFromUrl(before?.url);
+  if (!provider) throw new Error("The selected tab is not on a supported AI provider.");
+
+  const targetUrl = freshChatUrlFor(before.url);
+  reviewInvalidateAuthorityForTab(id);
+
+  const updated = await chrome.tabs.update(id, { url: targetUrl, active: true });
+  if (!updated) throw new Error("Chrome did not return the updated AI tab.");
+
+  const ready = await waitForTabReady(id);
+  const readyProvider = reviewProviderFromUrl(ready?.url);
+  if (readyProvider !== provider) {
+    throw new Error("Fresh-chat navigation changed to an unexpected provider origin.");
+  }
+
+  const probe = await chrome.tabs.sendMessage(id, { type: "AI_BRIDGE_IDENTITY_PROBE" });
+  if (!probe?.ok) throw new Error(probe?.error || "Could not verify the fresh AI chat surface.");
+
+  const identity = reviewSanitizeIdentity(probe.identity);
+  if (identity.provider !== provider) throw new Error("Fresh-chat provider identity mismatch.");
+  if (identity.writable !== true) throw new Error("Fresh-chat surface is not writable.");
+  if (identity.kind === "conversation" && identity.threadKey) {
+    throw new Error("Provider remained on an existing conversation instead of a fresh chat surface.");
+  }
+  if (identity.kind !== "surface" || identity.provisional !== true) {
+    throw new Error("Fresh-chat identity was not a trusted provisional surface.");
+  }
+
+  return Object.freeze({
+    ok: true,
+    tabId: id,
+    provider,
+    url: ready.url,
+    identity
+  });
 }
 
 async function resetSelectedChats(msg, sides = SIDES, { allowActive = false } = {}) {
