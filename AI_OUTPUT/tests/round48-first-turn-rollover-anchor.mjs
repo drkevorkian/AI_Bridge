@@ -34,9 +34,19 @@ const core=fs.readFileSync(path.join(root,"runtime_review","runtime-core.js"),"u
 for(const token of [
   "PROVIDER_SNAPSHOT","anchorProviderSnapshot","ROLLOVER_PROVIDER_SNAPSHOT_HASH_MISMATCH",
   "ROLLOVER_NO_PRIOR_COMMITTED_RESPONSE_OR_PROVIDER_SNAPSHOT","providerSnapshotHash",
-  "preSendAssistantText"
+  "preSendAssistantText","preSendAssistantObservedAt","preSendAssistantIdentity",
+  "THREAD_LIMIT_PROVIDER_SNAPSHOT_TIMESTAMP_INVALID",
+  "THREAD_LIMIT_PROVIDER_SNAPSHOT_IDENTITY_MISMATCH",
+  "ROLLOVER_PROVIDER_SNAPSHOT_PROVENANCE_MISSING"
 ]) assert.ok(bg.includes(token)||content.includes(token)||core.includes(token),"missing "+token);
 assert.ok(content.includes('preSendAssistantText:String(responseBaseline.text||"").slice(0,200000)'));
+assert.ok(content.includes('preSendAssistantObservedAt:responseBaselineObservedAt'));
+assert.ok(content.includes('preSendAssistantIdentity:responseBaselineIdentity'));
 assert.ok(content.includes('preSendAssistantText:String(awaitingResponseContext?.preSendAssistantText||"").slice(0,200000)'));
+assert.ok(content.includes('preSendAssistantObservedAt:Number(awaitingResponseContext?.preSendAssistantObservedAt)||null'));
+assert.ok(content.includes('preSendAssistantIdentity:awaitingResponseContext?.preSendAssistantIdentity||null'));
+assert.ok(bg.includes('providerSnapshotObservedAt=authorized.preSendAssistantObservedAt;'));
+assert.ok(bg.includes('providerSnapshotIdentity=authorized.preSendAssistantIdentity;'));
+assert.doesNotMatch(bg,/providerSnapshotObservedAt=Number\(msg\?\.observedAt\)\|\|Date\.now\(\)/);
 assert.doesNotMatch(bg,/ROLLOVER_NO_PRIOR_COMMITTED_RESPONSE"/);
 console.log("round48-first-turn-rollover-anchor: PASS");
