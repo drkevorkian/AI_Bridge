@@ -33,6 +33,7 @@ const tests=[
   'round54-rollover-navigation-idempotency.mjs',
   'round55-narrow-header-and-manual-chat-wording.mjs',
   'round56-pending-navigation-commit-barrier.mjs',
+  'round57-manual-fresh-chat-dashboard-integration.mjs',
   'update-system-atomic.mjs',
   'round42-content-runtime-lifecycle.mjs',
   'round43-next-turn-adoption.mjs',
