@@ -23,7 +23,7 @@ for(const p of ['chatgpt','grok','claude','gemini','copilot']){
   }
 }
 assert.ok(PROBES.includes('send'));assert.ok(PROBES.includes('response'));
-const emitted=[];const m=new DomHealthMonitor({runProbe:async()=>({policy:'ACTION_AUTHORITY',state:'PASS',selectorId:'x',rank:0,matchCount:1,reason:'OK',nodeConnected:true,rawHtml:'SECRET'}),emit:x=>emitted.push(x),setTimer:()=>1,clearTimer:()=>{}});m.dirty=new Set(['send']);const out=await m.flush();assert.equal(out[0].rawHtml,undefined);assert.equal(out[0].selectorId,'x');
+const emitted=[];const m=new DomHealthMonitor({runProbe:async()=>({policy:'ACTION_AUTHORITY',state:'PASS',selectorId:'x',rank:0,matchCount:1,reason:'OK',nodeConnected:true,rawHtml:'SECRET'}),emit:x=>emitted.push(x),setTimer:()=>1,clearTimer:()=>{}});m.dirty=new Set(['send']);const out=await m.flush();assert.equal(out[0].value.rawHtml,undefined);assert.equal(out[0].value.selectorId,'x');assert.equal(JSON.stringify(out).includes('SECRET'),false);assert.equal(JSON.stringify(emitted).includes('SECRET'),false);
 const dirtied=m.classifyMutations([{type:'attributes',attributeName:'aria-disabled',target:{}}]);assert.ok(dirtied.includes('composer'));assert.ok(dirtied.includes('send'));assert.ok(dirtied.includes('stop'));assert.ok(dirtied.includes('new_chat'));assert.ok(dirtied.includes('limit_state'));assert.ok(!dirtied.includes('response'));
 const respMonitor=new DomHealthMonitor({runProbe:async()=>({state:'PASS'}),contextClassifier:()=> 'response',setTimer:()=>1,clearTimer:()=>{}});respMonitor.dirty.clear();const d2=respMonitor.classifyMutations([{type:'characterData',target:{}}]);assert.deepEqual(d2,['response']);
 assert.match(formatPauseReason({code:'DOM_SEND_UNAVAILABLE',side:'B',provider:'ChatGPT'}),/No message was sent/);
