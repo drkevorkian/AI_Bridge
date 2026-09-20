@@ -24,6 +24,7 @@ const tests=[
   'update-system-atomic.mjs',
   'round42-content-runtime-lifecycle.mjs',
   'round43-next-turn-adoption.mjs',
+  'round44-restart-delivery-recovery.mjs',
   'dom-authority-disabled-send.mjs',
   'update-checkpoint-crash-stages.mjs',
   'update-checkpoint-runtime-contract.mjs',
