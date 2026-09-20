@@ -152,6 +152,23 @@ async function reviewPersistLedger() {
 async function reviewPersistAuthorityEpochs() {
   await chrome.storage.local.set({ [REVIEW_AUTH_EPOCH_KEY]: reviewAuthorityEpochs });
 }
+async function reviewResetSessionDurability() {
+  // A new Bridge session is a new exactly-once transaction domain. Once the
+  // prior session is inactive there is no legitimate provider action to resume,
+  // so stale unresolved dispatches/parked responses must not cross this boundary.
+  await chrome.storage.local.set({
+    [REVIEW_DISPATCH_KEY]: { records: [] },
+    aiBridgeRuntimeParkedResponses: { records: [] }
+  });
+  reviewLedger = new DispatchLedger();
+  reviewRollover = new RolloverCoordinator();
+  reviewParkedStore = new ParkedResponseStore({
+    store: reviewChromeParkedAdapter,
+    key: "aiBridgeRuntimeParkedResponses"
+  });
+  await reviewParkedStore.init();
+  reviewRecoveryPauseReason = "";
+}
 async function reviewInitializeDurableRuntime() {
   const stored = await chrome.storage.local.get([REVIEW_DISPATCH_KEY, REVIEW_AUTH_EPOCH_KEY]);
   const records = Array.isArray(stored?.[REVIEW_DISPATCH_KEY]?.records) ? stored[REVIEW_DISPATCH_KEY].records : [];
@@ -215,6 +232,37 @@ async function reviewPayloadHash(side, text) {
   const digest = new Uint8Array(await crypto.subtle.digest("SHA-256", bytes));
   return [...digest].map(b => b.toString(16).padStart(2, "0")).join("");
 }
+async function reviewRetireStaleCreatedDispatches(side, {
+  keepDispatchId = null,
+  continuationSourceDispatchId = null
+} = {}) {
+  const targetSide = String(side || "").toUpperCase();
+  const keepId = keepDispatchId == null ? null : String(keepDispatchId);
+  const sourceId = continuationSourceDispatchId == null ? null : String(continuationSourceDispatchId);
+  let changed = false;
+
+  for (const record of reviewLedger.snapshot()) {
+    if (record.side !== targetSide || record.status !== DISPATCH_STATUS.CREATED) continue;
+    if (keepId && String(record.dispatchId) === keepId) continue;
+
+    // CREATED is the only lifecycle state that proves no provider action was
+    // attempted. It is therefore safe to retire an orphaned CREATED record.
+    // Never auto-retire DISPATCHING/ACCEPTED/AWAITING_RESPONSE/AMBIGUOUS.
+    if (
+      sourceId !== null &&
+      record.continuationSourceDispatchId != null &&
+      String(record.continuationSourceDispatchId) === sourceId
+    ) continue;
+
+    reviewLedger.transition(record.dispatchId, DISPATCH_STATUS.FAILED, {
+      failureReason: "STALE_CREATED_RETIRED_BEFORE_RECOVERY"
+    });
+    changed = true;
+  }
+  if (changed) await reviewPersistLedger();
+  return changed;
+}
+
 function reviewFindUnresolvedDispatch(side, payloadHash, {
   continuationSourceDispatchId = null,
   continuationCreatedAt = 0
@@ -226,18 +274,20 @@ function reviewFindUnresolvedDispatch(side, payloadHash, {
   const targetSide = String(side).toUpperCase();
   const sourceId = continuationSourceDispatchId == null ? null : String(continuationSourceDispatchId);
   const createdFloor = Number(continuationCreatedAt) || 0;
-  const candidates = reviewLedger.snapshot().filter(r =>
-    r.side === targetSide && active.has(r.status)
-  );
   const belongsToContinuation = record => {
     if (sourceId === null) return record.continuationSourceDispatchId == null;
     if (record.continuationSourceDispatchId != null) {
       return String(record.continuationSourceDispatchId) === sourceId;
     }
     // Backward-compatible fallback for records persisted before provenance was
-    // added. Never accept an older same-text record from before this pending turn.
+    // added. Records older than this durable pending turn belong to an older
+    // transaction domain and must not poison current recovery.
     return Number(record.createdAt) >= createdFloor;
   };
+  const candidates = reviewLedger.snapshot().filter(r => {
+    if (r.side !== targetSide || !active.has(r.status)) return false;
+    return sourceId === null ? true : belongsToContinuation(r);
+  });
   const reusable = candidates.filter(r =>
     r.status === DISPATCH_STATUS.CREATED &&
     r.payloadHash === payloadHash &&
@@ -753,6 +803,14 @@ async function reviewContinueAfterCommittedResponse(sourceSide) {
     // accepted and persisted as AWAITING_RESPONSE but before nextTurnPending
     // was cleared. Adopt that exact dispatch instead of attempting a replay.
     const adopted = await reviewAdoptAwaitingRecoveredContinuation(pending);
+    if (!adopted) {
+      // Old interrupted attempts can leave CREATED records behind. Since
+      // CREATED is pre-action by definition, retire only those harmless
+      // orphans before evaluating whether a new continuation SEND is allowed.
+      await reviewRetireStaleCreatedDispatches(pending.targetSide, {
+        continuationSourceDispatchId: pending.sourceDispatchId
+      });
+    }
     if (adopted?.blocked) {
       await reviewPauseForAmbiguity(
         "Recovered next turn for AI " + pending.targetSide + " remains blocked: " + adopted.reason + ". No duplicate prompt was sent."
@@ -3571,6 +3629,11 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
       if (fresh.teamRules.length > 12000) throw new Error("Team rules are limited to 12,000 characters.");
       fresh.sourceFiles = normalizeSourceFiles(msg.sourceFiles);
       fresh.sourceDeliveredBySide = { A: false, B: false, C: false, D: false, E: false };
+
+      // Starting from an inactive Bridge explicitly abandons the previous
+      // relay transaction domain. Reset only durable relay-delivery state;
+      // history, settings, transcript inputs and Vault remain untouched.
+      await reviewResetSessionDurability();
 
       for (const side of requestedSides) {
         fresh[`tab${side}`] = Number(msg[`tab${side}`]);
