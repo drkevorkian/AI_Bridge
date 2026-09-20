@@ -82,7 +82,7 @@
   function capabilities(){
     return Object.freeze({
       composer: resolveTrusted(config.composer) ? "PASS" : "FAIL",
-      send: resolveTrusted(config.send,{requireEnabled:true}) ? "PASS" : "FAIL",
+      send: resolveTrusted(config.send) ? "PASS" : "FAIL",
       response: config.response.length ? "PASS" : "UNSUPPORTED",
       provider_events: "PASS",
       upload: "UNSUPPORTED",
@@ -135,11 +135,14 @@
     const artifacts=Array.isArray(command.payload?.artifacts)?command.payload.artifacts:[];
     if(artifacts.length) return rememberCommand(command,reject(command,"UPLOAD_UNSUPPORTED"));
 
+    // DOM authority means the trusted controls are uniquely identifiable.
+    // The Send control may legitimately be disabled while the composer is empty,
+    // so do not require actionability until after the draft has been inserted.
     const composer1=resolveTrusted(config.composer);
-    const send1=resolveTrusted(config.send,{requireEnabled:true});
+    const send1=resolveTrusted(config.send);
     if(!composer1 || !send1) return rememberCommand(command,reject(command,"DOM_AUTHORITY_UNAVAILABLE"));
     const composer2=resolveTrusted(config.composer);
-    const send2=resolveTrusted(config.send,{requireEnabled:true});
+    const send2=resolveTrusted(config.send);
     if(composer1!==composer2 || send1!==send2 || !composer2?.isConnected || !send2?.isConnected) {
       return rememberCommand(command,reject(command,"DOM_AUTHORITY_CHANGED"));
     }
@@ -147,8 +150,19 @@
     const text=String(command.payload?.text||"");
     if(!text.trim()) return rememberCommand(command,reject(command,"EMPTY_PROMPT"));
     setComposerText(composer2,text);
-    await sleep(120);
-    const send3=resolveTrusted(config.send,{requireEnabled:true});
+
+    // React/provider UIs can enable Send asynchronously after the input event.
+    // Wait briefly for the already-authorized control to become actionable.
+    let send3=null;
+    for(let i=0;i<12;i++){
+      await sleep(i===0?120:50);
+      const candidate=resolveTrusted(config.send,{requireEnabled:true});
+      if(candidate){
+        send3=candidate;
+        break;
+      }
+    }
+    if(!send3) return rememberCommand(command,reject(command,"DOM_AUTHORITY_NOT_ACTIONABLE"));
     if(send3!==send2) return rememberCommand(command,reject(command,"DOM_AUTHORITY_CHANGED"));
 
     const attempted=Object.freeze({ok:false,outcome:"ACTION_ATTEMPTED",reason:"ACTION_CONFIRMATION_NOT_PROVEN",commandId:command.commandId,authorityId:command.authorityId});
