@@ -268,6 +268,16 @@ async function main() {
     pages.push(settings);
     assert.match(await evaluate(cdp, settings.sessionId, 'document.body.innerText'), /Settings/i);
 
+    // Popup polls AI_BRIDGE_GET_STATE every 900 ms. Leaving it open would wake
+    // the MV3 worker during fault injection and race storage seeding. Settings
+    // is also closed after smoke validation so only the scenario Dashboard may
+    // intentionally wake the worker after each stopAllWorkers() call.
+    for (const page of [popup, settings]) {
+      await cdp.send('Target.closeTarget', { targetId: page.targetId });
+      const pageIndex = pages.indexOf(page);
+      if (pageIndex >= 0) pages.splice(pageIndex, 1);
+    }
+
     const dashboard = await createExtensionPage(cdp, extensionId, 'dashboard.html');
     pages.push(dashboard);
     assert.match(await evaluate(cdp, dashboard.sessionId, 'document.body.innerText'), /New chat — Limited/i);
