@@ -1,0 +1,31 @@
+name: AI Bridge regression (review candidate)
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches:
+      - main
+      - "ai-a/**"
+      - "ai-b/**"
+      - "ai-c/**"
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  regression:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
+        with: {node-version: "22", check-latest: true}
+      - run: |
+          node --check background.js
+          node --check content.js
+          node tests/repository-integrity.mjs
+      - run: node AI_OUTPUT/tests/chrome-extension-smoke.mjs
+      - run: node AI_OUTPUT/tests/classic-runtime-contract.mjs
+      - run: node AI_OUTPUT/tests/chrome-pack-smoke.mjs

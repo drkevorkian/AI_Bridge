@@ -21,6 +21,7 @@ export const PAUSE_REASON=Object.freeze({
   ROLLOVER_LIMIT_DETECTOR_UNAVAILABLE:'ROLLOVER_LIMIT_DETECTOR_UNAVAILABLE',
   ROLLOVER_IDENTITY_UNVERIFIED:'ROLLOVER_IDENTITY_UNVERIFIED',
   RUNTIME_RECONNECT_FAILED:'RUNTIME_RECONNECT_FAILED',
+  RUNTIME_DOCUMENT_REGISTRATION_TIMEOUT:'RUNTIME_DOCUMENT_REGISTRATION_TIMEOUT',
   RUNTIME_RECOVERY_FAILED:'RUNTIME_RECOVERY_FAILED',
   RUNTIME_RECOVERY_LOAD_FAILED:'RUNTIME_RECOVERY_LOAD_FAILED',
   RUNTIME_RECOVERY_VALIDATION_FAILED:'RUNTIME_RECOVERY_VALIDATION_FAILED',
@@ -46,6 +47,7 @@ const META=Object.freeze({
   ROLLOVER_LIMIT_DETECTOR_UNAVAILABLE:{certainty:ACTION_CERTAINTY.NO_ACTION_TAKEN,message:'Automatic rollover is unavailable because no verified thread-limit detector exists for this provider.'},
   ROLLOVER_IDENTITY_UNVERIFIED:{certainty:ACTION_CERTAINTY.NO_ACTION_TAKEN,message:'Conversation identity could not be verified after rollover. No automatic continuation occurred.'},
   RUNTIME_RECONNECT_FAILED:{certainty:ACTION_CERTAINTY.NO_ACTION_TAKEN,message:'AI Bridge could not reconnect the active provider tabs after service-worker restart. Relay work was not resumed.'},
+  RUNTIME_DOCUMENT_REGISTRATION_TIMEOUT:{certainty:ACTION_CERTAINTY.NO_ACTION_TAKEN,message:'The provider document did not finish its authority handshake before the safety deadline. No provider action was attempted.'},
   RUNTIME_RECOVERY_FAILED:{certainty:ACTION_CERTAINTY.UNKNOWN,message:'AI Bridge could not safely restore required runtime recovery state. No automatic recovery action will continue.'},
   RUNTIME_RECOVERY_LOAD_FAILED:{certainty:ACTION_CERTAINTY.UNKNOWN,message:'AI Bridge could not load persisted rollover recovery state. No parked response was replayed automatically.'},
   RUNTIME_RECOVERY_VALIDATION_FAILED:{certainty:ACTION_CERTAINTY.UNKNOWN,message:'Persisted rollover recovery state failed validation. No parked response was replayed automatically.'},
@@ -74,6 +76,7 @@ export function mapSubsystemReason(reason){
     RECOVERY_PERSIST_FAILED:PAUSE_REASON.RUNTIME_RECOVERY_PERSIST_FAILED,
     MUTATION_PERSIST_FAILED:PAUSE_REASON.RUNTIME_MUTATION_PERSIST_FAILED,
     DELIVERY_AMBIGUOUS:PAUSE_REASON.PROVIDER_ACTION_DELIVERY_AMBIGUOUS,
+    DOCUMENT_REGISTRATION_TIMEOUT:PAUSE_REASON.RUNTIME_DOCUMENT_REGISTRATION_TIMEOUT,
     CONTRACT_DISAGREEMENT:PAUSE_REASON.DOM_CONTRACT_DISAGREEMENT
   };
   return map[r]||null;
