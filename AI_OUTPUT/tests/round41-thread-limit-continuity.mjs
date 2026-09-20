@@ -118,12 +118,27 @@ assert.deepEqual(
   { ok:true, reason:"NEW_CONVERSATION_CONFIRMED" }
 );
 
+const coordReuse = new RolloverCoordinator();
+coordReuse.begin({
+  rolloverId:"r-reuse",
+  side:"B",
+  provider:"chatgpt",
+  triggeringDispatchId:"d-reuse",
+  oldAuthority,
+  hardLimitEvidence:limit,
+  startedAt:20
+});
+coordReuse.transition("B", PHASE.OLD_AUTHORITY_REVOKED, { oldAuthority:revoked }, 21);
+coordReuse.transition("B", PHASE.OPENING_NEW_CHAT, {}, 22);
+coordReuse.transition("B", PHASE.AWAITING_NEW_IDENTITY, {}, 23);
+coordReuse.transition("B", PHASE.NEW_IDENTITY_VERIFIED, { candidateAuthority:freshSurface }, 24);
+
 assert.throws(
-  () => coord.promoteCandidateAuthority("B", {
+  () => coordReuse.promoteCandidateAuthority("B", {
     ...confirmedConversation,
     identity:{ ...confirmedConversation.identity, threadKey:"old" }
-  }, 10),
-  /cannot reuse the old conversation identity/
+  }, 25),
+  /candidateAuthority did not change conversation identity/
 );
 
 console.log("round41-thread-limit-continuity: PASS");
