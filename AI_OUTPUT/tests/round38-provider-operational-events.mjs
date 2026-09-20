@@ -38,7 +38,7 @@ assert.doesNotMatch(inspectSource,/responseText\s*\(/,'response bodies must not 
 for(const token of [
   'PROVIDER_EVENT_POLICY',
   'if (msg.type === "AI_BRIDGE_PROVIDER_EVENT")',
-  'type === "provider-event"',
+  'recordTranscript("provider-event"',
   'runtimePhase = "PROVIDER_RECOVERY_REQUIRED"',
   'relay: providerBlocked ? "BLOCKED"',
   'PROVIDER_RECOVERY_REQUIRED: resolve the provider error',
@@ -55,3 +55,5 @@ for(const token of [
 ]) assert.ok(dashboard.includes(token),'dashboard missing '+token);
 
 console.log('round38-provider-operational-events: PASS');
+
+assert.doesNotMatch(background,/"provider_event"/,'provider operational events must use one canonical transcript type');
