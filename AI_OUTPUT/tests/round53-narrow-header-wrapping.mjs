@@ -6,9 +6,11 @@ import { fileURLToPath } from "node:url";
 const here = path.dirname(fileURLToPath(import.meta.url));
 const css = fs.readFileSync(path.join(here, "../runtime_review/dashboard.css"), "utf8");
 
-const narrow = css.match(/@media\s*\(max-width:\s*600px\)\s*\{([\s\S]*?)\n\}/);
-assert.ok(narrow, "missing ≤600px narrow-header breakpoint");
-const block = narrow[1];
+const narrowStart = css.indexOf("@media (max-width: 600px)");
+const modalStart = css.indexOf("@media (max-width: 480px)", narrowStart + 1);
+assert.ok(narrowStart >= 0, "missing ≤600px narrow-header breakpoint");
+assert.ok(modalStart > narrowStart, "missing ≤480px modal breakpoint after narrow-header rules");
+const block = css.slice(narrowStart, modalStart);
 
 for (const selector of [".agent-topline", ".transcript-head", ".workspace-header"]) {
   assert.ok(block.includes(selector), selector + " must participate in narrow wrapping");
