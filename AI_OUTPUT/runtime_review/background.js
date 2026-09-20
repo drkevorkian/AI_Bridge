@@ -2417,14 +2417,15 @@ const round = beginRoundTimer(side);
 
 async function openDashboard() {
   const url = chrome.runtime.getURL("dashboard.html");
+  const settingsUrl = chrome.runtime.getURL("settings.html");
   const tabs = await chrome.tabs.query({});
-  const existing = tabs.find(tab => tab.url === url);
+  const existing = tabs.find(tab => tab.url === url || tab.url === settingsUrl);
 
   if (existing?.id) {
     if (existing.windowId) {
       try { await chrome.windows.update(existing.windowId, { focused: true }); } catch (_) {}
     }
-    await chrome.tabs.update(existing.id, { active: true });
+    await chrome.tabs.update(existing.id, { url, active: true });
     return existing.id;
   }
 

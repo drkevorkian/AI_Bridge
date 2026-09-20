@@ -68,5 +68,5 @@
   "content_security_policy": {
     "extension_pages": "script-src 'self'; object-src 'none'; base-uri 'none'; frame-ancestors 'none'"
   },
-  "version_name": "AI A 1.19.0-dev.1"
+  "version_name": "AI A 1.19.0-dev.2"
 }
