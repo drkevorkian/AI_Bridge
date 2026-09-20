@@ -323,8 +323,19 @@ function reviewUpdateBoundary(){
   });
 }
 function reviewTrustedExtensionPage(sender){
-  if(sender?.tab)return false;
-  return sender?.id===chrome.runtime.id&&String(sender?.url||"").startsWith("chrome-extension://"+chrome.runtime.id+"/");
+  const extensionId=String(chrome.runtime.id||"");
+  const extensionOrigin="chrome-extension://"+extensionId;
+  if(!extensionId||sender?.id!==extensionId)return false;
+
+  const senderUrl=String(sender?.url||"");
+  if(!senderUrl.startsWith(extensionOrigin+"/"))return false;
+
+  // Extension pages opened in normal browser tabs legitimately include
+  // MessageSender.tab. Trust is based on exact extension origin, not tab absence.
+  if(sender?.origin!=null&&String(sender.origin)!==extensionOrigin)return false;
+  if(sender?.frameId!=null&&Number(sender.frameId)!==0)return false;
+  if(sender?.documentLifecycle!=null&&String(sender.documentLifecycle)!=="active")return false;
+  return true;
 }
 async function reviewCaptureUpdateBindings(){
   if(!state.sessionActive)return [];
