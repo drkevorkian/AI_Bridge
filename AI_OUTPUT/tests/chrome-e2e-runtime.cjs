@@ -464,22 +464,36 @@ async function main() {
     const responseCountAfterResume = (afterResume.bridgeState?.transcript || []).filter(entry => entry?.type === 'response').length;
     assert.equal(responseCountAfterResume, 0, 'Resume refusal must not mutate the response transcript');
 
-    const visible = await poll(
-      () => evaluate(cdp, dashboardAfter.sessionId, 'document.body.innerText'),
-      text =>
-        /Runtime:\s*Paused/i.test(text) &&
-        /New chat — Limited/i.test(text) &&
-        /Connection:\s*Connected/i.test(text) &&
-        /Authority:\s*Verified/i.test(text) &&
-        /Relay:\s*READY/i.test(text) &&
-        /Rollover:\s*LIMITED/i.test(text) &&
-        /Artifacts:\s*LIMITED/i.test(text),
+    const lostAckUi = await assertPausedDashboard(
+      cdp,
+      dashboardAfter,
+      /ambiguous|interrupted|replay/i
+    );
+    assert.match(lostAckUi.pill, /^Paused$/i);
+
+    const lostAckProviderUi = await poll(
+      () => evaluate(
+        cdp,
+        dashboardAfter.sessionId,
+        '({health:document.getElementById("healthA")?.textContent||"",newChatDisabled:Boolean(document.getElementById("newChatA")?.disabled),freshDisabled:Boolean(document.getElementById("freshOnStart")?.disabled)})'
+      ),
+      value =>
+        /Connection:\s*Connected/i.test(String(value?.health || '')) &&
+        /Authority:\s*Verified/i.test(String(value?.health || '')) &&
+        /Relay:\s*READY/i.test(String(value?.health || '')) &&
+        /Rollover:\s*LIMITED/i.test(String(value?.health || '')) &&
+        /Artifacts:\s*LIMITED/i.test(String(value?.health || '')) &&
+        value?.newChatDisabled === true &&
+        value?.freshDisabled === true,
       10000
     );
-    assert.match(visible, /Paused/i);
-    assert.match(visible, /Connection:\s*Connected/i);
-    assert.match(visible, /Authority:\s*Verified/i);
-    assert.match(visible, /Relay:\s*READY/i);
+    assert.match(lostAckProviderUi.health, /Connection:\s*Connected/i);
+    assert.match(lostAckProviderUi.health, /Authority:\s*Verified/i);
+    assert.match(lostAckProviderUi.health, /Relay:\s*READY/i);
+    assert.match(lostAckProviderUi.health, /Rollover:\s*LIMITED/i);
+    assert.match(lostAckProviderUi.health, /Artifacts:\s*LIMITED/i);
+    assert.equal(lostAckProviderUi.newChatDisabled, true);
+    assert.equal(lostAckProviderUi.freshDisabled, true);
 
     const workers = (await cdp.send('Target.getTargets')).targetInfos.filter(target =>
       target.type === 'service_worker' &&
@@ -561,7 +575,6 @@ async function main() {
       dashboardMissingContinuation,
       /RUNTIME_CONTINUATION_STATE_INCONSISTENT|committed response is missing its durable next-turn record/i
     );
-    assert.match(missingContinuationUi, /Paused/i);
 
     const seededHealth = await poll(async () => {
       const health = await extensionMessage(cdp, dashboardMissingContinuation.sessionId, { type: 'AI_BRIDGE_PROVIDER_HEALTH', tabId: providerTabs.a });
@@ -622,7 +635,6 @@ async function main() {
       dashboardUncommittedSource,
       /next-turn|committed source|recovery|Automatic reconnect failed/i
     );
-    assert.match(uncommittedSourceUi, /Paused/i);
 
     const matrixStorage = await extensionStorage(cdp, extensionId, ['aiBridgeRuntimeDispatchLedger', 'bridgeState']);
     assert.equal(matrixStorage.aiBridgeRuntimeDispatchLedger?.records?.[0]?.dispatchId, baseDispatch.dispatchId);

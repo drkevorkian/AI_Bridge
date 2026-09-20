@@ -92,3 +92,13 @@ Paused-state recovery assertions now inspect the actual #sessionPill and #status
 The target-CREATED recovery scenario uses a fresh synthetic dispatch ID that has never reached the surviving provider-B content document. It preserves the runtime-generated tab, provider identity, generation, conversation identity, and payload hash, but does not reuse an ID already stored in content.js duplicate authority memory.
 
 The harness asserts the CREATED ID differs from the previously delivered positive-recovery dispatch and is absent from all earlier matrix dispatch IDs before waking the worker. This prevents content-side byAuthority duplicate caching from suppressing the intended CREATED delivery.
+
+
+### Lost-ACK element-specific UI contract
+
+The canonical provider-click/lost-ACK recovery case now uses the same element-specific standard as the seeded matrix:
+- #sessionPill and #status are validated through assertPausedDashboard();
+- #healthA must show Connected / Verified / Relay READY / Rollover LIMITED / Artifacts LIMITED;
+- #newChatA and #freshOnStart must remain disabled.
+
+The harness no longer accepts whole-page document.body text as evidence for this recovery state. Helper-return objects are treated by shape: paused helpers return {pill,status}; deterministic helpers are read through their .status field.
