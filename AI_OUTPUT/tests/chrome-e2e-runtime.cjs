@@ -243,13 +243,28 @@ async function createProviderFixture(cdp, url) {
   return { targetId: created.targetId, sessionId, dispose };
 }
 
+async function workerSession(cdp, extensionId) {
+  const target = await poll(() => workerTarget(cdp, extensionId), Boolean, 5000, 50);
+  return attach(cdp, target.targetId);
+}
+
 async function extensionStorage(cdp, extensionId, keys) {
-  const result = await cdp.send('Extensions.getStorageItems', { id: extensionId, storageArea: 'local', keys });
-  return result.data || {};
+  const sessionId = await workerSession(cdp, extensionId);
+  try {
+    const result = await cdp.send('Extensions.getStorageItems', { id: extensionId, storageArea: 'local', keys }, sessionId);
+    return result.data || {};
+  } finally {
+    try { await cdp.send('Target.detachFromTarget', { sessionId }); } catch {}
+  }
 }
 
 async function setExtensionStorage(cdp, extensionId, values) {
-  await cdp.send('Extensions.setStorageItems', { id: extensionId, storageArea: 'local', values });
+  const sessionId = await workerSession(cdp, extensionId);
+  try {
+    await cdp.send('Extensions.setStorageItems', { id: extensionId, storageArea: 'local', values }, sessionId);
+  } finally {
+    try { await cdp.send('Target.detachFromTarget', { sessionId }); } catch {}
+  }
 }
 
 async function workerTarget(cdp, extensionId) {
@@ -561,14 +576,14 @@ async function main() {
     await cdp.send('Target.closeTarget', { targetId: dashboardAfter.targetId });
     const dashboardAfterIndex = pages.indexOf(dashboardAfter);
     if (dashboardAfterIndex >= 0) pages.splice(dashboardAfterIndex, 1);
-    await cdp.send('ServiceWorker.stopAllWorkers');
-    await poll(() => workerTarget(cdp, extensionId), value => value === null, 10000);
     await setExtensionStorage(cdp, extensionId, {
       bridgeState: { ...baseState },
       aiBridgeRuntimeDispatchLedger: { records: [committedBaseDispatch] },
       aiBridgeRuntimeParkedResponses: { records: [] }
     });
 
+    await cdp.send('ServiceWorker.stopAllWorkers');
+    await poll(() => workerTarget(cdp, extensionId), value => value === null, 10000);
     const dashboardMissingContinuation = await createExtensionPage(cdp, extensionId, 'dashboard.html');
     pages.push(dashboardMissingContinuation);
     const missingContinuationState = await poll(async () => {
@@ -606,8 +621,6 @@ async function main() {
     await cdp.send('Target.closeTarget', { targetId: dashboardMissingContinuation.targetId });
     const missingIndex = pages.indexOf(dashboardMissingContinuation);
     if (missingIndex >= 0) pages.splice(missingIndex, 1);
-    await cdp.send('ServiceWorker.stopAllWorkers');
-    await poll(() => workerTarget(cdp, extensionId), value => value === null, 10000);
 
     const pendingMarker = {
       kind: 'SEQUENTIAL_SEND',
@@ -630,6 +643,8 @@ async function main() {
       aiBridgeRuntimeParkedResponses: { records: [] }
     });
 
+    await cdp.send('ServiceWorker.stopAllWorkers');
+    await poll(() => workerTarget(cdp, extensionId), value => value === null, 10000);
     const dashboardUncommittedSource = await createExtensionPage(cdp, extensionId, 'dashboard.html');
     pages.push(dashboardUncommittedSource);
     const uncommittedSourceState = await poll(async () => {
@@ -657,8 +672,6 @@ async function main() {
     await cdp.send('Target.closeTarget', { targetId: dashboardUncommittedSource.targetId });
     const uncommittedIndex = pages.indexOf(dashboardUncommittedSource);
     if (uncommittedIndex >= 0) pages.splice(uncommittedIndex, 1);
-    await cdp.send('ServiceWorker.stopAllWorkers');
-    await poll(() => workerTarget(cdp, extensionId), value => value === null, 10000);
 
     await evaluate(cdp, providerB.sessionId, 'window.__autoConfirm=true;window.__emitResponse=false;true');
     const positiveActionCountABefore = await evaluate(cdp, providerA.sessionId, 'window.__providerActionCount');
@@ -678,6 +691,8 @@ async function main() {
       aiBridgeRuntimeParkedResponses: { records: [] }
     });
 
+    await cdp.send('ServiceWorker.stopAllWorkers');
+    await poll(() => workerTarget(cdp, extensionId), value => value === null, 10000);
     const dashboardPositive = await createExtensionPage(cdp, extensionId, 'dashboard.html');
     pages.push(dashboardPositive);
 
@@ -712,8 +727,6 @@ async function main() {
     await cdp.send('Target.closeTarget', { targetId: dashboardPositive.targetId });
     const positiveIndex = pages.indexOf(dashboardPositive);
     if (positiveIndex >= 0) pages.splice(positiveIndex, 1);
-    await cdp.send('ServiceWorker.stopAllWorkers');
-    await poll(() => workerTarget(cdp, extensionId), value => value === null, 10000);
 
     const claimedNow = Date.now();
     await setExtensionStorage(cdp, extensionId, {
@@ -731,6 +744,8 @@ async function main() {
       }
     });
 
+    await cdp.send('ServiceWorker.stopAllWorkers');
+    await poll(() => workerTarget(cdp, extensionId), value => value === null, 10000);
     const dashboardClaimed = await createExtensionPage(cdp, extensionId, 'dashboard.html');
     pages.push(dashboardClaimed);
     const claimedState = await poll(async () => {
@@ -748,8 +763,6 @@ async function main() {
     await cdp.send('Target.closeTarget', { targetId: dashboardClaimed.targetId });
     const claimedIndex = pages.indexOf(dashboardClaimed);
     if (claimedIndex >= 0) pages.splice(claimedIndex, 1);
-    await cdp.send('ServiceWorker.stopAllWorkers');
-    await poll(() => workerTarget(cdp, extensionId), value => value === null, 10000);
 
     const createdTarget = {
       ...positiveStorage.target,
@@ -785,6 +798,8 @@ async function main() {
       aiBridgeRuntimeParkedResponses: { records: [] }
     });
 
+    await cdp.send('ServiceWorker.stopAllWorkers');
+    await poll(() => workerTarget(cdp, extensionId), value => value === null, 10000);
     const dashboardCreated = await createExtensionPage(cdp, extensionId, 'dashboard.html');
     pages.push(dashboardCreated);
     await poll(
@@ -818,8 +833,6 @@ async function main() {
       await cdp.send('Target.closeTarget', { targetId: currentDashboard.targetId });
       const currentIndex = pages.indexOf(currentDashboard);
       if (currentIndex >= 0) pages.splice(currentIndex, 1);
-      await cdp.send('ServiceWorker.stopAllWorkers');
-      await poll(() => workerTarget(cdp, extensionId), value => value === null, 10000);
 
       const seededTarget = {
         ...positiveStorage.target,
@@ -840,6 +853,8 @@ async function main() {
         aiBridgeRuntimeParkedResponses: { records: [] }
       });
 
+      await cdp.send('ServiceWorker.stopAllWorkers');
+      await poll(() => workerTarget(cdp, extensionId), value => value === null, 10000);
       const dashboardAmbiguous = await createExtensionPage(cdp, extensionId, 'dashboard.html');
       pages.push(dashboardAmbiguous);
       const ambiguousRecovered = await poll(async () => {
