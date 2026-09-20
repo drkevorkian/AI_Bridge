@@ -46,8 +46,10 @@ assert.match(background, /rolloverId:tx\.rolloverId/);
 assert.match(background, /ROLLOVER_PHASE\.AWAITING_CONTINUITY_RESPONSE/);
 assert.match(background, /dispatch\.purpose === "CONTINUITY"/);
 assert.match(background, /ROLLOVER_PHASE\.COMPLETE/);
-assert.match(background, /const startupRollover = reviewActiveRolloverSummary\(\)/);
+assert.match(background, /const startupRollovers = reviewActiveRolloverSummaries\(\)/);
+assert.match(background, /for \(const startupRollover of startupRollovers\)/);
 assert.match(background, /reviewQueueRollover\(\(\) => reviewResumeThreadRollover\(startupRollover\.side\)\)/);
+assert.doesNotMatch(background, /const startupRollover = reviewActiveRolloverSummary\(\)/);
 
 assert.doesNotMatch(
   background,
