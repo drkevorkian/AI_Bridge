@@ -119,22 +119,25 @@ This prevents the worker from rejecting synthetic crash snapshots during ledger 
 
 AI Bridge classifies trusted provider UI failures such as "Message delivery timed out. Please try again." before normal response commit. Operational events are bound to the existing dispatch, deduplicated, recorded as provider_event transcript entries, and pause the session in PROVIDER_RECOVERY_REQUIRED without allocating or replaying a normal SEND.
 
-The original dispatch remains response-capable. If the provider/human retries in the provider UI and a valid response later appears, AI Bridge correlates it to the same dispatch. Provider-event transcript entries are displayed for diagnostics but excluded from AI-to-AI prompt context.
+The current Round 39 event taxonomy is:
 
+- `MESSAGE_DELIVERY_TIMEOUT` — delivery timed out / provider asks to try again;
+- `CONNECTION_INTERRUPTED` — provider connection interruption while waiting on a response;
+- `NETWORK_ERROR` — provider/network transport failure;
+- `GENERATION_ERROR` — provider could not complete response generation;
+- `RATE_LIMIT` — short-term provider capacity/rate limiting;
+- `USAGE_LIMIT` — provider usage/quota limit;
+- `AUTH_REQUIRED` — provider requires authentication;
+- `CONTENT_BLOCKED` — provider blocked the request/response for policy reasons.
 
-Current provider-event codes are:
+Provider-event transcript entries are displayed for diagnostics but excluded from AI-to-AI prompt context, so operational notices are never relayed as though an AI said them.
 
-- `MESSAGE_DELIVERY_TIMEOUT`
-- `CONNECTION_INTERRUPTED`
-- `NETWORK_ERROR`
-- `GENERATION_ERROR`
-- `RATE_LIMIT`
-- `USAGE_LIMIT`
-- `AUTH_REQUIRED`
-- `CONTENT_BLOCKED`
+The original dispatch remains response-capable. AI Bridge does not create a replacement normal SEND just because the provider says "try again." If the provider or human recovers the provider-side generation and a valid response later appears, Bridge correlates that response to the same dispatch and preserves exactly-once relay behavior.
+
+While a provider event is active, provider health may still show a connected and verified document while relay capability is BLOCKED. That distinction is intentional: healthy document authority does not mean the current relay dispatch is safe to advance.
 
 ### Provider-event authority
 
-Provider operational events are control-plane inputs. Before a provider event may pause or otherwise change a session, the background verifies the currently registered top-level active document, Chrome documentId, authority-registration token, tab/side/provider, generation epoch, and the full six-field conversation identity against both the live document authority and the dispatch ledger. Stale or mismatched events are rejected and cannot mutate relay state.
+Provider operational events are control-plane inputs. Before a provider event may pause or otherwise change a session, the background verifies the currently registered top-level active document, Chrome documentId, authority-registration token, tab/side/provider, generation epoch, and the full six-field conversation identity against both the live document authority and the dispatch ledger. Stale or mismatched events are rejected before provider-event history, transcript, or relay/session state is mutated.
 
 Operational-event DOM probes are restricted to visible alert/ARIA-live system surfaces outside assistant-message DOM. Assistant responses are never scanned for provider-error phrases, preventing a model that quotes an error message from falsely triggering recovery.
