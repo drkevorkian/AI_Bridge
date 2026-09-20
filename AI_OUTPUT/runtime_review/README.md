@@ -113,3 +113,10 @@ Seeded recovery snapshots now satisfy the same DispatchLedger lifecycle invarian
 - ACCEPTED has acceptedAt and no completedAt.
 
 This prevents the worker from rejecting synthetic crash snapshots during ledger restore before the intended recovery behavior is exercised.
+
+
+### Provider operational events
+
+AI Bridge classifies trusted provider UI failures such as "Message delivery timed out. Please try again." before normal response commit. Operational events are bound to the existing dispatch, deduplicated, recorded as provider_event transcript entries, and pause the session in PROVIDER_RECOVERY_REQUIRED without allocating or replaying a normal SEND.
+
+The original dispatch remains response-capable. If the provider/human retries in the provider UI and a valid response later appears, AI Bridge correlates it to the same dispatch. Provider-event transcript entries are displayed for diagnostics but excluded from AI-to-AI prompt context.

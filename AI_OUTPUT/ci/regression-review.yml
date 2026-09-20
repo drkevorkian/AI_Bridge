@@ -59,5 +59,7 @@ jobs:
         run: node AI_OUTPUT/tests/round36-lost-ack-element-ui.mjs
       - name: Round 37 seeded dispatch lifecycle
         run: node AI_OUTPUT/tests/round37-seeded-dispatch-lifecycle.mjs
+      - name: Round 38 provider operational events
+        run: node AI_OUTPUT/tests/round38-provider-operational-events.mjs
       - name: Real Chrome MV3 E2E
         run: node AI_OUTPUT/tests/chrome-e2e-runtime.cjs

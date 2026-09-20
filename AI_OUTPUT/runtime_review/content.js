@@ -2,7 +2,7 @@
   if (globalThis.__AI_BRIDGE_REVIEW_CONTENT__) return;
   globalThis.__AI_BRIDGE_REVIEW_CONTENT__ = true;
 
-  const VERSION = "1.18.0-review.2";
+  const VERSION = "1.18.0-review.3";
   const host = location.hostname.toLowerCase();
   const provider = host === "chatgpt.com" || host === "chat.openai.com" ? "chatgpt"
     : host === "grok.com" ? "grok"
@@ -43,6 +43,8 @@
   let lastChangedAt = 0;
   let monitorTimer = null;
   let lastLimitSignature = "";
+  let providerEventBaseline = new Set();
+  const providerEventSignatures = new Map();
 
   function trim(map){ while(map.size > MAX_CACHE) map.delete(map.keys().next().value); }
   function rememberCommand(command,result){ byCommand.set(command.commandId,result); trim(byCommand); return result; }
@@ -84,6 +86,7 @@
       composer: resolveTrusted(config.composer) ? "PASS" : "FAIL",
       send: resolveTrusted(config.send,{requireEnabled:true}) ? "PASS" : "FAIL",
       response: config.response.length ? "PASS" : "UNSUPPORTED",
+      provider_events: "PASS",
       upload: "UNSUPPORTED",
       new_chat: "UNSUPPORTED",
       conversation_identity: provider ? "PASS" : "FAIL"
@@ -152,6 +155,7 @@
 
     const attempted=Object.freeze({ok:false,outcome:"ACTION_ATTEMPTED",reason:"ACTION_CONFIRMATION_NOT_PROVEN",commandId:command.commandId,authorityId:command.authorityId});
     consumeAuthority(command,attempted);
+    captureProviderEventBaseline();
     send3.click();
     awaitingDispatchId=command.authorityId;
     const confirmation=await confirmSend(composer2,text);
@@ -174,6 +178,75 @@
     return rememberCommand(command,reject(command,"UNSUPPORTED_ACTION"));
   }
 
+  function normalizeProviderEventText(value){
+    return String(value||"").replace(/\u00a0/g," ").replace(/\s+/g," ").trim().slice(0,500);
+  }
+  function classifyProviderEvent(value){
+    const text=normalizeProviderEventText(value);
+    if(!text) return null;
+    if(/maximum length for this conversation|you(?:'|’)ve reached the maximum length for this conversation/i.test(text)) return null;
+    const rules=[
+      ["MESSAGE_DELIVERY_TIMEOUT","DELIVERY","RECOVERABLE",/message delivery timed out(?:\.|$)|delivery timed out(?:\.|$)/i],
+      ["CONNECTION_INTERRUPTED","CONNECTION","RECOVERABLE",/connection interrupted|connection lost|disconnected|reconnecting|waiting for (?:the )?complete answer/i],
+      ["NETWORK_ERROR","CONNECTION","RECOVERABLE",/network error|network issue|network connection/i],
+      ["GENERATION_ERROR","GENERATION","RECOVERABLE",/something went wrong|error generating|failed to generate|could(?:n|'|’)t generate|generation failed/i],
+      ["RATE_LIMIT","CAPACITY","RECOVERABLE",/rate limit|too many requests/i],
+      ["USAGE_LIMIT","CAPACITY","RECOVERABLE",/usage limit|try again in \d|limit resets/i],
+      ["AUTH_REQUIRED","AUTH","BLOCKING",/session expired|sign in to continue|log in to continue|authentication required/i],
+      ["CONTENT_BLOCKED","POLICY","BLOCKING",/content blocked|response blocked by|blocked by policy/i]
+    ];
+    for(const [code,category,severity,re] of rules){
+      if(re.test(text)) return Object.freeze({code,category,severity,message:text});
+    }
+    return null;
+  }
+  function operationalEventTexts(){
+    const texts=[];
+    for(const selector of ["[role='alert']","[aria-live='assertive']","[aria-live='polite']"]){
+      let nodes=[]; try{nodes=[...document.querySelectorAll(selector)].filter(visible);}catch(_){}
+      for(const node of nodes){
+        const text=normalizeProviderEventText(node.innerText||node.textContent||"");
+        if(text&&!texts.includes(text)) texts.push(text);
+      }
+    }
+    return texts;
+  }
+  function captureProviderEventBaseline(){
+    providerEventBaseline=new Set(operationalEventTexts());
+  }
+  async function inspectProviderEvent(){
+    if(!awaitingDispatchId||!registration) return null;
+    const candidates=operationalEventTexts();
+    const response=responseText();
+    if(response) candidates.push(normalizeProviderEventText(response));
+    for(const raw of candidates){
+      const event=classifyProviderEvent(raw);
+      if(!event) continue;
+      if(providerEventBaseline.has(event.message)) continue;
+      const identity=registration.identity||{};
+      const signature=[provider,awaitingDispatchId,event.code,event.message,identity.threadKey||identity.routeClass||""].join("::");
+      if(!providerEventSignatures.has(signature)){
+        providerEventSignatures.set(signature,Date.now());
+        trim(providerEventSignatures);
+        try{
+          await chrome.runtime.sendMessage({
+            type:"AI_BRIDGE_PROVIDER_EVENT",
+            provider,
+            dispatchId:awaitingDispatchId,
+            generationEpoch:registration.generationEpoch,
+            conversationIdentity:registration.identity,
+            side:registration.side,
+            code:event.code,
+            message:event.message,
+            observedAt:Date.now()
+          });
+        }catch(_){}
+      }
+      return event;
+    }
+    return null;
+  }
+
   function responseText(){
     const nodes=[];
     for(const selector of config.response||[]){
@@ -191,6 +264,7 @@
   async function monitor(){
     monitorTimer=null;
     if(!awaitingDispatchId) return;
+    if(await inspectProviderEvent()){scheduleMonitor(750);return;}
     const text=responseText();
     if(!text) return;
     if(text!==lastObserved){lastObserved=text;lastChangedAt=Date.now();scheduleMonitor(350);return;}
@@ -240,6 +314,8 @@
       lastHref=location.href;
       registration=null;
       awaitingDispatchId=null;
+      providerEventBaseline=new Set();
+      providerEventSignatures.clear();
       byCommand.clear();
       byAuthority.clear();
       chrome.runtime.sendMessage({type:"AI_BRIDGE_DOCUMENT_ROUTE_CHANGED"}).catch(()=>{});
@@ -296,6 +372,11 @@
     }
     if(msg.type==="AI_BRIDGE_READ_LAST_RESPONSE"){
       const text=responseText();
+      const providerEvent=classifyProviderEvent(text);
+      if(providerEvent){
+        sendResponse({ok:false,error:"PROVIDER_EVENT_ACTIVE",providerEvent,active:generationActive(),host});
+        return false;
+      }
       sendResponse({ok:Boolean(text),text,active:generationActive(),host});
       return false;
     }

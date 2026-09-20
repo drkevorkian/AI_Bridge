@@ -561,6 +561,8 @@ function transcriptCard(entry) {
   title.className = "transcript-title";
   if (entry.type === "human") {
     title.textContent = entry.interjection ? "Human controller · interjection" : "Human controller";
+  } else if (entry.type === "provider_event") {
+    title.textContent = `AI ${entry.side || "?"} · Provider event · ${entry.code || "PROVIDER_ERROR"}`;
   } else {
     title.textContent = `AI ${entry.side || "?"} · ${entry.label || "AI"}`;
   }
@@ -603,7 +605,7 @@ function renderTranscript(s) {
     clearTranscript();
   }
 
-  const fresh = entries.filter(e => Number(e.seq) > renderedSeq && (e.type === "response" || e.type === "human"));
+  const fresh = entries.filter(e => Number(e.seq) > renderedSeq && (e.type === "response" || e.type === "human" || e.type === "provider_event"));
   if (!fresh.length) return;
 
   $("emptyTranscript").classList.add("hidden");
@@ -784,6 +786,7 @@ function runtimePhaseLabel(raw) {
     AWAITING_PROVIDER_RESPONSE: "Awaiting provider response",
     NEXT_TURN_PENDING: "Next relay turn pending",
     RECOVERING_NEXT_TURN: "Recovering next relay turn",
+    PROVIDER_RECOVERY_REQUIRED: "Provider recovery required",
     PAUSED: "Paused"
   })[String(raw || "IDLE")] || String(raw || "Unknown").replaceAll("_", " ");
 }
@@ -796,6 +799,12 @@ function updateStatus(s) {
 
   if (s.sessionActive && s.awaitingHuman && s.pendingHuman) {
     $("status").textContent = `PAUSED — HUMAN INPUT NEEDED\nRuntime: ${phase}\nWaiting on controller for ${s.pendingHuman.requestingLabel || `AI ${s.pendingHuman.requestingSide}`}.`;
+  } else if (s.sessionActive && s.providerRecovery) {
+    const event = s.providerRecovery;
+    $("status").textContent = `PAUSED — provider action needed
+Runtime: ${phase}
+AI ${event.side || "?"} / ${event.provider || "provider"}: ${event.message || event.code || "Provider error"}
+AI Bridge did not resend the prompt automatically because that could duplicate work. Resolve/retry in the provider tab; the same dispatch remains correlated.`;
   } else if (s.sessionActive && ["NEXT_TURN_PENDING","RECOVERING_NEXT_TURN"].includes(s.runtimePhase)) {
     $("status").textContent = `Running — recovering next relay turn\nRuntime: ${phase}\nAI turns: ${s.turn}/${limit}`;
   } else if (s.sessionActive && s.running) {
@@ -814,6 +823,36 @@ function updateStatus(s) {
   } else {
     const last = s.log?.length ? s.log[s.log.length - 1]?.text : "";
     $("status").textContent = `Idle · Runtime: ${phase}${last ? ` — ${last}` : ""}`;
+  }
+}
+
+async function refreshProviderHealth() {
+  for (const side of ALL_SIDES) {
+    const node = $(`health${side}`);
+    if (!node) continue;
+    if (!SIDES.includes(side)) {
+      node.textContent = "Connection: — · Authority: — · Relay: — · Rollover: Limited · Artifacts: Limited";
+      continue;
+    }
+    const tabId = selectedTab(side) || Number(latestState?.[`tab${side}`]);
+    if (!Number.isInteger(Number(tabId)) || Number(tabId) <= 0) {
+      node.textContent = "Connection: Disconnected · Authority: Not verified · Relay: WAITING · Rollover: LIMITED · Artifacts: LIMITED";
+      continue;
+    }
+    try {
+      const res = await chrome.runtime.sendMessage({ type:"AI_BRIDGE_PROVIDER_HEALTH", tabId:Number(tabId) });
+      if (!res?.ok) throw new Error(res?.error || "health unavailable");
+      const connection = res.connectionStatus === "CONNECTED" ? "Connected" : "Disconnected";
+      const authority = res.actionAuthorityStatus === "DOCUMENT_AUTHORITY_VERIFIED" ? "Verified"
+        : (res.actionAuthorityStatus === "LISTENER_CONNECTED" ? "Registering" : "Not verified");
+      const relay = String(res.capabilities?.relay || "WAITING").toUpperCase();
+      const rollover = String(res.capabilities?.rollover || "LIMITED").toUpperCase();
+      const artifacts = String(res.capabilities?.artifacts || "LIMITED").toUpperCase();
+      const event = res.operationalEvent;
+      node.textContent = `Connection: ${connection} · Authority: ${authority} · Relay: ${relay} · Rollover: ${rollover} · Artifacts: ${artifacts}${event?.message ? ` · Provider event: ${event.code || "ERROR"} — ${event.message}` : ""}`;
+    } catch (_) {
+      node.textContent = "Connection: Disconnected · Authority: Not verified · Relay: WAITING · Rollover: LIMITED · Artifacts: LIMITED";
+    }
   }
 }
 
