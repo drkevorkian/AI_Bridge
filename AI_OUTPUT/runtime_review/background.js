@@ -215,16 +215,34 @@ async function reviewPayloadHash(side, text) {
   const digest = new Uint8Array(await crypto.subtle.digest("SHA-256", bytes));
   return [...digest].map(b => b.toString(16).padStart(2, "0")).join("");
 }
-function reviewFindUnresolvedDispatch(side, payloadHash) {
+function reviewFindUnresolvedDispatch(side, payloadHash, {
+  continuationSourceDispatchId = null,
+  continuationCreatedAt = 0
+} = {}) {
   const active = new Set([
     DISPATCH_STATUS.CREATED, DISPATCH_STATUS.DISPATCHING, DISPATCH_STATUS.ACCEPTED,
     DISPATCH_STATUS.AWAITING_RESPONSE, DISPATCH_STATUS.DELIVERY_AMBIGUOUS
   ]);
+  const targetSide = String(side).toUpperCase();
+  const sourceId = continuationSourceDispatchId == null ? null : String(continuationSourceDispatchId);
+  const createdFloor = Number(continuationCreatedAt) || 0;
   const candidates = reviewLedger.snapshot().filter(r =>
-    r.side === String(side).toUpperCase() && active.has(r.status)
+    r.side === targetSide && active.has(r.status)
   );
-  const exact = candidates.find(r => r.payloadHash === payloadHash) || null;
-  const blocking = candidates.find(r => r.status !== DISPATCH_STATUS.CREATED || r.payloadHash !== payloadHash) || null;
+  const belongsToContinuation = record => {
+    if (sourceId === null) return record.continuationSourceDispatchId == null;
+    if (record.continuationSourceDispatchId != null) {
+      return String(record.continuationSourceDispatchId) === sourceId;
+    }
+    // Backward-compatible fallback for records persisted before provenance was
+    // added. Never accept an older same-text record from before this pending turn.
+    return Number(record.createdAt) >= createdFloor;
+  };
+  const exact = candidates.find(r => r.payloadHash === payloadHash && belongsToContinuation(r)) || null;
+  const blocking = candidates.find(r =>
+    r !== exact &&
+    (r.status !== DISPATCH_STATUS.CREATED || r.payloadHash !== payloadHash || !belongsToContinuation(r))
+  ) || null;
   return { exact, blocking };
 }
 async function reviewTransitionDispatch(dispatchId, status, patch = {}) {
@@ -577,12 +595,18 @@ async function reviewAdoptAwaitingRecoveredContinuation(pending) {
     DISPATCH_STATUS.AWAITING_RESPONSE,
     DISPATCH_STATUS.DELIVERY_AMBIGUOUS
   ]);
-  let candidates = reviewLedger.snapshot().filter(record =>
-    record.side === pending.targetSide &&
-    record.payloadHash === payloadHash &&
-    candidateStatuses.has(record.status) &&
-    Number(record.createdAt) >= createdFloor
-  );
+  const sourceId = String(pending.sourceDispatchId);
+  let candidates = reviewLedger.snapshot().filter(record => {
+    if (
+      record.side !== pending.targetSide ||
+      record.payloadHash !== payloadHash ||
+      !candidateStatuses.has(record.status)
+    ) return false;
+    if (record.continuationSourceDispatchId != null) {
+      return String(record.continuationSourceDispatchId) === sourceId;
+    }
+    return Number(record.createdAt) >= createdFloor;
+  });
   if (!candidates.length) return null;
   if (candidates.length !== 1) {
     return {
@@ -2672,7 +2696,14 @@ async function sendToSide(side, text, { record = true, deliveredSeq = null, deli
   }
 
   const payloadHash = await reviewPayloadHash(side, text);
-  const unresolved = reviewFindUnresolvedDispatch(side, payloadHash);
+  const continuationPending = continuationSourceDispatchId != null &&
+    String(state.nextTurnPending?.sourceDispatchId || "") === String(continuationSourceDispatchId)
+      ? state.nextTurnPending
+      : null;
+  const unresolved = reviewFindUnresolvedDispatch(side, payloadHash, {
+    continuationSourceDispatchId,
+    continuationCreatedAt: continuationPending?.createdAt || 0
+  });
   let dispatch;
   if (unresolved.blocking) {
     await reviewPauseForAmbiguity("A prior dispatch for AI " + side + " is unresolved (" + unresolved.blocking.status + "). Automatic resend is blocked.");
@@ -2689,6 +2720,7 @@ async function sendToSide(side, text, { record = true, deliveredSeq = null, deli
       conversationIdentity: authority.identity,
       purpose: "RELAY",
       payloadHash,
+      continuationSourceDispatchId: continuationSourceDispatchId == null ? null : String(continuationSourceDispatchId),
       createdAt: Date.now()
     });
     await reviewPersistLedger();
