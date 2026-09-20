@@ -20,7 +20,7 @@ let renderedSeq = 0;
 let autoScroll = true;
 let selectedSourceFiles = [];
 let activeHumanModalKey = "";
-const WORK_MODE_INFO = {
+function renderBuildIdentity() {\n  const manifest = chrome.runtime.getManifest();\n  const build = manifest.version_name || manifest.version;\n  const el = $("buildIdentity");\n  if (el) el.textContent = `v${manifest.version} · ${build}`;\n}\n\nconst WORK_MODE_INFO = {
   relay: { label: "Relay" },
   collaborate: { label: "Collaborate" },
   compete: { label: "Compete" },
@@ -29,7 +29,7 @@ const WORK_MODE_INFO = {
   mesh: { label: "Direct Mesh" }
 };
 
-function normalizeAgentCount(raw) {
+renderBuildIdentity();\n\nfunction normalizeAgentCount(raw) {
   const value = Number(raw);
   return Number.isInteger(value) && value >= 1 && value <= ALL_SIDES.length ? value : DEFAULT_AGENT_COUNT;
 }
