@@ -60,8 +60,11 @@ class PipeCdp {
       if (message.id && this.pending.has(message.id)) {
         const pending = this.pending.get(message.id);
         this.pending.delete(message.id);
-        if (message.error) pending.reject(new Error(message.error.message || JSON.stringify(message.error)));
-        else pending.resolve(message.result || {});
+        if (message.error) {
+          const detail = message.error.message || JSON.stringify(message.error);
+          const params = pending.params && Object.keys(pending.params).length ? ' params=' + JSON.stringify(pending.params) : '';
+          pending.reject(new Error('CDP ' + pending.method + ' failed: ' + detail + params));
+        } else pending.resolve(message.result || {});
         continue;
       }
       for (const listener of [...this.listeners]) {
@@ -84,6 +87,8 @@ class PipeCdp {
         reject(new Error('CDP timeout: ' + method));
       }, timeoutMs);
       this.pending.set(id, {
+        method,
+        params,
         resolve: result => { clearTimeout(timer); resolve(result); },
         reject: error => { clearTimeout(timer); reject(error); }
       });
@@ -194,8 +199,26 @@ async function extensionMessage(cdp, sessionId, message) {
   return evaluate(cdp, sessionId, expression, true);
 }
 
+let defaultBrowserContextResolved = false;
+let defaultBrowserContextId = null;
+
+async function createTarget(cdp, url) {
+  if (!defaultBrowserContextResolved) {
+    defaultBrowserContextResolved = true;
+    try {
+      const contexts = await cdp.send('Target.getBrowserContexts');
+      defaultBrowserContextId = contexts.defaultBrowserContextId || null;
+    } catch (_) {
+      defaultBrowserContextId = null;
+    }
+  }
+  const params = { url };
+  if (defaultBrowserContextId) params.browserContextId = defaultBrowserContextId;
+  return cdp.send('Target.createTarget', params);
+}
+
 async function createExtensionPage(cdp, extensionId, pageName) {
-  const created = await cdp.send('Target.createTarget', { url: 'chrome-extension://' + extensionId + '/' + pageName });
+  const created = await createTarget(cdp, 'chrome-extension://' + extensionId + '/' + pageName);
   const sessionId = await attach(cdp, created.targetId);
   await poll(() => evaluate(cdp, sessionId, 'document.readyState'), value => value === 'complete' || value === 'interactive', 10000);
   return { targetId: created.targetId, sessionId };
@@ -218,7 +241,7 @@ const fixtureHtml = '<!doctype html><html><head><meta charset="utf-8"><title>AI 
   '</script></body></html>';
 
 async function createProviderFixture(cdp, url) {
-  const created = await cdp.send('Target.createTarget', { url: 'about:blank' });
+  const created = await createTarget(cdp, 'about:blank');
   const sessionId = await attach(cdp, created.targetId);
   const dispose = cdp.on('Fetch.requestPaused', async params => {
     if (params.resourceType !== 'Document') {

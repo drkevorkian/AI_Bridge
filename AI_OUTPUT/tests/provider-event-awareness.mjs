@@ -18,8 +18,10 @@ for(const token of [
   'closest("[data-message-author-role=\'assistant\'],[data-message-author-role=\\"assistant\\"]")'
 ]) assert.ok(content.includes(token),'content missing '+token);
 
-assert.ok(/MESSAGE_DELIVERY_TIMEOUT[\s\S]{0,180}ambiguous:\s*true/.test(background),'timeout policy must be fail-closed');
-assert.ok(background.includes('runtimePhase="PROVIDER_RECOVERY_REQUIRED"'),'provider event must enter recovery-required state');
+assert.ok(background.includes('state.running=false;'),'provider event must stop relay progression');
+assert.ok(background.includes('state.paused=true;'),'provider event must pause the session');
+assert.ok(background.includes('state.runtimePhase="PROVIDER_RECOVERY_REQUIRED"'),'provider event must enter recovery-required state');
+assert.ok(background.includes('AI Bridge did not resend the prompt automatically; provider recovery is required.'),'provider event must explicitly forbid automatic resend');
 assert.ok(background.includes('WAITING_SAME_DISPATCH'),'Resume must wait on the original dispatch instead of resending');
 assert.ok(background.includes('PROVIDER_RESPONSE_RECOVERED'),'late provider response must be committed without auto-advancing');
 assert.doesNotMatch(background,/PROVIDER_EVENT_"?\+?code[\s\S]{0,240}DELIVERY_AMBIGUOUS/,'provider event must not destroy response-capable dispatch state');
@@ -56,3 +58,13 @@ for(const token of [
   'PROVIDER_EVENT_GENERATION_MISMATCH',
   'PROVIDER_EVENT_IDENTITY_MISMATCH'
 ]) assert.ok(background.includes(token),'provider authority rejection missing '+token);
+
+assert.doesNotMatch(background,/"provider_event"/,'obsolete provider_event transcript spelling must not survive; provider operational events must remain excluded from every relay/recovery context');
+const normalTurnStart=background.indexOf('function normalTurnMessage');
+const directTurnStart=background.indexOf('function directTurnMessage',normalTurnStart);
+assert.ok(normalTurnStart>=0&&directTurnStart>normalTurnStart);
+assert.ok(background.slice(normalTurnStart,directTurnStart).includes('entry.type !== "provider-event"'),'normal relay must exclude provider events');
+const recoveryStart=background.indexOf('function recoveryMessage');
+const humanReplyStart=background.indexOf('function humanReplyMessage',recoveryStart);
+assert.ok(recoveryStart>=0&&humanReplyStart>recoveryStart);
+assert.ok(background.slice(recoveryStart,humanReplyStart).includes('entry.type !== "provider-event"'),'session recovery must exclude provider events');

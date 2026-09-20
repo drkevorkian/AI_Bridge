@@ -44,6 +44,7 @@ PINNED_RELEASE_RSA_E = 65537
 ALLOWED_FILES = frozenset(
     {
         "manifest.json",
+        "update-checkpoint.js",
         "background.js",
         "content.js",
         "dashboard.html",

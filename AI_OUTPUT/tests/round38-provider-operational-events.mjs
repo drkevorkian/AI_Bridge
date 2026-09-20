@@ -16,7 +16,7 @@ for(const token of [
   'await inspectProviderEvent()',
   'providerEventBaseline',
   'authorityRegistrationId:registration.authorityRegistrationId',
-  'provider-events: "PASS"',
+  'provider_events: "PASS"',
   'PROVIDER_EVENT_ACTIVE'
 ]) assert.ok(content.includes(token),'content missing '+token);
 
@@ -38,12 +38,12 @@ assert.doesNotMatch(inspectSource,/responseText\s*\(/,'response bodies must not 
 for(const token of [
   'PROVIDER_EVENT_POLICY',
   'if (msg.type === "AI_BRIDGE_PROVIDER_EVENT")',
-  'type === "provider-event"',
+  'recordTranscript("provider-event"',
   'runtimePhase = "PROVIDER_RECOVERY_REQUIRED"',
   'relay: providerBlocked ? "BLOCKED"',
   'PROVIDER_RECOVERY_REQUIRED: resolve the provider error',
   'entry.type !== "provider-event"',
-  'matchingProviderRecovery?.resumeRelayAfterResponse'
+  'const providerRecoveryMatch=Boolean('
 ]) assert.ok(background.includes(token),'background missing '+token);
 
 for(const token of [
@@ -55,3 +55,11 @@ for(const token of [
 ]) assert.ok(dashboard.includes(token),'dashboard missing '+token);
 
 console.log('round38-provider-operational-events: PASS');
+
+assert.doesNotMatch(background,/"provider_event"/,'provider operational events must use one canonical transcript type');
+
+for(const token of [
+  'state.providerRecovery={...state.providerRecovery,active:false,resolvedAt:Date.now(),responseCommitted:true}',
+  'state.runtimePhase="PROVIDER_RESPONSE_RECOVERED"',
+  'Press Resume to continue.'
+]) assert.ok(background.includes(token),'background missing provider recovery completion contract '+token);

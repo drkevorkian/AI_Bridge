@@ -55,8 +55,14 @@ for(const reason of [
 const handlerStart=background.indexOf('if (msg.type === "AI_BRIDGE_PROVIDER_EVENT")');
 const handlerEnd=background.indexOf('if (msg.type === "AI_BRIDGE_THREAD_LIMIT")',handlerStart);
 const handler=background.slice(handlerStart,handlerEnd);
-assert.ok(handler.includes('reviewAuthorizeProviderEvent(msg, sender)'));
-assert.ok(handler.includes('provider-event-rejected'));
-assert.ok(handler.indexOf('reviewAuthorizeProviderEvent(msg, sender)') < handler.indexOf('state.running = false'),'authority validation must precede state mutation');
+assert.ok(handler.includes('recordProviderEvent(msg, sender)'),'message handler must delegate through the provider-event authority path');
+
+const recordStart=background.indexOf('async function recordProviderEvent');
+const recordEnd=background.indexOf('async function pauseBridge',recordStart);
+assert.ok(recordStart>=0 && recordEnd>recordStart,'provider event recorder missing');
+const record=background.slice(recordStart,recordEnd);
+assert.ok(record.includes('reviewAuthorizeProviderEvent(msg,sender)'),'provider-event recorder must authorize the exact sender/document/dispatch before mutation');
+assert.ok(record.indexOf('reviewAuthorizeProviderEvent(msg,sender)') < record.indexOf('state.running=false'),'authority validation must precede state mutation');
+assert.ok(record.includes('if(!authorized.ok) return { ...authorized, ignored:true }'),'rejected provider events must fail closed without mutating session state');
 
 console.log('round39-provider-event-authority: PASS');

@@ -53,6 +53,7 @@ The update design therefore has two cooperating pieces:
 Only these root extension files are eligible:
 
 - manifest.json
+- update-checkpoint.js
 - background.js
 - content.js
 - dashboard.html
@@ -173,10 +174,22 @@ outcome is ambiguous.
 
 - native-messaging framing/host installer;
 - extension-side `nativeMessaging` permission;
-- update checkpoint state machine;
-- automatic `chrome.runtime.reload()`;
-- startup resume after update;
+- durable update checkpoint stages and guarded `chrome.runtime.reload()`;
+- startup reinjection/rebind/reconciliation before relay resume;
 - production root `update-manifest.json`;
 - AI_INPUT promotion.
 
 Those remain gated on review and green CI.
+
+
+## Crash-recoverable update checkpoint
+
+The review runtime now uses these durable stages:
+
+`DRAINING → CHECKPOINTED → APPLIED_NOT_RELOADED → RELOADED_NOT_REBOUND → READY_TO_RESUME → COMPLETE`
+
+During DRAINING no new provider action may start, but an already-running response may finish. Its response commit and `nextTurnPending` record must become durable before CHECKPOINTED.
+
+After reload, every bound provider tab is reinjected through the packaged version-aware `content.js` lifecycle without refreshing the provider page. The new document registration must prove the same tab, provider, documentId, generation epoch, and conversation identity captured before mutation. Only then may the checkpoint reach READY_TO_RESUME.
+
+If the service worker dies at any checkpoint phase, the next worker resumes from that same durable phase. A build mismatch, authority mismatch, ambiguous delivery, parked response, provider recovery, or rollover activity fails closed into UPDATE_RECOVERY_FAILED.
