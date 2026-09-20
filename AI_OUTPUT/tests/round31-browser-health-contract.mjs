@@ -9,7 +9,7 @@ const background=fs.readFileSync(path.join(root,'runtime_review','background.js'
 const harness=fs.readFileSync(path.join(root,'tests','chrome-e2e-runtime.cjs'),'utf8');
 
 const healthStart=background.indexOf('if (msg.type === "AI_BRIDGE_PROVIDER_HEALTH")');
-const healthEnd=background.indexOf('await stateReady;',healthStart);
+const healthEnd=background.indexOf('if (msg.type === "AI_BRIDGE_GET_STATE")',healthStart);
 assert.ok(healthStart>=0 && healthEnd>healthStart,'provider health handler missing');
 const healthBlock=background.slice(healthStart,healthEnd);
 assert.ok(healthBlock.includes('if (connected && side && !authority)'));
