@@ -10,12 +10,13 @@ const repo = path.resolve(here, "../..");
 const updater = path.join(repo, "AI_OUTPUT/update_system/companion_updater.py");
 
 const py = String.raw`
-import hashlib, importlib.util, json, os, pathlib, tempfile
+import hashlib, importlib.util, json, os, pathlib, sys, tempfile
 from unittest import mock
 
 UPDATER = pathlib.Path(os.environ["UPDATER"])
 spec = importlib.util.spec_from_file_location("aibridge_updater", UPDATER)
 mod = importlib.util.module_from_spec(spec)
+sys.modules[spec.name] = mod
 spec.loader.exec_module(mod)
 
 def digest(data):
