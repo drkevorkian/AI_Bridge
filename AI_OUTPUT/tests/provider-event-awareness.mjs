@@ -58,3 +58,13 @@ for(const token of [
   'PROVIDER_EVENT_GENERATION_MISMATCH',
   'PROVIDER_EVENT_IDENTITY_MISMATCH'
 ]) assert.ok(background.includes(token),'provider authority rejection missing '+token);
+
+assert.doesNotMatch(background,/"provider_event"/,'obsolete provider_event transcript spelling must not survive; provider operational events must remain excluded from every relay/recovery context');
+const normalTurnStart=background.indexOf('function normalTurnMessage');
+const directTurnStart=background.indexOf('function directTurnMessage',normalTurnStart);
+assert.ok(normalTurnStart>=0&&directTurnStart>normalTurnStart);
+assert.ok(background.slice(normalTurnStart,directTurnStart).includes('entry.type !== "provider-event"'),'normal relay must exclude provider events');
+const recoveryStart=background.indexOf('function recoveryMessage');
+const humanReplyStart=background.indexOf('function humanReplyMessage',recoveryStart);
+assert.ok(recoveryStart>=0&&humanReplyStart>recoveryStart);
+assert.ok(background.slice(recoveryStart,humanReplyStart).includes('entry.type !== "provider-event"'),'session recovery must exclude provider events');

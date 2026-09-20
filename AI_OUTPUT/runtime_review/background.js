@@ -2140,7 +2140,7 @@ function normalTurnMessage(side) {
   const delivered = Number(state.lastDeliveredSeqBySide[side] || 0);
   const unseen = state.transcript.filter(entry =>
     entry.seq > delivered &&
-    entry.type !== "provider_event" &&
+    entry.type !== "provider-event" &&
     !(entry.type === "response" && entry.side === side) &&
     !(side === state.mainSide && entry.type === "human" && entry.interjection)
   );
@@ -2334,7 +2334,7 @@ async function advanceBatchIfReady() {
 
 function recoveryMessage(side) {
   const recent = boundedTranscript(state.transcript.filter(entry =>
-    entry.type !== "provider_event" &&
+    entry.type !== "provider-event" &&
     !(side === state.mainSide && entry.type === "human" && entry.interjection)
   ));
   const sourceContext = sourceSectionForSide(side, { force: true });
