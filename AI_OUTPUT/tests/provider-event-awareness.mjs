@@ -18,8 +18,10 @@ for(const token of [
   'closest("[data-message-author-role=\'assistant\'],[data-message-author-role=\\"assistant\\"]")'
 ]) assert.ok(content.includes(token),'content missing '+token);
 
-assert.ok(/MESSAGE_DELIVERY_TIMEOUT[\s\S]{0,180}ambiguous:\s*true/.test(background),'timeout policy must be fail-closed');
-assert.ok(background.includes('runtimePhase="PROVIDER_RECOVERY_REQUIRED"'),'provider event must enter recovery-required state');
+assert.ok(background.includes('state.running=false;'),'provider event must stop relay progression');
+assert.ok(background.includes('state.paused=true;'),'provider event must pause the session');
+assert.ok(background.includes('state.runtimePhase="PROVIDER_RECOVERY_REQUIRED"'),'provider event must enter recovery-required state');
+assert.ok(background.includes('AI Bridge did not resend the prompt automatically; provider recovery is required.'),'provider event must explicitly forbid automatic resend');
 assert.ok(background.includes('WAITING_SAME_DISPATCH'),'Resume must wait on the original dispatch instead of resending');
 assert.ok(background.includes('PROVIDER_RESPONSE_RECOVERED'),'late provider response must be committed without auto-advancing');
 assert.doesNotMatch(background,/PROVIDER_EVENT_"?\+?code[\s\S]{0,240}DELIVERY_AMBIGUOUS/,'provider event must not destroy response-capable dispatch state');
