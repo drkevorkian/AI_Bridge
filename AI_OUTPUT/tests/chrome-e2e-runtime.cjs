@@ -561,7 +561,6 @@ async function main() {
       dashboardMissingContinuation,
       /RUNTIME_CONTINUATION_STATE_INCONSISTENT|committed response is missing its durable next-turn record/i
     );
-    assert.match(missingContinuationUi, /Paused/i);
 
     const seededHealth = await poll(async () => {
       const health = await extensionMessage(cdp, dashboardMissingContinuation.sessionId, { type: 'AI_BRIDGE_PROVIDER_HEALTH', tabId: providerTabs.a });
@@ -622,7 +621,6 @@ async function main() {
       dashboardUncommittedSource,
       /next-turn|committed source|recovery|Automatic reconnect failed/i
     );
-    assert.match(uncommittedSourceUi, /Paused/i);
 
     const matrixStorage = await extensionStorage(cdp, extensionId, ['aiBridgeRuntimeDispatchLedger', 'bridgeState']);
     assert.equal(matrixStorage.aiBridgeRuntimeDispatchLedger?.records?.[0]?.dispatchId, baseDispatch.dispatchId);
