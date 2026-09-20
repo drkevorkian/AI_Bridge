@@ -373,7 +373,27 @@ async function main() {
       '.catch(error=>{window.__aiBridgeE2EStart={done:true,value:null,error:error?.message||String(error)};});return true;})()';
     await evaluate(cdp, dashboard.sessionId, startExpression, false);
 
-    await poll(() => evaluate(cdp, providerA.sessionId, 'window.__providerActionCount'), count => count === 1, 15000);
+    await poll(async () => {
+      const actionCount = await evaluate(cdp, providerA.sessionId, 'window.__providerActionCount');
+      if (actionCount === 1) return true;
+
+      const startState = await evaluate(cdp, dashboard.sessionId, 'window.__aiBridgeE2EStart');
+      if (startState?.done && startState?.error) {
+        const stored = await extensionStorage(cdp, extensionId, ['aiBridgeRuntimeDispatchLedger', 'bridgeState', 'aiBridgeRuntimeAuthorityEpochs']);
+        throw new Error(
+          'Initial AI_BRIDGE_START failed before provider action. ' +
+          'error=' + startState.error +
+          ' state=' + JSON.stringify(stored)
+        );
+      }
+      if (startState?.done && startState?.value?.ok === false) {
+        throw new Error(
+          'Initial AI_BRIDGE_START returned a failure before provider action: ' +
+          JSON.stringify(startState.value)
+        );
+      }
+      return false;
+    }, Boolean, 15000);
 
     const healthBeforeKill = await poll(async () => {
       const health = await extensionMessage(cdp, dashboard.sessionId, { type: 'AI_BRIDGE_PROVIDER_HEALTH', tabId: providerTabs.a });
