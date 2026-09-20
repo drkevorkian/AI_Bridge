@@ -20,7 +20,11 @@ export class DocumentAuthorityRegistry{
     const normalizedIdentity=observedIdentity?Object.freeze({...observedIdentity}):null;
     const prior=this.bySide.get(cleanSide);
     if(prior&&generation<prior.generationEpoch)throw new Error('REGISTER_STALE_GENERATION');
-    if(prior&&generation===prior.generationEpoch&&!equivalentAuthority(prior,{provider:cleanProvider,tabId:sender.tab.id,documentId,observedIdentity:normalizedIdentity}))throw new Error('REGISTER_GENERATION_AUTHORITY_CONFLICT');
+    if(prior&&generation===prior.generationEpoch){
+      if(!equivalentAuthority(prior,{provider:cleanProvider,tabId:sender.tab.id,documentId,observedIdentity:normalizedIdentity}))throw new Error('REGISTER_GENERATION_AUTHORITY_CONFLICT');
+      this.connectivity.set(cleanSide,Object.freeze({side:cleanSide,tabId:prior.tabId,state:DOCUMENT_READINESS.DOCUMENT_AUTHORITY_VERIFIED}));
+      return prior;
+    }
     const record=Object.freeze({side:cleanSide,provider:cleanProvider,tabId:sender.tab.id,documentId,authorityRegistrationId:registrationId,frameId:0,lifecycle:'active',generationEpoch:generation,observedIdentity:normalizedIdentity,registeredAt:Date.now()});
     this.bySide.set(cleanSide,record);this.connectivity.set(cleanSide,Object.freeze({side:cleanSide,tabId:sender.tab.id,state:DOCUMENT_READINESS.DOCUMENT_AUTHORITY_VERIFIED}));return record;
   }

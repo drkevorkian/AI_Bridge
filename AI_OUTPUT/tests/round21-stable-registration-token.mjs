@@ -1,0 +1,18 @@
+import assert from 'node:assert/strict';
+import {DocumentAuthorityRegistry} from '../integration/document-authority-registry.js';
+import {ActionCommandGateway,ACTION_OUTCOME} from '../integration/action-command-gateway.js';
+const reg=new DocumentAuthorityRegistry();
+const sender={id:'ext-1',tab:{id:7,url:'https://chatgpt.com/c/a'},frameId:0,documentId:'doc-1',documentLifecycle:'active',origin:'https://chatgpt.com',url:'https://chatgpt.com/c/a'};
+const a={provider:'chatgpt',threadKey:'a',routeClass:'conversation'};
+const b={provider:'chatgpt',threadKey:'b',routeClass:'conversation'};
+let first=reg.register({sender,side:'A',provider:'chatgpt',generationEpoch:5,observedIdentity:a,expectedTabId:7,authorityRegistrationId:'reg-1'});
+const queued={action:'SEND',commandId:'c1',dispatchId:'d1',documentId:'doc-1',authorityRegistrationId:'reg-1',side:'A',generationEpoch:5,expectedIdentity:a};
+const second=reg.register({sender,side:'A',provider:'chatgpt',generationEpoch:5,observedIdentity:a,expectedTabId:7,authorityRegistrationId:'reg-2'});
+assert.equal(second,first);assert.equal(reg.get('A').authorityRegistrationId,'reg-1');
+let actions=0;const node={isConnected:true};let gateway=new ActionCommandGateway({documentAuthority:reg.get('A'),deriveIdentity:async()=>a,resolveAuthority:async()=>({ok:true,node}),performAction:async()=>{actions++;return {outcome:ACTION_OUTCOME.ACTION_CONFIRMED};}});
+let r=await gateway.handle(queued);assert.equal(r.outcome,ACTION_OUTCOME.ACTION_CONFIRMED);assert.equal(actions,1);
+assert.throws(()=>reg.register({sender,side:'A',provider:'chatgpt',generationEpoch:5,observedIdentity:b,expectedTabId:7,authorityRegistrationId:'reg-3'}),/GENERATION_AUTHORITY_CONFLICT/);
+assert.throws(()=>reg.register({sender:{...sender,documentId:'doc-2'},side:'A',provider:'chatgpt',generationEpoch:5,observedIdentity:a,expectedTabId:7,authorityRegistrationId:'reg-4'}),/GENERATION_AUTHORITY_CONFLICT/);
+const higher=reg.register({sender,side:'A',provider:'chatgpt',generationEpoch:6,observedIdentity:b,expectedTabId:7,authorityRegistrationId:'reg-6'});assert.equal(higher.authorityRegistrationId,'reg-6');assert.equal(higher.generationEpoch,6);
+reg.clear();const recovered=reg.register({sender,side:'A',provider:'chatgpt',generationEpoch:5,observedIdentity:a,expectedTabId:7,authorityRegistrationId:'reg-recovered'});assert.equal(recovered.authorityRegistrationId,'reg-recovered');assert.equal(recovered.generationEpoch,5);
+console.log('round21-stable-registration-token: PASS');
