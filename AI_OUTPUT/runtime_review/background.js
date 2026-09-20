@@ -3760,7 +3760,9 @@ async function reviewResumeThreadRollover(side) {
       if (!currentIdentity || reviewSameIdentity(currentIdentity, tx.oldAuthority.identity)) {
         reviewInvalidateAuthorityForTab(tabId);
         const targetUrl = reviewCanonicalRolloverFreshUrl(tx.provider);
-        const atCanonicalTarget = String(tab?.url || "") === targetUrl;
+        const committedAtCanonicalTarget = String(tab?.url || "") === targetUrl;
+        const pendingAtCanonicalTarget = String(tab?.pendingUrl || "") === targetUrl;
+        const atCanonicalTarget = committedAtCanonicalTarget || pendingAtCanonicalTarget;
         if (!atCanonicalTarget) {
           await chrome.tabs.update(tabId, {url:targetUrl,active:true});
         }
