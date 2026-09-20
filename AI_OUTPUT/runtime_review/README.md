@@ -21,3 +21,26 @@ Security/runtime differences from root v1.18:
 - ChatGPT hard conversation-length UI can pause the bridge, but automatic New Chat remains LIMITED until trusted provider authority is available.
 
 This artifact is for human and real-Chrome E2E review before any root integration.
+
+
+## Real Chrome MV3 fault gate
+
+Run:
+
+```bash
+node AI_OUTPUT/tests/chrome-e2e-runtime.cjs
+```
+
+Requirements:
+- Node.js 22+
+- a current Chrome/Chromium binary (or CHROME_BIN)
+- Chrome must permit unpacked extension installation through the DevTools Extensions domain.
+
+The harness uses `--remote-debugging-pipe` plus `--enable-unsafe-extension-debugging`, installs this exact runtime_review directory with `Extensions.loadUnpacked`, serves controlled ChatGPT fixtures through CDP Fetch interception, starts a real bridge session, kills the MV3 service worker after the provider action but before ACK confirmation, wakes the worker, and verifies:
+- the original dispatch becomes DELIVERY_AMBIGUOUS;
+- the session visibly pauses;
+- Resume cannot create a replacement provider action;
+- the provider action count remains exactly one;
+- New Chat and fresh-chat startup remain visibly LIMITED.
+
+A browser policy that forbids unpacked extension installation is a test failure, not a pass or silent skip.

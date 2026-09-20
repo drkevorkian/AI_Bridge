@@ -45,3 +45,5 @@ jobs:
         run: node AI_OUTPUT/tests/chrome-pack-smoke.mjs
       - name: Runtime review pack validation
         run: node AI_OUTPUT/tests/runtime-review-pack-smoke.mjs
+      - name: Real Chrome MV3 E2E
+        run: node AI_OUTPUT/tests/chrome-e2e-runtime.cjs

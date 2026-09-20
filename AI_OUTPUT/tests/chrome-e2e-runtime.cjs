@@ -1,0 +1,398 @@
+'use strict';
+
+const assert = require('node:assert/strict');
+const fs = require('node:fs');
+const os = require('node:os');
+const path = require('node:path');
+const { spawn } = require('node:child_process');
+
+if (typeof WebSocket !== 'function' || typeof fetch !== 'function') {
+  throw new Error('AI Bridge Chrome E2E requires Node.js 22+ (global WebSocket and fetch).');
+}
+
+const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
+
+function chromeBinary() {
+  const candidates = process.platform === 'win32'
+    ? [process.env.CHROME_BIN, 'C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe', 'C:\\Program Files (x86)\\Google\\Chrome\\Application\\chrome.exe']
+    : process.platform === 'darwin'
+      ? [process.env.CHROME_BIN, '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome', '/Applications/Chromium.app/Contents/MacOS/Chromium']
+      : [process.env.CHROME_BIN, '/usr/bin/google-chrome', '/usr/bin/google-chrome-stable', '/usr/bin/chromium', '/usr/bin/chromium-browser'];
+  for (const candidate of candidates.filter(Boolean)) {
+    try {
+      fs.accessSync(candidate, fs.constants.X_OK);
+      return candidate;
+    } catch {}
+  }
+  throw new Error('Chrome/Chromium not found. Set CHROME_BIN.');
+}
+
+class PipeCdp {
+  constructor(proc) {
+    this.proc = proc;
+    this.nextId = 0;
+    this.pending = new Map();
+    this.listeners = new Set();
+    this.buffer = Buffer.alloc(0);
+    const input = proc.stdio[3];
+    const output = proc.stdio[4];
+    if (!input || !output) throw new Error('Chrome remote-debugging-pipe file descriptors are unavailable.');
+    this.input = input;
+    output.on('data', chunk => this.onData(chunk));
+    output.on('error', error => this.rejectAll(error));
+    proc.on('exit', (code, signal) => this.rejectAll(new Error('Chrome exited: ' + code + '/' + signal)));
+  }
+
+  rejectAll(error) {
+    for (const [, pending] of this.pending) pending.reject(error);
+    this.pending.clear();
+  }
+
+  onData(chunk) {
+    this.buffer = Buffer.concat([this.buffer, chunk]);
+    for (;;) {
+      const nul = this.buffer.indexOf(0);
+      if (nul < 0) break;
+      const raw = this.buffer.subarray(0, nul).toString('utf8');
+      this.buffer = this.buffer.subarray(nul + 1);
+      if (!raw) continue;
+      const message = JSON.parse(raw);
+      if (message.id && this.pending.has(message.id)) {
+        const pending = this.pending.get(message.id);
+        this.pending.delete(message.id);
+        if (message.error) pending.reject(new Error(message.error.message || JSON.stringify(message.error)));
+        else pending.resolve(message.result || {});
+        continue;
+      }
+      for (const listener of [...this.listeners]) {
+        if (listener.method !== message.method) continue;
+        if (listener.sessionId != null && listener.sessionId !== message.sessionId) continue;
+        if (listener.predicate && !listener.predicate(message.params || {}, message)) continue;
+        listener.resolve({ params: message.params || {}, message });
+        if (listener.once) this.listeners.delete(listener);
+      }
+    }
+  }
+
+  send(method, params = {}, sessionId = undefined, timeoutMs = 10000) {
+    const id = ++this.nextId;
+    const message = { id, method, params };
+    if (sessionId) message.sessionId = sessionId;
+    const promise = new Promise((resolve, reject) => {
+      const timer = setTimeout(() => {
+        this.pending.delete(id);
+        reject(new Error('CDP timeout: ' + method));
+      }, timeoutMs);
+      this.pending.set(id, {
+        resolve: result => { clearTimeout(timer); resolve(result); },
+        reject: error => { clearTimeout(timer); reject(error); }
+      });
+    });
+    this.input.write(JSON.stringify(message) + '\0');
+    return promise;
+  }
+
+  on(method, handler, sessionId = null) {
+    const listener = {
+      method,
+      sessionId,
+      once: false,
+      predicate: null,
+      resolve: event => Promise.resolve(handler(event.params, event.message)).catch(() => {})
+    };
+    this.listeners.add(listener);
+    return () => this.listeners.delete(listener);
+  }
+}
+
+async function poll(fn, predicate = value => Boolean(value), timeoutMs = 10000, intervalMs = 100) {
+  const deadline = Date.now() + timeoutMs;
+  let last;
+  while (Date.now() < deadline) {
+    try {
+      last = await fn();
+      if (predicate(last)) return last;
+    } catch (error) {
+      last = error;
+    }
+    await sleep(intervalMs);
+  }
+  throw new Error('Poll timeout. Last value: ' + (last instanceof Error ? last.message : JSON.stringify(last)));
+}
+
+async function attach(cdp, targetId) {
+  const attached = await cdp.send('Target.attachToTarget', { targetId, flatten: true });
+  await cdp.send('Runtime.enable', {}, attached.sessionId);
+  await cdp.send('Page.enable', {}, attached.sessionId);
+  return attached.sessionId;
+}
+
+async function evaluate(cdp, sessionId, expression, awaitPromise = true) {
+  const result = await cdp.send('Runtime.evaluate', {
+    expression,
+    awaitPromise,
+    returnByValue: true,
+    userGesture: true
+  }, sessionId, 15000);
+  if (result.exceptionDetails) {
+    throw new Error(result.exceptionDetails.exception?.description || result.exceptionDetails.text || 'Runtime.evaluate failed');
+  }
+  return result.result?.value;
+}
+
+async function extensionMessage(cdp, sessionId, message) {
+  const expression =
+    '(async()=>{try{return {transportOk:true,value:await chrome.runtime.sendMessage(' +
+    JSON.stringify(message) +
+    ')};}catch(error){return {transportOk:false,error:error?.message||String(error)}}})()';
+  return evaluate(cdp, sessionId, expression, true);
+}
+
+async function createExtensionPage(cdp, extensionId, pageName) {
+  const created = await cdp.send('Target.createTarget', { url: 'chrome-extension://' + extensionId + '/' + pageName });
+  const sessionId = await attach(cdp, created.targetId);
+  await poll(() => evaluate(cdp, sessionId, 'document.readyState'), value => value === 'complete' || value === 'interactive', 10000);
+  return { targetId: created.targetId, sessionId };
+}
+
+const fixtureHtml = '<!doctype html><html><head><meta charset="utf-8"><title>AI Bridge E2E ChatGPT Fixture</title></head><body>' +
+  '<textarea id="prompt-textarea"></textarea>' +
+  '<button data-testid="send-button" aria-label="Send prompt">Send</button>' +
+  '<main id="messages"></main>' +
+  '<script>' +
+  'window.__providerActionCount=0;window.__autoConfirm=false;window.__lastPrompt="";' +
+  'const composer=document.getElementById("prompt-textarea");' +
+  'const send=document.querySelector("[data-testid=\\"send-button\\"]");' +
+  'send.addEventListener("click",()=>{window.__providerActionCount+=1;window.__lastPrompt=composer.value;' +
+  'if(!window.__autoConfirm)return;composer.value="";composer.dispatchEvent(new Event("input",{bubbles:true}));' +
+  'setTimeout(()=>{const wrap=document.createElement("div");wrap.setAttribute("data-message-author-role","assistant");' +
+  'const body=document.createElement("div");body.className="markdown";body.textContent="E2E fixture response "+window.__providerActionCount;' +
+  'wrap.appendChild(body);document.getElementById("messages").appendChild(wrap);},50);});' +
+  '</script></body></html>';
+
+async function createProviderFixture(cdp, url) {
+  const created = await cdp.send('Target.createTarget', { url: 'about:blank' });
+  const sessionId = await attach(cdp, created.targetId);
+  const dispose = cdp.on('Fetch.requestPaused', async params => {
+    if (params.resourceType !== 'Document') {
+      await cdp.send('Fetch.continueRequest', { requestId: params.requestId }, sessionId);
+      return;
+    }
+    await cdp.send('Fetch.fulfillRequest', {
+      requestId: params.requestId,
+      responseCode: 200,
+      responseHeaders: [
+        { name: 'Content-Type', value: 'text/html; charset=utf-8' },
+        { name: 'Cache-Control', value: 'no-store' }
+      ],
+      body: Buffer.from(fixtureHtml, 'utf8').toString('base64')
+    }, sessionId);
+  }, sessionId);
+  await cdp.send('Fetch.enable', {
+    patterns: [{ urlPattern: '*', resourceType: 'Document', requestStage: 'Request' }]
+  }, sessionId);
+  await cdp.send('Page.navigate', { url }, sessionId);
+  await poll(() => evaluate(cdp, sessionId, 'document.readyState'), value => value === 'complete', 10000);
+  return { targetId: created.targetId, sessionId, dispose };
+}
+
+async function extensionStorage(cdp, extensionId, keys) {
+  const result = await cdp.send('Extensions.getStorageItems', { id: extensionId, storageArea: 'local', keys });
+  return result.data || {};
+}
+
+async function workerTarget(cdp, extensionId) {
+  const targets = (await cdp.send('Target.getTargets')).targetInfos || [];
+  return targets.find(target =>
+    target.type === 'service_worker' &&
+    target.url === 'chrome-extension://' + extensionId + '/background.js'
+  ) || null;
+}
+
+async function main() {
+  const runtimeDir = path.resolve(__dirname, '..', 'runtime_review');
+  assert.ok(fs.existsSync(path.join(runtimeDir, 'manifest.json')), 'runtime_review manifest missing');
+
+  const profile = fs.mkdtempSync(path.join(os.tmpdir(), 'ai-bridge-chrome-e2e-'));
+  const chrome = chromeBinary();
+  const args = [
+    '--remote-debugging-pipe',
+    '--enable-unsafe-extension-debugging',
+    '--no-first-run',
+    '--no-default-browser-check',
+    '--disable-gpu',
+    '--disable-background-networking',
+    '--disable-component-update',
+    '--disable-sync',
+    '--metrics-recording-only',
+    '--password-store=basic',
+    '--use-mock-keychain',
+    '--headless=new',
+    '--user-data-dir=' + profile,
+    'about:blank'
+  ];
+  if (process.platform !== 'win32' && typeof process.getuid === 'function' && process.getuid() === 0) args.unshift('--no-sandbox');
+
+  const proc = spawn(chrome, args, { stdio: ['ignore', 'ignore', 'pipe', 'pipe', 'pipe'] });
+  let chromeStderr = '';
+  proc.stderr.on('data', chunk => { chromeStderr += chunk.toString(); });
+  const cdp = new PipeCdp(proc);
+  const pages = [];
+
+  try {
+    const version = await cdp.send('Browser.getVersion');
+    console.log('Chrome:', version.product);
+
+    let extensionId;
+    try {
+      extensionId = (await cdp.send('Extensions.loadUnpacked', { path: runtimeDir }, undefined, 20000)).id;
+    } catch (error) {
+      throw new Error(
+        'Chrome could not install AI_OUTPUT/runtime_review as unpacked. The E2E gate cannot pass without a real extension installation. ' +
+        error.message +
+        (chromeStderr ? '\nChrome stderr:\n' + chromeStderr.slice(-4000) : '')
+      );
+    }
+    assert.match(extensionId, /^[a-p]{32}$/i, 'Extensions.loadUnpacked returned an invalid extension ID');
+
+    const popup = await createExtensionPage(cdp, extensionId, 'popup.html');
+    pages.push(popup);
+    assert.match(await evaluate(cdp, popup.sessionId, 'document.body.innerText'), /AI Bridge/i);
+
+    const settings = await createExtensionPage(cdp, extensionId, 'settings.html');
+    pages.push(settings);
+    assert.match(await evaluate(cdp, settings.sessionId, 'document.body.innerText'), /Settings/i);
+
+    const dashboard = await createExtensionPage(cdp, extensionId, 'dashboard.html');
+    pages.push(dashboard);
+    assert.match(await evaluate(cdp, dashboard.sessionId, 'document.body.innerText'), /New chat — Limited/i);
+    assert.equal(await evaluate(cdp, dashboard.sessionId, 'document.getElementById("newChatA").disabled'), true);
+    assert.equal(await evaluate(cdp, dashboard.sessionId, 'document.getElementById("freshOnStart").disabled'), true);
+
+    const providerA = await createProviderFixture(cdp, 'https://chatgpt.com/c/e2e-a');
+    const providerB = await createProviderFixture(cdp, 'https://chatgpt.com/c/e2e-b');
+    pages.push(providerA, providerB);
+
+    const providerTabs = await poll(async () => {
+      const tabs = await evaluate(cdp, dashboard.sessionId, '(async()=>await chrome.tabs.query({}))()');
+      const a = tabs.find(tab => tab.url === 'https://chatgpt.com/c/e2e-a');
+      const b = tabs.find(tab => tab.url === 'https://chatgpt.com/c/e2e-b');
+      return a && b ? { a: a.id, b: b.id } : null;
+    }, Boolean, 10000);
+
+    await poll(async () => {
+      const health = await extensionMessage(cdp, dashboard.sessionId, { type: 'AI_BRIDGE_PROVIDER_HEALTH', tabId: providerTabs.a });
+      return health.transportOk && health.value?.connectionStatus === 'CONNECTED';
+    }, Boolean, 10000);
+
+    await evaluate(cdp, providerA.sessionId, 'window.__autoConfirm=false;true');
+
+    const startMessage = {
+      type: 'AI_BRIDGE_START',
+      agentCount: 2,
+      startSide: 'A',
+      workMode: 'relay',
+      maxTurns: 4,
+      delayMs: 0,
+      initialPrompt: 'AI Bridge real-Chrome E2E ambiguous-delivery fault test.',
+      teamRules: '',
+      sourceFiles: [],
+      freshChats: false,
+      tabA: providerTabs.a,
+      tabB: providerTabs.b,
+      labelA: 'Fixture ChatGPT A',
+      labelB: 'Fixture ChatGPT B',
+      jobA: 'E2E fixture A',
+      jobB: 'E2E fixture B'
+    };
+    const startExpression =
+      '(()=>{window.__aiBridgeE2EStart={done:false,value:null,error:null};chrome.runtime.sendMessage(' +
+      JSON.stringify(startMessage) +
+      ').then(value=>{window.__aiBridgeE2EStart={done:true,value,error:null};})' +
+      '.catch(error=>{window.__aiBridgeE2EStart={done:true,value:null,error:error?.message||String(error)};});return true;})()';
+    await evaluate(cdp, dashboard.sessionId, startExpression, false);
+
+    await poll(() => evaluate(cdp, providerA.sessionId, 'window.__providerActionCount'), count => count === 1, 15000);
+
+    const beforeKill = await extensionStorage(cdp, extensionId, ['aiBridgeRuntimeDispatchLedger']);
+    const recordsBeforeKill = beforeKill.aiBridgeRuntimeDispatchLedger?.records || [];
+    assert.equal(recordsBeforeKill.length, 1);
+    assert.equal(recordsBeforeKill[0].status, 'DISPATCHING');
+
+    await cdp.send('Target.closeTarget', { targetId: dashboard.targetId });
+    const dashboardIndex = pages.indexOf(dashboard);
+    if (dashboardIndex >= 0) pages.splice(dashboardIndex, 1);
+
+    await cdp.send('ServiceWorker.stopAllWorkers');
+    await poll(() => workerTarget(cdp, extensionId), value => value === null, 10000);
+
+    const dashboardAfter = await createExtensionPage(cdp, extensionId, 'dashboard.html');
+    pages.push(dashboardAfter);
+
+    const recoveredState = await poll(async () => {
+      const response = await extensionMessage(cdp, dashboardAfter.sessionId, { type: 'AI_BRIDGE_GET_STATE', omitTranscript: true });
+      return response.transportOk ? response.value?.state : null;
+    }, state => state?.paused === true && state?.runtimePhase === 'PAUSED', 15000);
+
+    assert.equal(recoveredState.running, false);
+    assert.match(recoveredState.pauseReason || '', /ambiguous|interrupted|replay/i);
+
+    const afterKill = await extensionStorage(cdp, extensionId, ['aiBridgeRuntimeDispatchLedger', 'bridgeState']);
+    const recordsAfterKill = afterKill.aiBridgeRuntimeDispatchLedger?.records || [];
+    assert.equal(recordsAfterKill.length, 1);
+    assert.equal(recordsAfterKill[0].dispatchId, recordsBeforeKill[0].dispatchId);
+    assert.equal(recordsAfterKill[0].status, 'DELIVERY_AMBIGUOUS');
+    assert.equal(afterKill.bridgeState?.paused, true);
+
+    const actionCountBeforeResume = await evaluate(cdp, providerA.sessionId, 'window.__providerActionCount');
+    const resume = await extensionMessage(cdp, dashboardAfter.sessionId, {
+      type: 'AI_BRIDGE_RESUME',
+      tabA: providerTabs.a,
+      tabB: providerTabs.b,
+      labelA: 'Fixture ChatGPT A',
+      labelB: 'Fixture ChatGPT B'
+    });
+    assert.equal(resume.transportOk, false, 'Resume should fail closed while an ambiguous dispatch exists');
+    await sleep(500);
+    const actionCountAfterResume = await evaluate(cdp, providerA.sessionId, 'window.__providerActionCount');
+    assert.equal(actionCountAfterResume, actionCountBeforeResume, 'Resume replayed an ambiguous provider action');
+
+    const visible = await poll(
+      () => evaluate(cdp, dashboardAfter.sessionId, 'document.body.innerText'),
+      text => /Runtime:\s*Paused/i.test(text) && /New chat — Limited/i.test(text),
+      10000
+    );
+    assert.match(visible, /Paused/i);
+
+    const workers = (await cdp.send('Target.getTargets')).targetInfos.filter(target =>
+      target.type === 'service_worker' &&
+      target.url === 'chrome-extension://' + extensionId + '/background.js'
+    );
+    assert.equal(workers.length, 1, 'MV3 worker did not restart cleanly');
+
+    console.log('chrome-e2e-runtime: PASS');
+    console.log(JSON.stringify({
+      extensionId,
+      providerActionCount: actionCountAfterResume,
+      dispatchId: recordsAfterKill[0].dispatchId,
+      dispatchStatus: recordsAfterKill[0].status,
+      runtimePhase: recoveredState.runtimePhase,
+      paused: recoveredState.paused
+    }, null, 2));
+  } finally {
+    for (const page of pages) {
+      try { page.dispose?.(); } catch {}
+      try { await cdp.send('Target.closeTarget', { targetId: page.targetId }, undefined, 1000); } catch {}
+    }
+    try { await cdp.send('Browser.close', {}, undefined, 1000); } catch {}
+    if (!proc.killed) proc.kill('SIGTERM');
+    await Promise.race([new Promise(resolve => proc.once('exit', resolve)), sleep(2000)]);
+    fs.rmSync(profile, { recursive: true, force: true });
+  }
+}
+
+main().catch(error => {
+  console.error('chrome-e2e-runtime: FAIL');
+  console.error(error?.stack || error);
+  process.exitCode = 1;
+});
