@@ -21,6 +21,7 @@ const tests=[
   'round23-registration-health.mjs',
   'round25-provider-health-failclosed.mjs',
   'round41-thread-limit-continuity.mjs',
+  'rollover-final-response-ordering.mjs',
   'update-system-atomic.mjs',
   'round42-content-runtime-lifecycle.mjs',
   'round43-next-turn-adoption.mjs',
