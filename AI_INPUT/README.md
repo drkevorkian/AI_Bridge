@@ -1,6 +1,6 @@
-# AI Bridge — Human Test Build
+# AI Bridge — AI A 1.19.0 Human Test 1
 
-This folder is a runnable **unpacked Chrome extension** copied from the reviewed `AI_OUTPUT/runtime_review/` candidate at commit `1303dab89dcd58fcd4fdea8eca7d379cfd287597`.
+This folder is a runnable **unpacked Chrome extension** copied from the reviewed `AI_OUTPUT/runtime_review/` candidate at commit `0e86d9b4130053cb4b9247fa92bc3275fb9b2d8a`.
 
 It is intentionally separate from the production/root extension. Production work is paused while this build is under human testing.
 
@@ -49,3 +49,15 @@ For every issue, record:
 - screenshots or console errors if available.
 
 Do not test against valuable/irreversible provider actions. This is a human-test build, not production integration.
+
+
+## Human-test fixes in 1.19.0
+
+- Dashboard → Settings and Settings → Dashboard now navigate in the same workspace tab.
+- Popup Settings reuses an existing AI Bridge Dashboard/Settings tab when one is already open.
+- Classic/Studio/Focus now share one consistent saved layout preference; Classic is the default when none exists.
+- Classic uses Runtime + Team on the left, transcript center, and Human Interjection first on the right.
+- The stray literal `\n` text has been removed from extension HTML.
+- Classic pane width settings now match the actual 20–42% runtime range with a 26% default.
+
+Build label: **AI A 1.19.0 Human Test 1**.
