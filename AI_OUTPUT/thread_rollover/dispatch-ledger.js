@@ -24,6 +24,35 @@ class DispatchLedger{
  restore(raw){if(!raw||typeof raw!=="object")throw new TypeError("dispatch record must be an object.");const id=requireText(raw.dispatchId,"dispatchId");if(this._records.has(id))throw new Error(`Duplicate persisted dispatch: ${id}`);const status=requireText(raw.status,"status");if(!Object.values(DISPATCH_STATUS).includes(status))throw new TypeError(`Unknown dispatch status: ${status}`);const p=requireText(raw.purpose,"purpose").toUpperCase();if(!PURPOSES.has(p))throw new TypeError(`Unsupported dispatch purpose: ${p}`);const r=freezeRecord({dispatchId:id,side:requireText(raw.side,"side").toUpperCase(),tabId:requireInt(raw.tabId,"tabId",1),generationEpoch:requireInt(raw.generationEpoch,"generationEpoch",0),conversationIdentity:sanitizeIdentity(raw.conversationIdentity),purpose:p,payloadHash:requireText(raw.payloadHash,"payloadHash"),status,createdAt:requireInt(raw.createdAt,"createdAt",0),acceptedAt:raw.acceptedAt==null?null:requireInt(raw.acceptedAt,"acceptedAt",0),completedAt:raw.completedAt==null?null:requireInt(raw.completedAt,"completedAt",0),failureReason:String(raw.failureReason||"")});this._records.set(id,r);return r;}
  get(id){return this._records.get(String(id||""))||null;}
  transition(dispatchId,nextStatus,patch={}){const cur=this.get(dispatchId);if(!cur)throw new Error(`Unknown dispatch: ${dispatchId}`);const next=requireText(nextStatus,"nextStatus");if(!Object.values(DISPATCH_STATUS).includes(next))throw new TypeError(`Unknown dispatch status: ${next}`);if(!TRANSITIONS[cur.status].has(next))throw new Error(`Invalid dispatch transition ${cur.status} -> ${next}.`);const u=freezeRecord({...cur,status:next,acceptedAt:patch.acceptedAt==null?cur.acceptedAt:requireInt(patch.acceptedAt,"acceptedAt",0),completedAt:patch.completedAt==null?cur.completedAt:requireInt(patch.completedAt,"completedAt",0),failureReason:patch.failureReason==null?cur.failureReason:String(patch.failureReason)});this._records.set(cur.dispatchId,u);return u;}
+ recoverAcceptedAfterRestart(dispatchId,{contentProof=null,recoveredAt=Date.now()}={}){
+  const cur=this.get(dispatchId);
+  if(!cur)throw new Error(`Unknown dispatch: ${dispatchId}`);
+
+  if(cur.status===DISPATCH_STATUS.ACCEPTED){
+    return this.transition(cur.dispatchId,DISPATCH_STATUS.AWAITING_RESPONSE,{failureReason:""});
+  }
+
+  if(cur.status!==DISPATCH_STATUS.DELIVERY_AMBIGUOUS)throw new Error(`Dispatch ${cur.dispatchId} is not restart-recoverable from ${cur.status}.`);
+  if(cur.failureReason!=="MV3_WORKER_RESTART_DURING_DELIVERY")throw new Error("Only worker-restart delivery ambiguity can be recovered automatically.");
+
+  let acceptedAt=cur.acceptedAt;
+  if(acceptedAt===null){
+    if(!contentProof||typeof contentProof!=="object")throw new Error("Content action proof is required for a restart-ambiguous DISPATCHING record.");
+    if(String(contentProof.authorityId||"")!==cur.dispatchId)throw new Error("Content proof authority does not match dispatch.");
+    if(String(contentProof.action||"").toUpperCase()!=="SEND")throw new Error("Content proof action must be SEND.");
+    if(String(contentProof.outcome||"")!=="ACTION_CONFIRMED")throw new Error("Content proof does not confirm provider action.");
+    if(String(contentProof.side||"").toUpperCase()!==cur.side)throw new Error("Content proof side does not match dispatch.");
+    if(Number(contentProof.generationEpoch)!==cur.generationEpoch)throw new Error("Content proof generation does not match dispatch.");
+    let observed;
+    try{observed=sanitizeIdentity(contentProof.conversationIdentity);}catch(_){throw new Error("Content proof conversation identity is malformed.");}
+    if(!sameIdentity(observed,cur.conversationIdentity))throw new Error("Content proof conversation does not match dispatch.");
+    acceptedAt=requireInt(recoveredAt,"recoveredAt",cur.createdAt);
+  }
+
+  const recovered=freezeRecord({...cur,status:DISPATCH_STATUS.AWAITING_RESPONSE,acceptedAt,completedAt:null,failureReason:""});
+  this._records.set(cur.dispatchId,recovered);
+  return recovered;
+ }
  validateResponse({dispatchId,side,tabId,generationEpoch,conversationIdentity}={}){const r=this.get(dispatchId);if(!r)return{ok:false,reason:"UNKNOWN_DISPATCH"};if(r.status!==DISPATCH_STATUS.AWAITING_RESPONSE)return{ok:false,reason:"DISPATCH_NOT_AWAITING_RESPONSE"};if(String(side||"").toUpperCase()!==r.side)return{ok:false,reason:"SIDE_MISMATCH"};if(Number(tabId)!==r.tabId)return{ok:false,reason:"TAB_MISMATCH"};if(Number(generationEpoch)!==r.generationEpoch)return{ok:false,reason:"GENERATION_MISMATCH"};let o;try{o=sanitizeIdentity(conversationIdentity);}catch(_){return{ok:false,reason:"MALFORMED_IDENTITY"};}const e=r.conversationIdentity;if(o.provider!==e.provider)return{ok:false,reason:"PROVIDER_MISMATCH"};if(!o.writable)return{ok:false,reason:"IDENTITY_NOT_WRITABLE"};if(e.kind==="conversation"&&!sameIdentity(o,e))return{ok:false,reason:"CONVERSATION_MISMATCH"};if(e.kind==="surface"&&o.kind!=="surface"&&o.kind!=="conversation")return{ok:false,reason:"SURFACE_TRANSITION_INVALID"};return{ok:true,reason:"AUTHORIZED"};}
  snapshot(){return[...this._records.values()].map(r=>({...r,conversationIdentity:{...r.conversationIdentity}}));}
 }
