@@ -18,25 +18,32 @@ assert.match(
   "wrapped workspace header must be allowed to expand while preserving the desktop visual floor"
 );
 
+assert.doesNotMatch(html, /Manual unavailable/, "working manual fresh-chat controls must not be labeled unavailable");
 assert.doesNotMatch(
   html,
   /Trusted automatic New Chat authority is not available yet\./,
   "manual controls must not claim automatic rollover is unavailable"
 );
 
+for (const side of ["A", "B", "C", "D", "E"]) {
+  assert.match(
+    html,
+    new RegExp('id="newChat' + side + '"[^>]*>New chat<\\/button>'),
+    "AI " + side + " manual fresh-chat control must be exposed"
+  );
+}
+
 assert.equal(
-  (html.match(/New chat — Manual unavailable/g) || []).length,
+  (html.match(/Open a fresh verified provider chat for this AI/g) || []).length,
   5,
-  "all five per-agent manual New Chat controls must be labeled accurately"
+  "all five per-agent New Chat controls must describe verified fresh-chat behavior"
 );
-
+assert.match(html, />New AI chats<\/button>/, "bulk New Chat control must be exposed");
+assert.match(html, /<span>Start in fresh AI chats<\/span>/, "fresh-on-start option must be exposed");
 assert.equal(
-  (html.match(/Manual New Chat is unavailable from this control\. Automatic rollover remains available/g) || []).length,
-  6,
-  "all disabled manual New Chat buttons must explain that automatic rollover remains available"
+  (html.match(/Rollover: Checking/g) || []).length,
+  5,
+  "initial provider-health rows should use neutral rollover checking state"
 );
-
-assert.match(html, /New AI chats — Manual unavailable/, "bulk manual New Chat wording missing");
-assert.match(html, /Start in fresh AI chats — Manual unavailable/, "fresh-on-start manual wording missing");
 
 console.log("round55-narrow-header-and-manual-chat-wording: PASS");
