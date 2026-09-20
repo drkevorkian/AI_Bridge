@@ -34,3 +34,25 @@ assert.ok(dashboard.includes('PROVIDER_RECOVERY_REQUIRED: "Provider recovery req
 assert.ok(dashboard.includes('PROVIDER_RESPONSE_RECOVERED: "Provider response recovered"'),'provider recovered phase label missing');
 
 console.log('provider-event-awareness: PASS');
+
+
+const backgroundPolicyDeclarations=background.split('const PROVIDER_EVENT_POLICY = Object.freeze(').length-1;
+assert.equal(backgroundPolicyDeclarations,1,'exactly one provider event policy is allowed');
+
+const contentClassifierDeclarations=content.split('function classifyProviderEvent(').length-1;
+assert.equal(contentClassifierDeclarations,1,'exactly one provider event classifier is allowed');
+assert.doesNotMatch(content,/function normalizeNoticeText\(/,'obsolete provider-event classifier helper must be removed');
+assert.doesNotMatch(content,/inspectProviderEvents\(/,'obsolete plural provider-event detector must be removed');
+
+const authorizeIndex=background.indexOf('const authorized=reviewAuthorizeProviderEvent(msg,sender)');
+const providerMutationIndex=background.indexOf('state.providerEvents.push(event)',authorizeIndex);
+assert.ok(authorizeIndex>=0 && providerMutationIndex>authorizeIndex,'provider event authority must be checked before durable mutation');
+
+for(const token of [
+  'PROVIDER_EVENT_EXTENSION_ID_MISMATCH',
+  'PROVIDER_EVENT_DOCUMENT_NOT_ACTIVE',
+  'PROVIDER_EVENT_DOCUMENT_ID_MISSING',
+  'PROVIDER_EVENT_REGISTRATION_MISMATCH',
+  'PROVIDER_EVENT_GENERATION_MISMATCH',
+  'PROVIDER_EVENT_IDENTITY_MISMATCH'
+]) assert.ok(background.includes(token),'provider authority rejection missing '+token);

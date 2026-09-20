@@ -1,0 +1,72 @@
+{
+  "manifest_version": 3,
+  "name": "AI Bridge Human Test",
+  "version": "1.18.0",
+  "description": "Human-test unpacked build copied from the reviewed AI_OUTPUT runtime. Not production/root integration.",
+  "permissions": [
+    "tabs",
+    "storage",
+    "unlimitedStorage",
+    "downloads",
+    "notifications",
+    "scripting",
+    "identity",
+    "alarms",
+    "power"
+  ],
+  "host_permissions": [
+    "https://chatgpt.com/*",
+    "https://chat.openai.com/*",
+    "https://grok.com/*",
+    "https://claude.ai/*",
+    "https://gemini.google.com/*",
+    "https://copilot.microsoft.com/*",
+    "https://*.oaiusercontent.com/*",
+    "https://assets.grok.com/*",
+    "https://*.x.ai/*",
+    "https://*.googleusercontent.com/*",
+    "https://*.anthropic.com/*",
+    "https://*.microsoft.com/*",
+    "https://x.ai/*",
+    "https://api.x.ai/*",
+    "https://accounts.google.com/*",
+    "https://oauth2.googleapis.com/*",
+    "https://www.googleapis.com/*",
+    "https://api.github.com/*",
+    "https://raw.githubusercontent.com/*",
+    "https://codeload.github.com/*"
+  ],
+  "background": {
+    "service_worker": "background.js"
+  },
+  "action": {
+    "default_popup": "popup.html",
+    "default_title": "AI Bridge Human Test",
+    "default_icon": {
+      "128": "icon128.png"
+    }
+  },
+  "content_scripts": [
+    {
+      "matches": [
+        "https://chatgpt.com/*",
+        "https://chat.openai.com/*",
+        "https://grok.com/*",
+        "https://claude.ai/*",
+        "https://gemini.google.com/*",
+        "https://copilot.microsoft.com/*"
+      ],
+      "js": [
+        "content.js"
+      ],
+      "run_at": "document_idle"
+    }
+  ],
+  "icons": {
+    "128": "icon128.png"
+  },
+  "content_security_policy": {
+    "extension_pages": "script-src 'self'; object-src 'none'; base-uri 'none'; frame-ancestors 'none'"
+  },
+  "version_name": "1.18.0-human-test"
+}
