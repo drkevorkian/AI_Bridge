@@ -2,7 +2,7 @@
   "manifest_version": 3,
   "name": "AI Bridge Review",
   "version": "1.19.1",
-  "description": "AI Bridge reviewed playground build 1.19.1.05-AI-B with durable live-update checkpoint/reconciliation.",
+  "description": "AI Bridge reviewed playground build 1.19.1.05-AI-B with crash-recoverable live-update restore.",
   "permissions": [
     "tabs",
     "storage",

@@ -174,22 +174,22 @@ outcome is ambiguous.
 
 - native-messaging framing/host installer;
 - extension-side `nativeMessaging` permission;
-- Native Messaging transport is not wired yet, but the extension-side durable update checkpoint state machine and guarded `chrome.runtime.reload()` transition are implemented in the review runtime;
-- startup resume/reconciliation after an applied build is implemented in the review runtime;
+- durable update checkpoint stages and guarded `chrome.runtime.reload()`;
+- startup reinjection/rebind/reconciliation before relay resume;
 - production root `update-manifest.json`;
 - AI_INPUT promotion.
 
 Those remain gated on review and green CI.
 
 
-## Durable checkpoint semantics
+## Crash-recoverable update checkpoint
 
-The review runtime freezes new provider dispatches before update mutation. If a provider response is already in flight, the update enters `DRAINING`: that answer may finish, its response is committed, and its exact `nextTurnPending` obligation is persisted, but the next provider send is not allowed to start.
+The review runtime now uses these durable stages:
 
-Only a boundary with no `CREATED`, `DISPATCHING`, `ACCEPTED`, `AWAITING_RESPONSE`, or `DELIVERY_AMBIGUOUS` dispatch and no parked/claimed response may become `CHECKPOINTED`.
+`DRAINING → CHECKPOINTED → APPLIED_NOT_RELOADED → RELOADED_NOT_REBOUND → READY_TO_RESUME → COMPLETE`
 
-Checkpoint phases:
+During DRAINING no new provider action may start, but an already-running response may finish. Its response commit and `nextTurnPending` record must become durable before CHECKPOINTED.
 
-`DRAINING → CHECKPOINTED → APPLYING → RELOAD_REQUESTED → RESTORING → COMPLETE`
+After reload, every bound provider tab is reinjected through the packaged version-aware `content.js` lifecycle without refreshing the provider page. The new document registration must prove the same tab, provider, documentId, generation epoch, and conversation identity captured before mutation. Only then may the checkpoint reach READY_TO_RESUME.
 
-A reload resumes only when the newly loaded manifest version/build exactly matches the requested target, provider authority re-registers successfully, the ledger remains at a safe boundary, and no provider recovery/thread rollover is active.
+If the service worker dies at any checkpoint phase, the next worker resumes from that same durable phase. A build mismatch, authority mismatch, ambiguous delivery, parked response, provider recovery, or rollover activity fails closed into UPDATE_RECOVERY_FAILED.
