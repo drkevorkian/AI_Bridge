@@ -37,8 +37,10 @@ for(const base of bases){
   assert.doesNotMatch(dashboard,/\\n/,'dashboard contains literal \\n: '+base);
   assert.doesNotMatch(popup,/\\n/,'popup contains literal \\n: '+base);
 
-  assert.match(layouts,/window\.location\.assign\(chrome\.runtime\.getURL\("settings\.html"\)\)/,'Dashboard Settings must navigate same tab: '+base);
-  assert.match(settings,/window\.location\.assign\(chrome\.runtime\.getURL\("dashboard\.html"\)\)/,'Settings Dashboard must navigate same tab: '+base);
+  assert.match(layouts,/window\.location\.assign\(url\)/,'Dashboard Settings must navigate same tab: '+base);
+  assert.match(layouts,/navigateToExtensionPage\("settings\.html"\)/,'Dashboard Settings target missing: '+base);
+  assert.match(settings,/window\.location\.assign\(url\)/,'Settings Dashboard must navigate same tab: '+base);
+  assert.match(settings,/navigateToExtensionPage\("dashboard\.html"\)/,'Settings Dashboard target missing: '+base);
   assert.doesNotMatch(layouts,/openSettings[^\n]*chrome\.tabs\.create/,'Dashboard Settings still creates tabs: '+base);
   assert.doesNotMatch(settings,/openDashboard[^\n]*chrome\.tabs\.create/,'Settings Dashboard still creates tabs: '+base);
 
