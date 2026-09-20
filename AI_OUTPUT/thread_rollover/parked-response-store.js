@@ -3,7 +3,15 @@
 const RECORD_STATE=Object.freeze({PARKED:"PARKED",CLAIMED:"CLAIMED"});
 const RECONCILE=Object.freeze({CLEARED:"CLEARED",PAUSE:"PAUSE",NONE:"NONE"});
 const RELEASE_REASON=Object.freeze({RELEASED:"RELEASED",NOT_FOUND:"NOT_FOUND",NOT_CLAIMED:"NOT_CLAIMED",CLAIM_EXPIRED_RECONCILIATION_REQUIRED:"CLAIM_EXPIRED_RECONCILIATION_REQUIRED"});
-const STORE_ERROR_CODE=Object.freeze({RECOVERY_LOAD_FAILED:"RECOVERY_LOAD_FAILED",RECOVERY_ENTRY_LIMIT_EXCEEDED:"RECOVERY_ENTRY_LIMIT_EXCEEDED",RECOVERY_TOTAL_BYTES_EXCEEDED:"RECOVERY_TOTAL_BYTES_EXCEEDED",RECOVERY_DUPLICATE_DISPATCH:"RECOVERY_DUPLICATE_DISPATCH",RECOVERY_SCHEMA_INVALID:"RECOVERY_SCHEMA_INVALID",RECOVERY_PERSIST_FAILED:"RECOVERY_PERSIST_FAILED"});
+const STORE_ERROR_CODE=Object.freeze({
+  RECOVERY_LOAD_FAILED:"RECOVERY_LOAD_FAILED",
+  RECOVERY_ENTRY_LIMIT_EXCEEDED:"RECOVERY_ENTRY_LIMIT_EXCEEDED",
+  RECOVERY_TOTAL_BYTES_EXCEEDED:"RECOVERY_TOTAL_BYTES_EXCEEDED",
+  RECOVERY_DUPLICATE_DISPATCH:"RECOVERY_DUPLICATE_DISPATCH",
+  RECOVERY_SCHEMA_INVALID:"RECOVERY_SCHEMA_INVALID",
+  RECOVERY_PERSIST_FAILED:"RECOVERY_PERSIST_FAILED",
+  MUTATION_PERSIST_FAILED:"MUTATION_PERSIST_FAILED"
+});
 const TERMINAL_DISPATCH=new Set(["RESPONSE_COMMITTED","FAILED"]);
 
 function text(value,name){const s=String(value??"").trim();if(!s)throw new TypeError(`${name} must be a non-empty string.`);return s;}
@@ -61,32 +69,30 @@ class ParkedResponseStore{
 
   async park(dispatchId,envelope){
     return this._serialize(async()=>{
-      const changed=this._pruneExpiredParked(this.records);
-      if(changed)await this._persist();
+      const candidate=this._candidateWithPrunedParked();
       const id=text(dispatchId,"dispatchId");
-      if(this.records.has(id))return Object.freeze({stored:false,reason:"ALREADY_PARKED",pause:false});
-      if(this.records.size>=this.maxEntries)return Object.freeze({stored:false,reason:"STORE_FULL",pause:true});
+      if(candidate.has(id))return Object.freeze({stored:false,reason:"ALREADY_PARKED",pause:false});
+      if(candidate.size>=this.maxEntries)return Object.freeze({stored:false,reason:"STORE_FULL",pause:true});
       const cleanEnvelope=clone(envelope??null);
       if(byteLength(cleanEnvelope)>this.maxBytes)return Object.freeze({stored:false,reason:"PAYLOAD_TOO_LARGE",pause:true});
       const parkedAt=this.now();
       const record=Object.freeze({dispatchId:id,state:RECORD_STATE.PARKED,envelope:cleanEnvelope,parkedAt,expiresAt:parkedAt+this.ttlMs,claimedAt:null});
-      const candidate=new Map(this.records);candidate.set(id,record);
+      candidate.set(id,record);
       if(!this._fitsAggregateBudget(candidate))return Object.freeze({stored:false,reason:"STORE_TOTAL_BYTES_EXCEEDED",pause:true});
-      this.records=candidate;
-      await this._persist();
+      await this._commitCandidate(candidate);
       return Object.freeze({stored:true,reason:"PARKED",pause:false,record:clone(record)});
     });
   }
 
   async claim(dispatchId){
     return this._serialize(async()=>{
-      const changed=this._pruneExpiredParked(this.records);if(changed)await this._persist();
-      const id=String(dispatchId||"");const current=this.records.get(id);
+      const candidate=this._candidateWithPrunedParked();
+      const id=String(dispatchId||"");const current=candidate.get(id);
       if(!current)return Object.freeze({claimed:false,reason:"NOT_FOUND",record:null});
       if(current.state===RECORD_STATE.CLAIMED)return Object.freeze({claimed:false,reason:"ALREADY_CLAIMED",record:clone(current)});
       const updated=Object.freeze({...current,state:RECORD_STATE.CLAIMED,claimedAt:this.now()});
-      const candidate=new Map(this.records);candidate.set(id,updated);this._assertAggregateBudget(candidate);
-      this.records=candidate;await this._persist();
+      candidate.set(id,updated);this._assertAggregateBudget(candidate);
+      await this._commitCandidate(candidate);
       return Object.freeze({claimed:true,reason:"CLAIMED",record:clone(updated)});
     });
   }
@@ -99,15 +105,38 @@ class ParkedResponseStore{
       if(current.expiresAt<=this.now())return Object.freeze({released:false,reason:RELEASE_REASON.CLAIM_EXPIRED_RECONCILIATION_REQUIRED,pause:true,record:clone(current)});
       const updated=Object.freeze({...current,state:RECORD_STATE.PARKED,claimedAt:null});
       const candidate=new Map(this.records);candidate.set(id,updated);this._assertAggregateBudget(candidate);
-      this.records=candidate;await this._persist();
+      await this._commitCandidate(candidate);
       return Object.freeze({released:true,reason:RELEASE_REASON.RELEASED,pause:false,record:clone(updated)});
     });
   }
 
-  async finalize(dispatchId){return this._serialize(async()=>{const removed=this.records.delete(String(dispatchId||""));if(removed)await this._persist();return removed;});}
+  async finalize(dispatchId){
+    return this._serialize(async()=>{
+      const id=String(dispatchId||"");
+      if(!this.records.has(id))return false;
+      const candidate=new Map(this.records);candidate.delete(id);
+      await this._commitCandidate(candidate);
+      return true;
+    });
+  }
+
   async drop(dispatchId){return this.finalize(dispatchId);}
-  async get(dispatchId){return this._serialize(async()=>{const changed=this._pruneExpiredParked(this.records);if(changed)await this._persist();return clone(this.records.get(String(dispatchId||""))||null);});}
-  async size(){return this._serialize(async()=>{const changed=this._pruneExpiredParked(this.records);if(changed)await this._persist();return this.records.size;});}
+
+  async get(dispatchId){
+    return this._serialize(async()=>{
+      const candidate=this._candidateWithPrunedParked();
+      if(candidate.size!==this.records.size)await this._commitCandidate(candidate);
+      return clone(this.records.get(String(dispatchId||""))||null);
+    });
+  }
+
+  async size(){
+    return this._serialize(async()=>{
+      const candidate=this._candidateWithPrunedParked();
+      if(candidate.size!==this.records.size)await this._commitCandidate(candidate);
+      return this.records.size;
+    });
+  }
 
   async reconcileClaimed(dispatchId,ledger){
     return this._serialize(async()=>{
@@ -116,7 +145,11 @@ class ParkedResponseStore{
       if(!record)return Object.freeze({action:RECONCILE.NONE,reason:"NOT_FOUND"});
       if(record.state!==RECORD_STATE.CLAIMED)return Object.freeze({action:RECONCILE.NONE,reason:"NOT_CLAIMED"});
       const dispatch=ledger.get(id);
-      if(dispatch&&TERMINAL_DISPATCH.has(dispatch.status)){this.records.delete(id);await this._persist();return Object.freeze({action:RECONCILE.CLEARED,reason:dispatch.status});}
+      if(dispatch&&TERMINAL_DISPATCH.has(dispatch.status)){
+        const candidate=new Map(this.records);candidate.delete(id);
+        await this._commitCandidate(candidate);
+        return Object.freeze({action:RECONCILE.CLEARED,reason:dispatch.status});
+      }
       return Object.freeze({action:RECONCILE.PAUSE,reason:dispatch?"CLAIM_OUTCOME_AMBIGUOUS":"DISPATCH_MISSING"});
     });
   }
@@ -135,12 +168,19 @@ class ParkedResponseStore{
     return Object.freeze({dispatchId,state,envelope,parkedAt,expiresAt,claimedAt});
   }
 
+  _candidateWithPrunedParked(){const candidate=new Map(this.records);this._pruneExpiredParked(candidate);return candidate;}
   _pruneExpiredParked(records){const now=this.now();let changed=false;for(const[id,record]of records){if(record.state===RECORD_STATE.PARKED&&record.expiresAt<=now){records.delete(id);changed=true;}}return changed;}
   _serializedPayload(records){return{records:[...records.values()].map(clone)};}
   _fitsAggregateBudget(records){return byteLength(this._serializedPayload(records))<=this.maxTotalBytes;}
   _assertAggregateBudget(records){if(records.size>this.maxEntries)throw new Error("Parked-response count exceeds maxEntries.");if(!this._fitsAggregateBudget(records))throw new Error("Persisted parked-response store exceeds maxTotalBytes.");}
   async _persistMap(records){this._assertAggregateBudget(records);await this.store.save(this.key,this._serializedPayload(records));}
-  async _persist(){return this._persistMap(this.records);}
+  async _commitCandidate(candidate){
+    try{await this._persistMap(candidate);}catch(error){
+      if(error instanceof ParkedResponseStoreError)throw error;
+      throw new ParkedResponseStoreError(STORE_ERROR_CODE.MUTATION_PERSIST_FAILED,"Failed to persist parked-response mutation.",error);
+    }
+    this.records=candidate;
+  }
   _requireInit(){if(!this.initialized)throw new Error("ParkedResponseStore.init() must complete before use.");}
   _serialize(task,requireInitialized=true){const run=async()=>{if(requireInitialized)this._requireInit();return task();};const next=this._queue.catch(()=>undefined).then(run);this._queue=next.catch(()=>undefined);return next;}
 }
