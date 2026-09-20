@@ -1,659 +1,383 @@
 (() => {
-  if (window.__AI_BRIDGE_LOADED_V113__) return;
-  window.__AI_BRIDGE_LOADED_V113__ = true;
+  if (globalThis.__AI_BRIDGE_REVIEW_CONTENT__) return;
+  globalThis.__AI_BRIDGE_REVIEW_CONTENT__ = true;
 
-  const host = location.hostname;
-  let lastObservedText = "";
-  let lastChangeAt = 0;
-  let lastReportedText = "";
-  let lastReportedSignature = "";
-  let pendingSend = false;
-  const MAX_ARTIFACTS_PER_RESPONSE = 8;
-  const MAX_ARTIFACT_FILE_BYTES = 12 * 1024 * 1024;
-  const MAX_ARTIFACT_TOTAL_BYTES = 24 * 1024 * 1024;
-  const ARTIFACT_FETCH_TIMEOUT_MS = 15000;
-  const DOWNLOAD_CANDIDATE_SELECTOR = [
-    "a[href]", "a[download]", "button", "[role='button']",
-    "[data-download-url]", "[data-file-url]", "[data-url]", "[data-href]"
-  ].join(",");
+  const VERSION = "1.18.0-review.4";
+  const host = location.hostname.toLowerCase();
+  const provider = host === "chatgpt.com" || host === "chat.openai.com" ? "chatgpt"
+    : host === "grok.com" ? "grok"
+    : host === "claude.ai" ? "claude"
+    : host === "gemini.google.com" ? "gemini"
+    : host === "copilot.microsoft.com" ? "copilot"
+    : null;
 
-  const adapters = {
-    chatgpt: {
-      matches: () => host === "chatgpt.com" || host === "chat.openai.com",
-      inputSelectors: [
-        "#prompt-textarea",
-        "textarea[data-id='root']",
-        "div[contenteditable='true'][data-virtualkeyboard='true']",
-        "div[contenteditable='true']"
-      ],
-      sendSelectors: [
-        "button[data-testid='send-button']",
-        "button[aria-label*='Send']",
-        "button[aria-label*='send']"
-      ],
-      responseSelectors: [
-        "[data-message-author-role='assistant'] .markdown",
-        "[data-message-author-role='assistant']"
-      ],
-      stopSelectors: [
-        "button[data-testid='stop-button']",
-        "button[aria-label*='Stop']"
-      ],
-      fileInputSelectors: ["input[type='file']"],
-      uploadButtonSelectors: [
-        "button[aria-label*='Attach']", "button[aria-label*='Upload']",
-        "button[data-testid*='attach']", "button[data-testid*='upload']"
-      ]
-    },
-    grok: {
-      matches: () => host === "grok.com",
-      inputSelectors: ["textarea", "div[contenteditable='true']"],
-      sendSelectors: ["button[aria-label*='Send']", "button[type='submit']"],
-      responseSelectors: ["article", "div[class*='message']"],
-      stopSelectors: ["button[aria-label*='Stop']", "button[title*='Stop']"],
-      fileInputSelectors: ["input[type='file']"],
-      uploadButtonSelectors: ["button[aria-label*='Attach']", "button[aria-label*='Upload']", "button[title*='Attach']"]
-    },
-    claude: {
-      matches: () => host === "claude.ai",
-      inputSelectors: ["div[contenteditable='true']", "textarea"],
-      sendSelectors: ["button[aria-label*='Send']", "button[type='submit']"],
-      responseSelectors: [
-        "div[data-is-streaming]",
-        "div.font-claude-message",
-        "div[class*='font-claude']"
-      ],
-      stopSelectors: ["button[aria-label*='Stop']"],
-      fileInputSelectors: ["input[type='file']"],
-      uploadButtonSelectors: ["button[aria-label*='Attach']", "button[aria-label*='Upload']", "button[aria-label*='Add']"]
-    },
-    gemini: {
-      matches: () => host === "gemini.google.com",
-      inputSelectors: ["div[contenteditable='true']", "textarea"],
-      sendSelectors: ["button[aria-label*='Send']", "button.send-button"],
-      responseSelectors: [
-        "model-response",
-        ".model-response",
-        "[data-test-id='model-response']",
-        ".model-response-text",
-        "message-content"
-      ],
-      stopSelectors: [
-        "button[aria-label*='Stop']",
-        "button[aria-label*='stop']",
-        "button:has(mat-icon[data-mat-icon-name='stop'])",
-        "button:has(mat-icon[fonticon='stop'])",
-        ".stop-button"
-      ],
-      fileInputSelectors: ["input[type='file']"],
-      uploadButtonSelectors: ["button[aria-label*='Attach']", "button[aria-label*='Upload']", "button[aria-label*='Add']"]
-    },
-    copilot: {
-      matches: () => host === "copilot.microsoft.com",
-      inputSelectors: ["textarea", "div[contenteditable='true']"],
-      sendSelectors: [
-        "button[aria-label*='Submit']",
-        "button[aria-label*='Send']",
-        "button[type='submit']"
-      ],
-      responseSelectors: ["div[data-content='ai-message']", "div[class*='response']"],
-      stopSelectors: ["button[aria-label*='Stop']"],
-      fileInputSelectors: ["input[type='file']"],
-      uploadButtonSelectors: ["button[aria-label*='Attach']", "button[aria-label*='Upload']", "button[aria-label*='Add']"]
-    }
-  };
+  const TRUSTED = Object.freeze({
+    chatgpt: Object.freeze({
+      composer: Object.freeze(["#prompt-textarea"]),
+      send: Object.freeze(["button[data-testid='send-button']","button[aria-label='Send prompt']"]),
+      response: Object.freeze(["[data-message-author-role='assistant'] .markdown","[data-message-author-role='assistant']"])
+    }),
+    grok: Object.freeze({
+      composer: Object.freeze(["textarea[placeholder*='Ask']","div[contenteditable='true'][aria-label*='Grok']"]),
+      send: Object.freeze(["button[aria-label='Send message']"]),
+      response: Object.freeze(["[data-testid='message-text']"])
+    }),
+    gemini: Object.freeze({
+      composer: Object.freeze(["rich-textarea div[contenteditable='true']"]),
+      send: Object.freeze(["button[aria-label='Send message']"]),
+      response: Object.freeze(["message-content"])
+    }),
+    claude: Object.freeze({ composer:Object.freeze([]), send:Object.freeze(["button[aria-label='Send Message']"]), response:Object.freeze([]) }),
+    copilot: Object.freeze({ composer:Object.freeze(["textarea#searchbox"]), send:Object.freeze([]), response:Object.freeze(["cib-message"]) })
+  });
 
-  const adapter = Object.values(adapters).find(a => a.matches());
-  if (!adapter) return;
+  const config = TRUSTED[provider] || { composer:[], send:[], response:[] };
+  const byCommand = new Map();
+  const byAuthority = new Map();
+  const MAX_CACHE = 128;
+  let registration = null;
+  let lastHref = location.href;
+  let awaitingDispatchId = null;
+  let lastResponseSignature = "";
+  let lastObserved = "";
+  let lastChangedAt = 0;
+  let monitorTimer = null;
+  let lastLimitSignature = "";
 
-  function firstVisible(selectors) {
-    for (const selector of selectors) {
-      const nodes = [...document.querySelectorAll(selector)];
-      const node = nodes.find(el => {
-        const r = el.getBoundingClientRect();
-        const s = getComputedStyle(el);
-        return r.width > 0 && r.height > 0 && s.visibility !== "hidden" && s.display !== "none";
-      });
-      if (node) return node;
-    }
-    return null;
+  function trim(map){ while(map.size > MAX_CACHE) map.delete(map.keys().next().value); }
+  function rememberCommand(command,result){ byCommand.set(command.commandId,result); trim(byCommand); return result; }
+  function consumeAuthority(command,result){ rememberCommand(command,result); byAuthority.set(command.action+":"+command.authorityId,result); trim(byAuthority); return result; }
+  function sameIdentity(a,b){
+    if(!a||!b) return false;
+    return ["provider","kind","routeClass","threadKey","provisional","writable"].every(k => String(a[k] ?? "") === String(b[k] ?? ""));
   }
-
-  function allVisible(selectors) {
-    for (const selector of selectors) {
-      const nodes = [...document.querySelectorAll(selector)].filter(el => {
-        const r = el.getBoundingClientRect();
-        const s = getComputedStyle(el);
-        return r.width > 0 && r.height > 0 && s.visibility !== "hidden" && s.display !== "none";
-      });
-      if (nodes.length) return nodes;
-    }
-    return [];
+  function visible(node){
+    if(!node || node.isConnected===false) return false;
+    const r=node.getBoundingClientRect(); if(!r || r.width<=0 || r.height<=0) return false;
+    const s=getComputedStyle(node); return s.visibility!=="hidden" && s.display!=="none" && !node.hasAttribute("hidden");
   }
-
-  function setNativeValue(el, text) {
-    el.focus();
-
-    if (el instanceof HTMLTextAreaElement || el instanceof HTMLInputElement) {
-      const proto = el instanceof HTMLTextAreaElement ? HTMLTextAreaElement.prototype : HTMLInputElement.prototype;
-      const setter = Object.getOwnPropertyDescriptor(proto, "value")?.set;
-      if (setter) setter.call(el, text);
-      else el.value = text;
-      el.dispatchEvent(new Event("input", { bubbles: true }));
-      el.dispatchEvent(new Event("change", { bubbles: true }));
-      return;
+  function enabled(node){ return visible(node) && node.disabled!==true && node.getAttribute("aria-disabled")!=="true"; }
+  function resolveTrusted(selectors,{requireEnabled=false}={}){
+    const nodes=[];
+    for(const selector of selectors||[]){
+      let matches=[]; try{ matches=[...document.querySelectorAll(selector)].filter(n => requireEnabled ? enabled(n) : visible(n)); }catch(_){}
+      if(matches.length!==1) continue;
+      if(!nodes.includes(matches[0])) nodes.push(matches[0]);
     }
-
-    if (el.isContentEditable) {
-      el.replaceChildren();
-      const lines = text.split("\n");
-      lines.forEach((line, i) => {
-        if (i) el.appendChild(document.createElement("br"));
-        el.appendChild(document.createTextNode(line));
-      });
-      el.dispatchEvent(new InputEvent("input", {
-        bubbles: true,
-        inputType: "insertText",
-        data: text
-      }));
-    }
+    return nodes.length===1 ? nodes[0] : null;
   }
-
-  function sleep(ms) {
-    return new Promise(resolve => setTimeout(resolve, ms));
+  function routeIdentity(){
+    const path=location.pathname;
+    let threadKey=null;
+    const patterns = provider==="chatgpt" ? [/^\/c\/([^/?#]+)/]
+      : provider==="grok" ? [/^\/(?:c|chat)\/([^/?#]+)/]
+      : provider==="claude" ? [/^\/chat\/([^/?#]+)/]
+      : provider==="gemini" ? [/^\/app\/([^/?#]+)/]
+      : provider==="copilot" ? [/^\/(?:chats?|conversation)\/([^/?#]+)/]
+      : [];
+    for(const re of patterns){ const m=path.match(re); if(m){threadKey=decodeURIComponent(m[1]);break;} }
+    if(threadKey) return Object.freeze({provider,kind:"conversation",routeClass:"conversation",threadKey,provisional:false,writable:true});
+    return Object.freeze({provider,kind:"surface",routeClass:"new_chat_surface",threadKey:null,provisional:true,writable:true});
   }
-
-  function base64ToFile(item) {
-    const binary = atob(String(item.dataBase64 || ""));
-    const bytes = new Uint8Array(binary.length);
-    for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
-    return new File([bytes], String(item.name || "artifact.bin"), {
-      type: String(item.mime || "application/octet-stream"),
-      lastModified: Date.now()
+  function capabilities(){
+    return Object.freeze({
+      composer: resolveTrusted(config.composer) ? "PASS" : "FAIL",
+      send: resolveTrusted(config.send,{requireEnabled:true}) ? "PASS" : "FAIL",
+      response: config.response.length ? "PASS" : "UNSUPPORTED",
+      provider_events: "PASS",
+      upload: "UNSUPPORTED",
+      new_chat: "UNSUPPORTED",
+      conversation_identity: provider ? "PASS" : "FAIL"
     });
   }
-
-  async function findUploadInput() {
-    let input = firstVisible(adapter.fileInputSelectors || ["input[type='file']"])
-      || document.querySelector((adapter.fileInputSelectors || ["input[type='file']"]).join(","));
-    if (input) return input;
-
-    const trigger = firstVisible(adapter.uploadButtonSelectors || []);
-    if (trigger) {
-      trigger.click();
-      for (let i = 0; i < 12; i++) {
-        await sleep(150);
-        input = document.querySelector((adapter.fileInputSelectors || ["input[type='file']"]).join(","));
-        if (input) return input;
-      }
-    }
-    return null;
-  }
-
-  async function uploadArtifacts(items) {
-    const artifacts = Array.isArray(items) ? items.filter(item => item?.dataBase64) : [];
-    if (!artifacts.length) return 0;
-
-    let input = await findUploadInput();
-    if (!input) throw new Error("Could not find a file-upload control on this AI page.");
-
-    const files = artifacts.map(base64ToFile);
-    if (input.multiple || files.length === 1) {
-      const transfer = new DataTransfer();
-      for (const file of files) transfer.items.add(file);
-      input.files = transfer.files;
-      input.dispatchEvent(new Event("input", { bubbles: true }));
-      input.dispatchEvent(new Event("change", { bubbles: true }));
-      await sleep(900);
-      return files.length;
-    }
-
-    let uploaded = 0;
-    for (const file of files) {
-      input = await findUploadInput();
-      if (!input) throw new Error(`Could not attach ${file.name}.`);
-      const transfer = new DataTransfer();
-      transfer.items.add(file);
-      input.files = transfer.files;
-      input.dispatchEvent(new Event("input", { bubbles: true }));
-      input.dispatchEvent(new Event("change", { bubbles: true }));
-      uploaded += 1;
-      await sleep(650);
-    }
-    return uploaded;
-  }
-
-  function visibleNewChatControl() {
-    const candidates = [...document.querySelectorAll("button, a")];
-    return candidates.find(el => {
-      const rect = el.getBoundingClientRect();
-      const style = getComputedStyle(el);
-      if (rect.width <= 0 || rect.height <= 0 || style.visibility === "hidden" || style.display === "none") return false;
-      const label = [
-        el.getAttribute("aria-label"),
-        el.getAttribute("title"),
-        el.textContent
-      ].filter(Boolean).join(" ").replace(/\s+/g, " ").trim();
-      return /\b(new chat|new conversation|new topic|start new chat)\b/i.test(label);
-    }) || null;
-  }
-
-  async function openNewConversation() {
-    const control = visibleNewChatControl();
-    if (!control) return { clicked: false };
-    control.click();
-    await sleep(700);
-    return { clicked: true };
-  }
-
-  async function sendPrompt(text, artifacts = []) {
-    lastReportedText = "";
-    lastReportedSignature = "";
-    const input = firstVisible(adapter.inputSelectors);
-    if (!input) throw new Error("Could not find the prompt box on this page.");
-
-    pendingSend = true;
-    const uploadedCount = await uploadArtifacts(artifacts);
-    setNativeValue(input, text);
-    await sleep(uploadedCount ? 650 : 300);
-
-    const button = firstVisible(adapter.sendSelectors);
-    if (button && !button.disabled) {
-      button.click();
-    } else {
-      input.dispatchEvent(new KeyboardEvent("keydown", {
-        key: "Enter",
-        code: "Enter",
-        bubbles: true,
-        cancelable: true
-      }));
-      input.dispatchEvent(new KeyboardEvent("keyup", {
-        key: "Enter",
-        code: "Enter",
-        bubbles: true,
-        cancelable: true
-      }));
-    }
-
-    lastObservedText = "";
-    lastChangeAt = Date.now();
-    setTimeout(() => { pendingSend = false; }, uploadedCount ? 2200 : 1200);
-    return uploadedCount;
-  }
-
-  function rawNodeText(node) {
-    return String(node?.innerText || node?.textContent || "")
-      .replace(/\u00a0/g, " ")
-      .replace(/\r/g, "")
-      .trim();
-  }
-
-  function cleanResponseText(text) {
-    let value = String(text || "").replace(/\u00a0/g, " ").replace(/\r/g, "").trim();
-    // Provider accessibility headings can be included in outer-container innerText.
-    // They are labels, not the assistant's answer.
-    value = value.replace(/^(?:Gemini|ChatGPT|Claude|Grok|Copilot)\s+(?:said|says)\s*[:：]?\s*(?:\n+|$)/i, "").trim();
-    return value;
-  }
-
-  function geminiResponseText(node) {
-    if (!node) return "";
-    const selectors = [
-      "message-content.model-response-text div.markdown.markdown-main-panel",
-      "message-content.model-response-text .markdown",
-      ".model-response-text .markdown.markdown-main-panel",
-      ".model-response-text .markdown",
-      "div.response-content message-content.model-response-text",
-      "message-content.model-response-text",
-      ".model-response-text",
-      ".response-content .markdown",
-      ".response-content",
-      ".markdown.markdown-main-panel",
-      ".markdown"
-    ];
-    const candidates = [];
-    const seen = new Set();
-    for (const selector of selectors) {
-      for (const candidate of node.querySelectorAll?.(selector) || []) {
-        if (seen.has(candidate)) continue;
-        seen.add(candidate);
-        const text = cleanResponseText(rawNodeText(candidate));
-        if (text) candidates.push(text);
-      }
-    }
-    const outer = cleanResponseText(rawNodeText(node));
-    if (outer) candidates.push(outer);
-    // The real answer is normally the richest text block. This avoids Gemini's
-    // short accessibility header such as "Gemini said" winning the scrape.
-    return candidates.sort((a, b) => b.length - a.length)[0] || "";
-  }
-
-  function latestResponseNode() {
-    if (host === "gemini.google.com") {
-      const models = [...document.querySelectorAll("model-response, .model-response, [data-test-id='model-response']")]
-        .filter(el => {
-          const r = el.getBoundingClientRect();
-          const style = getComputedStyle(el);
-          return r.width > 0 && r.height > 0 && style.visibility !== "hidden" && style.display !== "none";
-        });
-      if (models.length) return models[models.length - 1];
-    }
-
-    const nodes = allVisible(adapter.responseSelectors);
-    if (!nodes.length) return null;
-    for (let i = nodes.length - 1; i >= 0; i--) {
-      const text = cleanResponseText(rawNodeText(nodes[i]));
-      if (text.length >= 2) return nodes[i];
-    }
-    return null;
-  }
-
-  function latestResponseText(node = latestResponseNode()) {
-    if (host === "gemini.google.com") return geminiResponseText(node);
-    return cleanResponseText(rawNodeText(node));
-  }
-
-  function isResponseStub(text) {
-    const value = String(text || "").trim();
-    return !value || /^(?:Gemini|ChatGPT|Claude|Grok|Copilot)\s+(?:said|says)\s*[:：]?[.!]?$/i.test(value);
-  }
-
-  function artifactRoot(node) {
-    const primary = node?.closest?.("[data-message-author-role='assistant'], [data-message-id], article, model-response") || node;
-    if (!primary) return node;
-    if (primary.querySelector?.(DOWNLOAD_CANDIDATE_SELECTOR)) return primary;
-    // Some providers render a file card as a sibling of the textual response.
-    // Look one message-wrapper level up, but never scan the whole conversation.
-    const parent = primary.parentElement;
-    if (parent && parent !== document.body && parent.querySelector?.(DOWNLOAD_CANDIDATE_SELECTOR)) return parent;
-    return primary;
-  }
-
-  function candidateLinks(node) {
-    const links = [];
-    if (!node) return links;
-    if (node.matches?.("a[href], a[download]")) links.push(node);
-    const parent = node.closest?.("a[href], a[download]");
-    if (parent && parent !== node) links.push(parent);
-    const child = node.querySelector?.("a[href], a[download]");
-    if (child && child !== node) links.push(child);
-    return links;
-  }
-
-  function datasetUrls(node) {
-    const urls = [];
-    for (const value of Object.values(node?.dataset || {})) {
-      const candidate = String(value || "").trim();
-      if (/^(https?:|blob:|data:|sandbox:)/i.test(candidate)) urls.push(candidate);
-    }
-    return urls;
-  }
-
-  function rawCandidateUrls(node) {
-    const values = [];
-    const add = value => {
-      const candidate = String(value || "").trim();
-      if (candidate && !values.includes(candidate)) values.push(candidate);
-    };
-    add(node?.getAttribute?.("href"));
-    add(node?.href);
-    for (const attr of ["data-download-url", "data-file-url", "data-url", "data-href"]) add(node?.getAttribute?.(attr));
-    for (const value of datasetUrls(node)) add(value);
-    for (const link of candidateLinks(node)) {
-      add(link.getAttribute?.("href"));
-      add(link.href);
-      for (const value of datasetUrls(link)) add(value);
-    }
-    return values;
-  }
-
-  function looksLikeDownload(node) {
-    const text = String(node?.textContent || "").trim();
-    const aria = String(node?.getAttribute?.("aria-label") || "");
-    const title = String(node?.getAttribute?.("title") || "");
-    const testId = String(node?.getAttribute?.("data-testid") || "");
-    const role = String(node?.getAttribute?.("role") || "");
-    const className = typeof node?.className === "string" ? node.className : "";
-    const urls = rawCandidateUrls(node).join(" ");
-    const label = `${text} ${aria} ${title} ${testId} ${role} ${className}`;
-    return Boolean(
-      node?.hasAttribute?.("download") ||
-      /(?:^|\s)(?:blob:|data:|sandbox:)/i.test(urls) ||
-      /\b(download|attachment|artifact|file|rendered file|save file)\b/i.test(label) ||
-      /\/(?:interpreter\/)?download(?:[/?#]|$)/i.test(urls) ||
-      /\.(?:zip|7z|tar|tgz|gz|bz2|xz|rar|py|js|ts|tsx|jsx|json|txt|md|csv|pdf|docx|xlsx|pptx)(?:$|[?#\s])/i.test(`${urls} ${text}`)
-    );
-  }
-
-  function chatGptSandboxUrl(node, sandboxHref) {
-    if (!(host === "chatgpt.com" || host === "chat.openai.com")) return "";
-    const sandboxPath = String(sandboxHref || "").replace(/^sandbox:/i, "");
-    if (!sandboxPath.startsWith("/mnt/data/")) return "";
-    const conversationMatch = location.pathname.match(/(?:^|\/)c\/([^/?#]+)/);
-    const messageNode = node?.closest?.("[data-message-id]") || artifactRoot(node);
-    const messageId = messageNode?.getAttribute?.("data-message-id") || messageNode?.dataset?.messageId || "";
-    if (!conversationMatch?.[1] || !messageId) return "";
-    return `${location.origin}/backend-api/conversation/${encodeURIComponent(conversationMatch[1])}/interpreter/download?message_id=${encodeURIComponent(messageId)}&sandbox_path=${encodeURIComponent(sandboxPath)}`;
-  }
-
-  function artifactUrl(node) {
-    const candidates = rawCandidateUrls(node);
-    for (const candidate of candidates) {
-      if (/^(https?:|blob:|data:)/i.test(candidate)) return candidate;
-      if (/^sandbox:/i.test(candidate)) {
-        const translated = chatGptSandboxUrl(node, candidate);
-        if (translated) return translated;
-      }
-    }
-    return "";
-  }
-
-  function downloadCandidates(root) {
-    const nodes = [...(root?.querySelectorAll?.(DOWNLOAD_CANDIDATE_SELECTOR) || [])];
-    const out = [];
-    const seen = new Set();
-    for (const node of nodes) {
-      if (!looksLikeDownload(node)) continue;
-      const url = artifactUrl(node);
-      const key = url || `${node.tagName || "node"}|${String(node.textContent || "").trim()}|${String(node.getAttribute?.("aria-label") || "")}`;
-      if (seen.has(key)) continue;
-      seen.add(key);
-      out.push(node);
-      if (out.length >= MAX_ARTIFACTS_PER_RESPONSE) break;
-    }
-    return out;
-  }
-
-  function artifactName(node, url, index) {
-    const explicit = String(node?.getAttribute?.("download") || "").trim();
-    if (explicit) return explicit.slice(0, 240);
-    try {
-      const parsed = new URL(url, location.href);
-      const sandboxPath = parsed.searchParams.get("sandbox_path");
-      const path = sandboxPath || decodeURIComponent(parsed.pathname || "");
-      const name = path.split("/").filter(Boolean).pop();
-      if (name) return name.slice(0, 240);
-    } catch (_) {}
-    const text = String(node?.textContent || "").trim();
-    if (text && text.length <= 240) return text.replace(/[\\/]/g, "_");
-    return `artifact-${index + 1}.bin`;
-  }
-
-  async function blobToBase64(blob) {
-    const bytes = new Uint8Array(await blob.arrayBuffer());
-    let binary = "";
-    const CHUNK = 0x8000;
-    for (let i = 0; i < bytes.length; i += CHUNK) {
-      binary += String.fromCharCode(...bytes.subarray(i, i + CHUNK));
-    }
-    return btoa(binary);
-  }
-
-  async function fetchArtifact(node, index) {
-    const url = artifactUrl(node);
-    if (!url) throw new Error("download control has no resolvable URL");
-    const name = artifactName(node, url, index);
-    const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), ARTIFACT_FETCH_TIMEOUT_MS);
-    let localError = null;
-    try {
-      try {
-        const response = await fetch(url, { credentials: "include", signal: controller.signal });
-        if (!response.ok) throw new Error(`HTTP ${response.status}`);
-        const declared = Number(response.headers.get("content-length") || 0);
-        if (declared > MAX_ARTIFACT_FILE_BYTES) throw new Error("file too large");
-        const blob = await response.blob();
-        if (blob.size <= 0 || blob.size > MAX_ARTIFACT_FILE_BYTES) throw new Error("file too large or empty");
-        return {
-          name,
-          mime: blob.type || response.headers.get("content-type") || "application/octet-stream",
-          size: blob.size,
-          dataBase64: await blobToBase64(blob)
-        };
-      } catch (err) {
-        localError = err;
-      }
-    } finally {
-      clearTimeout(timer);
-    }
-
-    // Page-context fetch can be blocked by CORS even though the extension has
-    // permission to retrieve the file. Retry HTTP(S) downloads in the service worker.
-    if (/^https?:/i.test(url)) {
-      const remote = await chrome.runtime.sendMessage({
-        type: "AI_BRIDGE_FETCH_ARTIFACT",
-        url,
-        name,
-        mime: ""
-      });
-      if (remote?.ok && remote.artifact?.dataBase64) return remote.artifact;
-      throw new Error(remote?.error || localError?.message || "artifact fetch failed");
-    }
-    throw localError || new Error("artifact fetch failed");
-  }
-
-  function artifactCandidateSignature(node) {
-    const root = artifactRoot(node);
-    const candidates = downloadCandidates(root);
-    return candidates.map((candidate, index) => {
-      const url = artifactUrl(candidate);
-      return `${url}|${artifactName(candidate, url, index)}`;
-    }).join("||");
-  }
-
-  async function captureArtifacts(node) {
-    const root = artifactRoot(node);
-    const candidates = downloadCandidates(root);
-    const artifacts = [];
-    const errors = [];
-    let total = 0;
-    for (let i = 0; i < candidates.length; i++) {
-      try {
-        const artifact = await fetchArtifact(candidates[i], i);
-        if (!artifact) continue;
-        if (artifacts.some(existing => existing.name === artifact.name && existing.size === artifact.size)) continue;
-        total += artifact.size;
-        if (total > MAX_ARTIFACT_TOTAL_BYTES) {
-          errors.push("combined artifact relay limit reached");
-          break;
-        }
-        artifacts.push(artifact);
-      } catch (err) {
-        const label = String(candidates[i]?.textContent || candidates[i]?.getAttribute?.("aria-label") || `candidate ${i + 1}`).trim().slice(0, 120);
-        errors.push(`${label || `candidate ${i + 1}`}: ${err?.message || "capture failed"}`);
-      }
-    }
-    return { artifacts, errors, candidateCount: candidates.length };
-  }
-
-  function generationAppearsActive(node = latestResponseNode()) {
-    if (firstVisible(adapter.stopSelectors)) return true;
-    if (host === "gemini.google.com" && node) {
-      const directStreaming = node.getAttribute?.("data-is-streaming") === "true"
-        || node.getAttribute?.("aria-busy") === "true";
-      if (directStreaming) return true;
-      const nestedStreaming = node.querySelector?.(
-        "[data-is-streaming='true'], [aria-busy='true'], mat-progress-spinner, mat-spinner, .loading-indicator"
-      );
-      if (nestedStreaming) return true;
-    }
-    return false;
-  }
-
-  async function monitor() {
-    const node = latestResponseNode();
-    const text = latestResponseText(node);
-    if (!text || isResponseStub(text)) return;
-
-    if (text !== lastObservedText) {
-      lastObservedText = text;
-      lastChangeAt = Date.now();
+  function getComposerText(node){ return "value" in node ? String(node.value||"") : String(node.innerText||node.textContent||""); }
+  function setComposerText(node,text){
+    node.focus();
+    if(node instanceof HTMLTextAreaElement || node instanceof HTMLInputElement){
+      const proto=node instanceof HTMLTextAreaElement?HTMLTextAreaElement.prototype:HTMLInputElement.prototype;
+      const setter=Object.getOwnPropertyDescriptor(proto,"value")?.set;
+      if(setter) setter.call(node,text); else node.value=text;
+      node.dispatchEvent(new Event("input",{bubbles:true}));
+      node.dispatchEvent(new Event("change",{bubbles:true}));
       return;
     }
-
-    if (pendingSend) return;
-    if (generationAppearsActive(node)) return;
-    const stableMs = host === "gemini.google.com" ? 4200 : 2200;
-    if (Date.now() - lastChangeAt < stableMs) return;
-
-    const linkSignature = artifactCandidateSignature(node);
-    const signature = `${text}\n::ARTIFACT_LINKS::${linkSignature}`;
-    if (signature === lastReportedSignature || (text === lastReportedText && !linkSignature)) return;
-
-    const completedAt = Number(lastChangeAt) || Date.now();
-    const captured = await captureArtifacts(node);
-    lastReportedText = text;
-    lastReportedSignature = signature;
-    try {
-      await chrome.runtime.sendMessage({
-        type: "AI_BRIDGE_RESPONSE",
-        text,
-        artifacts: captured.artifacts,
-        artifactDiagnostics: { candidateCount: captured.candidateCount, errors: captured.errors },
-        completedAt
-      });
-    } catch (_) {}
+    if(node.isContentEditable){
+      node.replaceChildren();
+      const lines=String(text).split("\n");
+      lines.forEach((line,index)=>{if(index)node.appendChild(document.createElement("br"));node.appendChild(document.createTextNode(line));});
+      node.dispatchEvent(new InputEvent("input",{bubbles:true,inputType:"insertText",data:text}));
+      return;
+    }
+    throw new Error("TRUSTED_COMPOSER_NOT_EDITABLE");
+  }
+  async function sleep(ms){ return new Promise(resolve=>setTimeout(resolve,ms)); }
+  async function confirmSend(composer,originalText){
+    for(let i=0;i<20;i++){
+      await sleep(125);
+      const current=getComposerText(composer).trim();
+      if(!current) return {confirmed:true,evidence:"composer-cleared"};
+      if(current!==String(originalText).trim() && current.length < String(originalText).trim().length/2) return {confirmed:true,evidence:"composer-transition"};
+    }
+    return {confirmed:false,evidence:null};
+  }
+  function reject(command,reason,detail=null){
+    return Object.freeze({ok:false,outcome:"REJECTED_PRE_ACTION",reason,commandId:String(command?.commandId||""),authorityId:String(command?.authorityId||""),detail});
   }
 
-  const observer = new MutationObserver(() => {});
-  observer.observe(document.documentElement, { childList: true, subtree: true, characterData: true });
-  setInterval(monitor, 650);
+  async function performSend(command){
+    if(!registration || command.authorityRegistrationId!==registration.authorityRegistrationId || Number(command.generationEpoch)!==registration.generationEpoch) {
+      return rememberCommand(command,reject(command,"STALE_AUTHORITY_REGISTRATION"));
+    }
+    const liveIdentity=routeIdentity();
+    if(!sameIdentity(liveIdentity,command.expectedIdentity) || !sameIdentity(liveIdentity,registration.identity)) {
+      return rememberCommand(command,reject(command,"STALE_CONVERSATION_AUTHORITY"));
+    }
+    const artifacts=Array.isArray(command.payload?.artifacts)?command.payload.artifacts:[];
+    if(artifacts.length) return rememberCommand(command,reject(command,"UPLOAD_UNSUPPORTED"));
 
-  chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
-    if (msg.type === "AI_BRIDGE_PING") {
-      sendResponse({ ok: true, host: location.hostname, ready: true, version: "1.18.0" });
-      return false;
+    const composer1=resolveTrusted(config.composer);
+    const send1=resolveTrusted(config.send,{requireEnabled:true});
+    if(!composer1 || !send1) return rememberCommand(command,reject(command,"DOM_AUTHORITY_UNAVAILABLE"));
+    const composer2=resolveTrusted(config.composer);
+    const send2=resolveTrusted(config.send,{requireEnabled:true});
+    if(composer1!==composer2 || send1!==send2 || !composer2?.isConnected || !send2?.isConnected) {
+      return rememberCommand(command,reject(command,"DOM_AUTHORITY_CHANGED"));
     }
 
+    const text=String(command.payload?.text||"");
+    if(!text.trim()) return rememberCommand(command,reject(command,"EMPTY_PROMPT"));
+    setComposerText(composer2,text);
+    await sleep(120);
+    const send3=resolveTrusted(config.send,{requireEnabled:true});
+    if(send3!==send2) return rememberCommand(command,reject(command,"DOM_AUTHORITY_CHANGED"));
 
-    if (msg.type === "AI_BRIDGE_READ_LAST_RESPONSE") {
-      try {
-        const node = latestResponseNode();
-        const text = latestResponseText(node);
-        sendResponse({
-          ok: Boolean(text),
-          text,
-          active: generationAppearsActive(node),
-          host: location.hostname
-        });
-      } catch (err) {
-        sendResponse({ ok: false, error: err.message || String(err) });
+    const attempted=Object.freeze({ok:false,outcome:"ACTION_ATTEMPTED",reason:"ACTION_CONFIRMATION_NOT_PROVEN",commandId:command.commandId,authorityId:command.authorityId});
+    consumeAuthority(command,attempted);
+    captureProviderEventBaseline();
+    send3.click();
+    awaitingDispatchId=command.authorityId;
+    const confirmation=await confirmSend(composer2,text);
+    if(!confirmation.confirmed) return attempted;
+    return consumeAuthority(command,Object.freeze({ok:true,outcome:"ACTION_CONFIRMED",reason:null,commandId:command.commandId,authorityId:command.authorityId,evidence:confirmation.evidence}));
+  }
+
+  async function handleAction(raw){
+    let command;
+    try{
+      const action=String(raw?.action||"").toUpperCase();
+      const authorityId=String(raw?.dispatchId||raw?.rolloverId||raw?.authorityId||"").trim();
+      const commandId=String(raw?.commandId||"").trim();
+      if(!commandId||!authorityId) throw new Error("INVALID_COMMAND");
+      command={...raw,action,authorityId,commandId};
+    }catch(error){ return reject(raw,"INVALID_COMMAND",error.message); }
+    const duplicate=byCommand.get(command.commandId)||byAuthority.get(command.action+":"+command.authorityId);
+    if(duplicate) return Object.freeze({...duplicate,duplicate:true,reason:"DUPLICATE_COMMAND"});
+    if(command.action==="SEND") return performSend(command);
+    return rememberCommand(command,reject(command,"UNSUPPORTED_ACTION"));
+  }
+
+  function normalizeProviderEventText(value){
+    return String(value||"").replace(/\u00a0/g," ").replace(/\s+/g," ").trim().slice(0,500);
+  }
+  function classifyProviderEvent(value){
+    const text=normalizeProviderEventText(value);
+    if(!text) return null;
+    if(/maximum length for this conversation|you(?:'|’)ve reached the maximum length for this conversation/i.test(text)) return null;
+    const rules=[
+      ["MESSAGE_DELIVERY_TIMEOUT","DELIVERY","RECOVERABLE",/message delivery timed out(?:\.|$)|delivery timed out(?:\.|$)/i],
+      ["CONNECTION_INTERRUPTED","CONNECTION","RECOVERABLE",/connection interrupted|connection lost|disconnected|reconnecting|waiting for (?:the )?complete answer/i],
+      ["NETWORK_ERROR","CONNECTION","RECOVERABLE",/network error|network issue|network connection/i],
+      ["GENERATION_ERROR","GENERATION","RECOVERABLE",/something went wrong|error generating|failed to generate|could(?:n|'|’)t generate|generation failed/i],
+      ["RATE_LIMIT","CAPACITY","RECOVERABLE",/rate limit|too many requests/i],
+      ["USAGE_LIMIT","CAPACITY","RECOVERABLE",/usage limit|try again in \d|limit resets/i],
+      ["AUTH_REQUIRED","AUTH","BLOCKING",/session expired|sign in to continue|log in to continue|authentication required/i],
+      ["CONTENT_BLOCKED","POLICY","BLOCKING",/content blocked|response blocked by|blocked by policy/i]
+    ];
+    for(const [code,category,severity,re] of rules){
+      if(re.test(text)) return Object.freeze({code,category,severity,message:text});
+    }
+    return null;
+  }
+  function operationalEventTexts(){
+    const texts=[];
+    for(const selector of ["[role='alert']","[aria-live='assertive']","[aria-live='polite']"]){
+      let nodes=[]; try{nodes=[...document.querySelectorAll(selector)].filter(node=>visible(node)&&!node.closest("[data-message-author-role='assistant'],[data-message-author-role=\"assistant\"]"))}catch(_){}
+      for(const node of nodes){
+        const text=normalizeProviderEventText(node.innerText||node.textContent||"");
+        if(text&&!texts.includes(text)) texts.push(text);
       }
+    }
+    return texts;
+  }
+  function captureProviderEventBaseline(){
+    providerEventBaseline=new Set(operationalEventTexts());
+  }
+  async function inspectProviderEvent(){
+    if(!awaitingDispatchId||!registration) return null;
+    const candidates=operationalEventTexts();
+    for(const raw of candidates){
+      const event=classifyProviderEvent(raw);
+      if(!event) continue;
+      if(providerEventBaseline.has(event.message)) continue;
+      const identity=registration.identity||{};
+      const signature=[provider,awaitingDispatchId,event.code,event.message,identity.threadKey||identity.routeClass||""].join("::");
+      if(!providerEventSignatures.has(signature)){
+        providerEventSignatures.set(signature,Date.now());
+        trim(providerEventSignatures);
+        try{
+          await chrome.runtime.sendMessage({
+            type:"AI_BRIDGE_PROVIDER_EVENT",
+            provider,
+            dispatchId:awaitingDispatchId,
+            generationEpoch:registration.generationEpoch,
+            authorityRegistrationId:registration.authorityRegistrationId,
+            conversationIdentity:registration.identity,
+            side:registration.side,
+            code:event.code,
+            message:event.message,
+            observedAt:Date.now()
+          });
+        }catch(_){}
+      }
+      return event;
+    }
+    return null;
+  }
+
+  function responseText(){
+    const nodes=[];
+    for(const selector of config.response||[]){
+      try{ for(const node of document.querySelectorAll(selector)) if(visible(node)&&!nodes.includes(node)) nodes.push(node); }catch(_){}
+    }
+    const node=nodes[nodes.length-1]; if(!node) return "";
+    return String(node.innerText||node.textContent||"").replace(/\u00a0/g," ").trim();
+  }
+  function generationActive(){
+    const stopSelectors=provider==="chatgpt"?["button[data-testid='stop-button']","button[aria-label='Stop generating']"]
+      :provider==="grok"?["button[aria-label='Stop']"]
+      :provider==="gemini"?["button[aria-label*='Stop']"]:[];
+    return Boolean(resolveTrusted(stopSelectors,{requireEnabled:true}));
+  }
+  async function monitor(){
+    monitorTimer=null;
+    if(!awaitingDispatchId) return;
+    if(await inspectProviderEvent()){scheduleMonitor(750);return;}
+    const text=responseText();
+    if(!text) return;
+    if(text!==lastObserved){lastObserved=text;lastChangedAt=Date.now();scheduleMonitor(350);return;}
+    if(generationActive() || Date.now()-lastChangedAt<1600){scheduleMonitor(350);return;}
+    const signature=awaitingDispatchId+"::"+text;
+    if(signature===lastResponseSignature) return;
+    lastResponseSignature=signature;
+    const dispatchId=awaitingDispatchId;
+    awaitingDispatchId=null;
+    try{
+      if(!registration) return;
+      await chrome.runtime.sendMessage({
+        type:"AI_BRIDGE_RESPONSE",
+        text,
+        completedAt:Date.now(),
+        dispatchId,
+        generationEpoch:registration.generationEpoch,
+        conversationIdentity:registration.identity,
+        side:registration.side,
+        artifacts:[]
+      });
+    }catch(_){}
+  }
+  function scheduleMonitor(ms=250){ if(monitorTimer) return; monitorTimer=setTimeout(()=>monitor().catch(()=>{}),ms); }
+
+
+  function inspectThreadLimit(){
+    if(provider!=="chatgpt") return;
+    const regions=[...document.querySelectorAll("[role='alert'],[aria-live='assertive'],[aria-live='polite']")].filter(node=>visible(node)&&!node.closest("[data-message-author-role]"));
+    for(const node of regions){
+      const text=String(node.innerText||node.textContent||"").replace(/\s+/g," ").trim();
+      if(!text) continue;
+      if(/usage limit|rate limit|try again in|upload limit|network error|something went wrong/i.test(text)) continue;
+      if(!/maximum length for this conversation|you(?:'|’)ve reached the maximum length for this conversation/i.test(text)) continue;
+      const signature=text.slice(0,500);
+      if(signature===lastLimitSignature) return;
+      lastLimitSignature=signature;
+      chrome.runtime.sendMessage({type:"AI_BRIDGE_THREAD_LIMIT",provider,text:signature}).catch(()=>{});
+      return;
+    }
+  }
+
+  const observer=new MutationObserver(()=>{scheduleMonitor();inspectThreadLimit();inspectProviderEvent().catch(()=>{});});
+  observer.observe(document.documentElement,{childList:true,subtree:true,characterData:true,attributes:true,attributeFilter:["disabled","aria-disabled","data-state","aria-label","data-testid"]});
+
+  setInterval(()=>{
+    if(location.href!==lastHref){
+      lastHref=location.href;
+      registration=null;
+      awaitingDispatchId=null;
+      providerEventBaseline=new Set();
+      providerEventSignatures.clear();
+      byCommand.clear();
+      byAuthority.clear();
+      chrome.runtime.sendMessage({type:"AI_BRIDGE_DOCUMENT_ROUTE_CHANGED"}).catch(()=>{});
+    }
+    scheduleMonitor();
+    inspectThreadLimit();
+    inspectProviderEvent().catch(()=>{});
+  },750);
+
+  chrome.runtime.onMessage.addListener((msg,_sender,sendResponse)=>{
+    if(msg.type==="AI_BRIDGE_PING"){
+      sendResponse({ok:true,host,provider,ready:true,version:VERSION,capabilities:capabilities(),identity:routeIdentity()});
       return false;
     }
-
-    if (msg.type === "AI_BRIDGE_NEW_CHAT") {
-      openNewConversation()
-        .then(result => sendResponse({ ok: true, ...result }))
-        .catch(err => sendResponse({ ok: false, error: err.message }));
+    if(msg.type==="AI_BRIDGE_IDENTITY_PROBE"){
+      try{sendResponse({ok:true,identity:routeIdentity(),capabilities:capabilities()});}
+      catch(error){sendResponse({ok:false,error:error.message||String(error)});}
+      return false;
+    }
+    if(msg.type==="AI_BRIDGE_REGISTER_DOCUMENT"){
+      (async()=>{
+        const currentIdentity=routeIdentity();
+        const result=await chrome.runtime.sendMessage({
+          type:"AI_BRIDGE_DOCUMENT_REGISTER",
+          side:msg.side,
+          provider:msg.provider,
+          generationEpoch:msg.generationEpoch,
+          nonce:msg.nonce,
+          authorityRegistrationId:msg.authorityRegistrationId,
+          currentIdentity
+        });
+        if(!result?.ok) throw new Error(result?.error||"Document registration failed.");
+        registration=Object.freeze({
+          side:String(msg.side||"").toUpperCase(),
+          provider:String(msg.provider||"").toLowerCase(),
+          generationEpoch:Number(msg.generationEpoch),
+          authorityRegistrationId:String(msg.authorityRegistrationId||""),
+          identity:currentIdentity
+        });
+        return {ok:true,registered:true};
+      })().then(sendResponse).catch(error=>sendResponse({ok:false,error:error.message||String(error)}));
       return true;
     }
-
-    if (msg.type === "AI_BRIDGE_SEND") {
-      sendPrompt(String(msg.text || ""), Array.isArray(msg.artifacts) ? msg.artifacts : [])
-        .then(uploadedCount => sendResponse({ ok: true, uploadedCount }))
-        .catch(err => sendResponse({ ok: false, error: err.message }));
+    if(msg.type==="AI_BRIDGE_ACTION"){
+      handleAction(msg).then(sendResponse).catch(error=>sendResponse({ok:false,outcome:"REJECTED_PRE_ACTION",reason:"CONTENT_GATE_ERROR",error:error.message||String(error)}));
       return true;
+    }
+    if(msg.type==="AI_BRIDGE_SEND"){
+      sendResponse({ok:false,outcome:"REJECTED_PRE_ACTION",reason:"LEGACY_SEND_DISABLED",error:"Use AI_BRIDGE_ACTION with verified authority."});
+      return false;
+    }
+    if(msg.type==="AI_BRIDGE_NEW_CHAT"){
+      sendResponse({ok:false,outcome:"REJECTED_PRE_ACTION",reason:"NEW_CHAT_UNSUPPORTED",error:"Trusted New Chat authority is not available; no click was attempted."});
+      return false;
+    }
+    if(msg.type==="AI_BRIDGE_READ_LAST_RESPONSE"){
+      const text=responseText();
+      const providerEvent=classifyProviderEvent(text);
+      if(providerEvent){
+        sendResponse({ok:false,error:"PROVIDER_EVENT_ACTIVE",providerEvent,active:generationActive(),host});
+        return false;
+      }
+      sendResponse({ok:Boolean(text),text,active:generationActive(),host});
+      return false;
     }
   });
 })();

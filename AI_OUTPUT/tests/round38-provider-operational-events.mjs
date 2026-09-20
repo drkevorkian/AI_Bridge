@@ -16,7 +16,7 @@ for(const token of [
   'await inspectProviderEvent()',
   'providerEventBaseline',
   'authorityRegistrationId:registration.authorityRegistrationId',
-  'provider_events: "PASS"',
+  'provider-events: "PASS"',
   'PROVIDER_EVENT_ACTIVE'
 ]) assert.ok(content.includes(token),'content missing '+token);
 
@@ -38,11 +38,11 @@ assert.doesNotMatch(inspectSource,/responseText\s*\(/,'response bodies must not 
 for(const token of [
   'PROVIDER_EVENT_POLICY',
   'if (msg.type === "AI_BRIDGE_PROVIDER_EVENT")',
-  'type === "provider_event"',
+  'type === "provider-event"',
   'runtimePhase = "PROVIDER_RECOVERY_REQUIRED"',
   'relay: providerBlocked ? "BLOCKED"',
   'PROVIDER_RECOVERY_REQUIRED: resolve the provider error',
-  'entry.type !== "provider_event"',
+  'entry.type !== "provider-event"',
   'matchingProviderRecovery?.resumeRelayAfterResponse'
 ]) assert.ok(background.includes(token),'background missing '+token);
 
@@ -51,7 +51,7 @@ for(const token of [
   's.providerRecovery',
   'function refreshProviderHealth',
   'Relay: ${relay}',
-  'entry.type === "provider_event"'
+  'entry.type === "provider-event"'
 ]) assert.ok(dashboard.includes(token),'dashboard missing '+token);
 
 console.log('round38-provider-operational-events: PASS');

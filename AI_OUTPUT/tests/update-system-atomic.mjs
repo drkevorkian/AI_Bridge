@@ -22,6 +22,61 @@ spec.loader.exec_module(mod)
 def digest(data):
     return hashlib.sha256(data).hexdigest()
 
+
+# Detached release signature security.
+SIGNED_MANIFEST = b'{"schema":1,"version":"9.9.9","build":"test","files":[]}'
+TEST_RSA_N = (
+    "c82e8da2bb0255791a5c759568d2b5e2e3942330eaf5659613815889ed17ee73"
+    "e358fd63eb50b3d6f76e07bee7223f71f901d5aa7277d463b70963d906f1e31b"
+    "2e01ebb7f469513ed7ffd4983867f08c058943b05c1d460bec0b3d2bd941c545"
+    "7e8c106899dd395af9dbfb1471b0e2405d5c77dfb7d5cf3eb70bdd885481a88b"
+)
+TEST_SIGNATURE = (
+    b"YoGgvlGKKE0KiEVccceoc3ko9zqBoiIYGcGe9XLBSTfNcnbus7qO4eP+ztnXParC"
+    b"vqorTVioDZjEz0W2hH7yDCtiSgYyN8QXqEXaW3c80Gn2LLuJv8A0L6zhg8gvGHr"
+    b"7NRvaXrUaIYFV5+9tQ+nU1XGkERe1ighE2IdK3Pp+F/Y="
+)
+
+mod.verify_detached_signature(
+    SIGNED_MANIFEST,
+    TEST_SIGNATURE,
+    modulus_hex=TEST_RSA_N,
+    exponent=65537,
+)
+
+try:
+    mod.verify_detached_signature(
+        SIGNED_MANIFEST + b" ",
+        TEST_SIGNATURE,
+        modulus_hex=TEST_RSA_N,
+        exponent=65537,
+    )
+    raise AssertionError("tampered manifest signature was accepted")
+except mod.UpdateError:
+    pass
+
+try:
+    mod.verify_detached_signature(
+        SIGNED_MANIFEST,
+        b"not-base64***",
+        modulus_hex=TEST_RSA_N,
+        exponent=65537,
+    )
+    raise AssertionError("malformed detached signature was accepted")
+except mod.UpdateError:
+    pass
+
+try:
+    mod.verify_detached_signature(
+        SIGNED_MANIFEST,
+        TEST_SIGNATURE,
+        modulus_hex="",
+        exponent=65537,
+    )
+    raise AssertionError("automatic update accepted without pinned release key")
+except mod.UpdateError as exc:
+    assert "public key is not configured" in str(exc)
+
 # Manifest security.
 try:
     mod.parse_manifest(json.dumps({

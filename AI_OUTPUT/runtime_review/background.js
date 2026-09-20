@@ -5,7 +5,8 @@ const MIN_AGENT_COUNT = 1;
 const MAX_AGENT_COUNT = ALL_SIDES.length;
 const SIDES = ALL_SIDES.slice(0, DEFAULT_AGENT_COUNT);
 const STATE_VERSION = 3;
-const CONTENT_VERSION = "1.18.0-review.4";
+const REVIEW_MANIFEST = chrome.runtime.getManifest();
+const CONTENT_VERSION = String(REVIEW_MANIFEST.version_name || REVIEW_MANIFEST.version || "unknown");
 const WORK_MODES = new Set(["relay", "collaborate", "compete", "parallel", "review", "mesh"]);
 const INFINITE_TURNS = -1;
 const MIN_FINITE_TURNS = 1;
@@ -112,7 +113,7 @@ let stateReady = loadState();
  * Chrome listeners remain top-level/synchronous; these maps hold only ephemeral
  * per-worker authority. A restarted worker must re-register before any action.
  */
-const REVIEW_RUNTIME_VERSION = "1.18.0-review.4";
+const REVIEW_RUNTIME_VERSION = CONTENT_VERSION;
 const { DispatchLedger, DISPATCH_STATUS } = AIBridgeRuntimeCore.ledger;
 const { RolloverCoordinator } = AIBridgeRuntimeCore.rollover;
 const { validateIncomingResponse, DISPOSITION } = AIBridgeRuntimeCore.responseGate;
@@ -2365,15 +2366,10 @@ async function ensureTabListener(tabId) {
   } catch (_) {}
 
   if (existingPong?.ok && existingPong.version !== CONTENT_VERSION) {
-    await chrome.tabs.reload(tabId);
-    const started = Date.now();
-    while (Date.now() - started < 20000) {
-      try {
-        const reloaded = await chrome.tabs.get(tabId);
-        if (reloaded?.status === "complete") break;
-      } catch (_) {}
-      await new Promise(resolve => setTimeout(resolve, 250));
-    }
+    // Do not refresh the provider page. Reloading ChatGPT/Grok/etc. can destroy
+    // the live provider state we are explicitly trying to preserve.
+    // Reinject the packaged content script instead; the script's version-aware
+    // lifecycle disposes a compatible older runtime before installing itself.
   }
 
   const tab = await chrome.tabs.get(tabId);
@@ -2391,7 +2387,7 @@ async function ensureTabListener(tabId) {
   try {
     await chrome.scripting.executeScript({ target: { tabId }, files: ["content.js"] });
   } catch (err) {
-    throw new Error(`Could not connect to the page (${err.message}). Try refreshing that AI tab once.`);
+    throw new Error(`Could not reinject the packaged AI Bridge content runtime (${err.message}). Provider page was not reloaded.`);
   }
 
   await new Promise(resolve => setTimeout(resolve, 150));
@@ -2401,6 +2397,9 @@ async function ensureTabListener(tabId) {
     if (pong?.ok && pong.version === CONTENT_VERSION) return pong;
   } catch (_) {}
 
+  if (existingPong?.ok && existingPong.version !== CONTENT_VERSION) {
+    throw new Error("CONTENT_RUNTIME_UPGRADE_NOT_PROVEN: existing provider page was left untouched and relay remains paused.");
+  }
   throw new Error("The page listener could not be established after reinjection.");
 }
 

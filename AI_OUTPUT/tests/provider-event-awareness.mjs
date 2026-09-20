@@ -13,9 +13,9 @@ for(const token of [
   'MESSAGE_DELIVERY_TIMEOUT',
   'message delivery timed out',
   'AI_BRIDGE_PROVIDER_EVENT',
-  'providerEventCandidateElements',
-  'inspectProviderEvents(mutations)',
-  'closest("[data-message-author-role]")'
+  'operationalEventTexts()',
+  'inspectProviderEvent()',
+  'closest("[data-message-author-role=\'assistant\'],[data-message-author-role=\\"assistant\\"]")'
 ]) assert.ok(content.includes(token),'content missing '+token);
 
 assert.ok(/MESSAGE_DELIVERY_TIMEOUT[\s\S]{0,180}ambiguous:\s*true/.test(background),'timeout policy must be fail-closed');

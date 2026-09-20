@@ -1,10 +1,11 @@
+importScripts("runtime-core.js");
 const ALL_SIDES = ["A", "B", "C", "D", "E"];
 const DEFAULT_AGENT_COUNT = 3;
 const MIN_AGENT_COUNT = 1;
 const MAX_AGENT_COUNT = ALL_SIDES.length;
 const SIDES = ALL_SIDES.slice(0, DEFAULT_AGENT_COUNT);
 const STATE_VERSION = 3;
-const CONTENT_VERSION = "1.18.0";
+const CONTENT_VERSION = "1.18.0-review.4";
 const WORK_MODES = new Set(["relay", "collaborate", "compete", "parallel", "review", "mesh"]);
 const INFINITE_TURNS = -1;
 const MIN_FINITE_TURNS = 1;
@@ -24,7 +25,7 @@ const MAX_ARTIFACT_PREVIEW_CHARS = 220000;
 const MAX_ARTIFACT_CONTEXT_CHARS = 260000;
 const MAX_ZIP_TEXT_ENTRIES = 80;
 const MAX_ZIP_ENTRY_UNCOMPRESSED_BYTES = 2 * 1024 * 1024;
-
+const MAX_PROVIDER_EVENTS = 100;
 const DEFAULT_HISTORY = {
   version: HISTORY_VERSION,
   jobs: [],
@@ -38,6 +39,9 @@ const DEFAULT_STATE = {
   running: false,
   paused: false,
   pauseReason: "",
+  runtimePhase: "IDLE",
+  nextTurnPending: null,
+  providerRecovery: null,
 
   tabA: null,
   tabB: null,
@@ -93,6 +97,7 @@ const DEFAULT_STATE = {
 
   transcript: [],
   nextSeq: 1,
+  providerEvents: [],
   log: []
 };
 
@@ -101,6 +106,589 @@ let history = { ...DEFAULT_HISTORY, jobs: [], commands: [] };
 let artifactStore = {};
 let responseCommitQueue = Promise.resolve();
 let stateReady = loadState();
+
+/* AI Bridge review-runtime authority boundary.
+ * Chrome listeners remain top-level/synchronous; these maps hold only ephemeral
+ * per-worker authority. A restarted worker must re-register before any action.
+ */
+const REVIEW_RUNTIME_VERSION = "1.18.0-review.4";
+const { DispatchLedger, DISPATCH_STATUS } = AIBridgeRuntimeCore.ledger;
+const { RolloverCoordinator } = AIBridgeRuntimeCore.rollover;
+const { validateIncomingResponse, DISPOSITION } = AIBridgeRuntimeCore.responseGate;
+const { ParkedResponseStore, RECORD_STATE } = AIBridgeRuntimeCore.parked;
+const { createConversationAuthority, AUTHORITY_STATES } = AIBridgeRuntimeCore.authority;
+const REVIEW_DISPATCH_KEY = "aiBridgeRuntimeDispatchLedger";
+const REVIEW_AUTH_EPOCH_KEY = "aiBridgeRuntimeAuthorityEpochs";
+const PROVIDER_EVENT_POLICY = Object.freeze({
+  MESSAGE_DELIVERY_TIMEOUT: Object.freeze({ category:"DELIVERY", severity:"RECOVERABLE" }),
+  CONNECTION_INTERRUPTED: Object.freeze({ category:"CONNECTION", severity:"RECOVERABLE" }),
+  NETWORK_ERROR: Object.freeze({ category:"CONNECTION", severity:"RECOVERABLE" }),
+  GENERATION_ERROR: Object.freeze({ category:"GENERATION", severity:"RECOVERABLE" }),
+  RATE_LIMIT: Object.freeze({ category:"CAPACITY", severity:"RECOVERABLE" }),
+  USAGE_LIMIT: Object.freeze({ category:"CAPACITY", severity:"RECOVERABLE" }),
+  AUTH_REQUIRED: Object.freeze({ category:"AUTH", severity:"BLOCKING" }),
+  CONTENT_BLOCKED: Object.freeze({ category:"POLICY", severity:"BLOCKING" })
+});
+let reviewLedger = new DispatchLedger();
+let reviewRollover = new RolloverCoordinator();
+let reviewAuthorityEpochs = {};
+let reviewRecoveryPauseReason = "";
+const reviewChromeParkedAdapter = Object.freeze({
+  async load(key) { const data = await chrome.storage.local.get(key); return data[key] || null; },
+  async save(key, value) { await chrome.storage.local.set({ [key]: value }); }
+});
+let reviewParkedStore = new ParkedResponseStore({ store: reviewChromeParkedAdapter, key: "aiBridgeRuntimeParkedResponses" });
+let reviewRuntimeReady = reviewInitializeDurableRuntime();
+const reviewAuthorityBySide = new Map();
+const reviewPendingRegistrations = new Map();
+
+
+async function reviewPersistLedger() {
+  await chrome.storage.local.set({ [REVIEW_DISPATCH_KEY]: { records: reviewLedger.snapshot() } });
+}
+async function reviewPersistAuthorityEpochs() {
+  await chrome.storage.local.set({ [REVIEW_AUTH_EPOCH_KEY]: reviewAuthorityEpochs });
+}
+async function reviewInitializeDurableRuntime() {
+  const stored = await chrome.storage.local.get([REVIEW_DISPATCH_KEY, REVIEW_AUTH_EPOCH_KEY]);
+  const records = Array.isArray(stored?.[REVIEW_DISPATCH_KEY]?.records) ? stored[REVIEW_DISPATCH_KEY].records : [];
+  reviewLedger = new DispatchLedger(records);
+  reviewAuthorityEpochs = stored?.[REVIEW_AUTH_EPOCH_KEY] && typeof stored[REVIEW_AUTH_EPOCH_KEY] === "object"
+    ? stored[REVIEW_AUTH_EPOCH_KEY] : {};
+  reviewRollover = new RolloverCoordinator();
+  reviewParkedStore = new ParkedResponseStore({ store: reviewChromeParkedAdapter, key: "aiBridgeRuntimeParkedResponses" });
+  await reviewParkedStore.init();
+
+  let changed = false;
+  for (const record of reviewLedger.snapshot()) {
+    if (record.status === DISPATCH_STATUS.DISPATCHING || record.status === DISPATCH_STATUS.ACCEPTED) {
+      reviewLedger.transition(record.dispatchId, DISPATCH_STATUS.DELIVERY_AMBIGUOUS, {
+        failureReason: "MV3_WORKER_RESTART_DURING_DELIVERY"
+      });
+      reviewRecoveryPauseReason = "A provider delivery was interrupted by a service-worker restart and may already have been sent. Automatic replay is blocked.";
+      changed = true;
+    }
+  }
+  if (changed) await reviewPersistLedger();
+
+  for (const record of reviewParkedStore.snapshot().records) {
+    if (record.state !== RECORD_STATE.CLAIMED) continue;
+    const reconciliation = await reviewParkedStore.reconcileClaimed(record.dispatchId, reviewLedger);
+    if (reconciliation.action === "PAUSE") {
+      reviewRecoveryPauseReason = "A provider response was interrupted during durable commit. Automatic replay is blocked until the ambiguous response is reviewed.";
+    }
+  }
+}
+async function reviewPayloadHash(side, text) {
+  const bytes = new TextEncoder().encode(JSON.stringify({ side: String(side), text: String(text || "") }));
+  const digest = new Uint8Array(await crypto.subtle.digest("SHA-256", bytes));
+  return [...digest].map(b => b.toString(16).padStart(2, "0")).join("");
+}
+function reviewFindUnresolvedDispatch(side, payloadHash) {
+  const active = new Set([
+    DISPATCH_STATUS.CREATED, DISPATCH_STATUS.DISPATCHING, DISPATCH_STATUS.ACCEPTED,
+    DISPATCH_STATUS.AWAITING_RESPONSE, DISPATCH_STATUS.DELIVERY_AMBIGUOUS
+  ]);
+  const candidates = reviewLedger.snapshot().filter(r =>
+    r.side === String(side).toUpperCase() && active.has(r.status)
+  );
+  const exact = candidates.find(r => r.payloadHash === payloadHash) || null;
+  const blocking = candidates.find(r => r.status !== DISPATCH_STATUS.CREATED || r.payloadHash !== payloadHash) || null;
+  return { exact, blocking };
+}
+async function reviewTransitionDispatch(dispatchId, status, patch = {}) {
+  const record = reviewLedger.transition(dispatchId, status, patch);
+  await reviewPersistLedger();
+  return record;
+}
+function reviewConversationAuthority(record) {
+  if (!record || record.identity?.kind !== "conversation" || record.identity?.provisional || !record.identity?.writable) return null;
+  try {
+    return createConversationAuthority({
+      side: record.side,
+      tabId: record.tabId,
+      generationEpoch: record.generationEpoch,
+      identity: record.identity,
+      state: AUTHORITY_STATES.CONFIRMED
+    });
+  } catch (_) {
+    return null;
+  }
+}
+async function reviewPauseForAmbiguity(reason) {
+  await pauseBridge(reason);
+  return { ok: false, paused: true, reason };
+}
+function reviewCloneOutgoing(outgoing) {
+  return {
+    text: String(outgoing?.text || ""),
+    deliveredSeq: Number.isFinite(Number(outgoing?.deliveredSeq)) ? Number(outgoing.deliveredSeq) : null,
+    deliveredSources: Boolean(outgoing?.deliveredSources),
+    artifactIds: Array.isArray(outgoing?.artifactIds) ? [...outgoing.artifactIds] : [],
+    mainInterjectionIds: Array.isArray(outgoing?.mainInterjectionIds) ? [...outgoing.mainInterjectionIds] : []
+  };
+}
+function reviewBuildNextTurnPending(sourceDispatchId, sourceSide) {
+  if (!state.sessionActive || state.awaitingHuman || hasReachedTurnLimit()) return null;
+
+  if (isBatchWorkMode()) {
+    if (state.phasePendingSides.length) return null;
+    return {
+      kind: "BATCH_ADVANCE",
+      sourceDispatchId: String(sourceDispatchId),
+      sourceSide,
+      workMode: state.workMode,
+      workPhase: state.workPhase,
+      createdAt: Date.now()
+    };
+  }
+
+  const targetSide = SIDES.includes(state.currentSide) ? state.currentSide : nextSide(sourceSide);
+  const entry = [...state.transcript].reverse().find(item =>
+    item?.type === "response" && item?.side === sourceSide
+  ) || null;
+  const outgoing = entry?.directToSide
+    ? directTurnMessage(sourceSide, targetSide, entry)
+    : normalTurnMessage(targetSide);
+
+  return {
+    kind: "SEQUENTIAL_SEND",
+    sourceDispatchId: String(sourceDispatchId),
+    sourceSide,
+    targetSide,
+    direct: Boolean(entry?.directToSide),
+    outgoing: reviewCloneOutgoing(outgoing),
+    createdAt: Date.now()
+  };
+}
+async function reviewPersistNextTurnPending(pending) {
+  state.nextTurnPending = pending;
+  state.runtimePhase = pending ? "NEXT_TURN_PENDING" : (state.sessionActive ? "AWAITING_PROVIDER_RESPONSE" : "IDLE");
+  if (pending) {
+    state.running = true;
+    state.paused = false;
+    state.pauseReason = "";
+  }
+  await saveState();
+}
+async function reviewClearNextTurnPending(sourceDispatchId = null) {
+  const pending = state.nextTurnPending;
+  if (!pending) return false;
+  if (sourceDispatchId != null && String(pending.sourceDispatchId) !== String(sourceDispatchId)) return false;
+  state.nextTurnPending = null;
+  state.runtimePhase = state.sessionActive ? "AWAITING_PROVIDER_RESPONSE" : "IDLE";
+  await saveState();
+  return true;
+}
+function reviewHasNonterminalDispatch() {
+  const active = new Set([
+    DISPATCH_STATUS.CREATED,
+    DISPATCH_STATUS.DISPATCHING,
+    DISPATCH_STATUS.ACCEPTED,
+    DISPATCH_STATUS.AWAITING_RESPONSE,
+    DISPATCH_STATUS.DELIVERY_AMBIGUOUS
+  ]);
+  return reviewLedger.snapshot().some(record => active.has(record.status));
+}
+function reviewCommittedWithoutContinuationIsInconsistent() {
+  if (!state.sessionActive || !state.running || state.awaitingHuman || state.nextTurnPending) return false;
+  if (hasReachedTurnLimit()) return false;
+  if (reviewHasNonterminalDispatch()) return false;
+  return reviewLedger.snapshot().some(record => record.status === DISPATCH_STATUS.RESPONSE_COMMITTED);
+}
+async function reviewEnforceContinuationConsistency() {
+  if (!reviewCommittedWithoutContinuationIsInconsistent()) return false;
+  const reason = "RUNTIME_CONTINUATION_STATE_INCONSISTENT: A committed response is missing its durable next-turn record. AI Bridge paused instead of guessing or sending a duplicate.";
+  state.running = false;
+  state.paused = true;
+  state.runtimePhase = "PAUSED";
+  state.pauseReason = reason;
+  appendLog({ time: Date.now(), type: "system", text: reason });
+  await saveState();
+  return true;
+}
+
+async function reviewRecoverNextTurnPending() {
+  const pending = state.nextTurnPending;
+  if (!pending || !state.sessionActive) return { recovered: false };
+  const source = reviewLedger.get(pending.sourceDispatchId);
+  if (!source || source.status !== DISPATCH_STATUS.RESPONSE_COMMITTED) {
+    await reviewPauseForAmbiguity("The durable next-turn marker does not match a committed source response. Relay recovery is paused.");
+    return { recovered: false, paused: true };
+  }
+  state.runtimePhase = "RECOVERING_NEXT_TURN";
+  await saveState();
+  return reviewContinueAfterCommittedResponse(pending.sourceSide);
+}
+
+async function reviewContinueAfterCommittedResponse(sourceSide) {
+  if (!state.sessionActive || state.awaitingHuman) return { ok: true, paused: true };
+  if (hasReachedTurnLimit()) {
+    await reviewClearNextTurnPending();
+    return { ok: true, finished: true };
+  }
+
+  const pending = state.nextTurnPending;
+  if (!pending) return { ok: false, paused: true, reason: "NO_DURABLE_CONTINUATION" };
+  state.running = true;
+  state.paused = false;
+  state.pauseReason = "";
+  state.runtimePhase = "RECOVERING_NEXT_TURN";
+  await saveState();
+
+  if (pending.kind === "BATCH_ADVANCE") {
+    if (!isBatchWorkMode()) {
+      return reviewPauseForAmbiguity("Durable batch continuation no longer matches the active work mode.");
+    }
+    if (state.phasePendingSides.length) {
+      const unsent = pendingUnsentSides();
+      if (unsent.length) {
+        try {
+          await sendBatchPhase(unsent);
+          if (state.nextTurnPending?.sourceDispatchId === pending.sourceDispatchId) {
+            await reviewClearNextTurnPending(pending.sourceDispatchId);
+          }
+          return { ok: true, advanced: true, phase: state.workPhase };
+        } catch (error) {
+          await pauseBridge("Could not recover batch continuation: " + (error?.message || error));
+          return { ok: false, error: error?.message || String(error) };
+        }
+      }
+      return reviewPauseForAmbiguity("Batch continuation has pending AI responses but no safely reconstructable unsent target.");
+    }
+
+    if (state.workMode === "review" && state.workPhase === "primary") {
+      resetBatchPhase("review");
+      await saveState();
+      try {
+        await sendBatchPhase();
+        await reviewClearNextTurnPending(pending.sourceDispatchId);
+        return { ok: true, advanced: true, phase: "review" };
+      } catch (error) {
+        await pauseBridge("Could not start recovered peer-review phase: " + (error?.message || error));
+        return { ok: false, error: error?.message || String(error) };
+      }
+    }
+
+    await reviewClearNextTurnPending(pending.sourceDispatchId);
+    const reason = state.workMode === "review" ? "Peer-review cycle complete" : workModeLabel() + " pass complete";
+    await endBridge(reason);
+    return { ok: true, advanced: true, finished: true };
+  }
+
+  if (pending.kind !== "SEQUENTIAL_SEND" || !SIDES.includes(pending.targetSide) || !pending.outgoing?.text) {
+    return reviewPauseForAmbiguity("Durable next-turn continuation is malformed.");
+  }
+
+  await new Promise(resolve => setTimeout(resolve, state.delayMs));
+  if (!state.sessionActive || !state.running || state.awaitingHuman) return { ok: false, stopped: true };
+
+  try {
+    const outgoing = pending.outgoing;
+    await sendToSide(pending.targetSide, outgoing.text, {
+      deliveredSeq: outgoing.deliveredSeq,
+      deliveredSources: outgoing.deliveredSources,
+      artifactIds: outgoing.artifactIds,
+      artifacts: artifactRecordsForIds(outgoing.artifactIds),
+      mainInterjectionIds: outgoing.mainInterjectionIds,
+      continuationSourceDispatchId: pending.sourceDispatchId
+    });
+    return { ok: true, direct: Boolean(pending.direct), targetSide: pending.targetSide };
+  } catch (error) {
+    await pauseBridge("Could not send recovered next turn to AI " + pending.targetSide + ": " + (error?.message || error));
+    return { ok: false, error: error?.message || String(error) };
+  }
+}
+async function reviewProcessIncomingEnvelope(envelope, { fromParked = false } = {}) {
+  await reviewRuntimeReady;
+  const dispatch = reviewLedger.get(envelope.dispatchId);
+  if (!dispatch) return { ok: false, ignored: true, reason: "UNKNOWN_DISPATCH" };
+  if (dispatch.status === DISPATCH_STATUS.DELIVERY_AMBIGUOUS) {
+    return reviewPauseForAmbiguity("Delivery is ambiguous for dispatch " + dispatch.dispatchId + "; response progression is paused.");
+  }
+
+  const liveRecord = reviewAuthorityBySide.get(envelope.side);
+  const authority = reviewConversationAuthority(liveRecord);
+  if (!authority) {
+    if (!fromParked) {
+      const parked = await reviewParkedStore.park(envelope.dispatchId, envelope);
+      if (!parked.stored && parked.reason !== "ALREADY_PARKED") {
+        return reviewPauseForAmbiguity("Could not durably park an inbound provider response: " + parked.reason);
+      }
+    }
+    return { ok: false, parked: true, reason: "DOCUMENT_AUTHORITY_PENDING" };
+  }
+
+  const gate = validateIncomingResponse({
+    ledger: reviewLedger,
+    coordinator: reviewRollover,
+    authority,
+    senderTabId: envelope.senderTabId,
+    side: envelope.side,
+    dispatchId: envelope.dispatchId,
+    generationEpoch: envelope.generationEpoch,
+    conversationIdentity: envelope.conversationIdentity,
+    rolloverId: envelope.rolloverId || null
+  });
+
+  if (gate.disposition === DISPOSITION.DROP) {
+    if (fromParked) await reviewParkedStore.drop(envelope.dispatchId);
+    return { ok: false, ignored: true, reason: gate.reason };
+  }
+  if (gate.disposition === DISPOSITION.PAUSE) {
+    return reviewPauseForAmbiguity("Inbound response authority paused: " + gate.reason);
+  }
+  if (gate.disposition === DISPOSITION.PARK) {
+    if (!fromParked) {
+      const parked = await reviewParkedStore.park(envelope.dispatchId, envelope);
+      if (!parked.stored && parked.reason !== "ALREADY_PARKED") {
+        return reviewPauseForAmbiguity("Could not park provider response: " + parked.reason);
+      }
+    }
+    return { ok: false, parked: true, reason: gate.reason };
+  }
+
+  if (!fromParked) {
+    const parked = await reviewParkedStore.park(envelope.dispatchId, envelope);
+    if (!parked.stored && parked.reason !== "ALREADY_PARKED") {
+      return reviewPauseForAmbiguity("Could not establish durable response commit barrier: " + parked.reason);
+    }
+  }
+
+  const claim = await reviewParkedStore.claim(envelope.dispatchId);
+  if (!claim.claimed) {
+    return reviewPauseForAmbiguity("Response commit ownership is ambiguous: " + claim.reason);
+  }
+
+  try {
+    const providerRecoveryMatch=Boolean(
+      state.providerRecovery?.active &&
+      String(state.providerRecovery.dispatchId||"")===String(envelope.dispatchId) &&
+      state.providerRecovery.side===envelope.side
+    );
+    const shouldRelay = state.running || providerRecoveryMatch;
+    const stateResult = await handleCompletedResponse(envelope.side, envelope.text, {
+      relay: false,
+      artifacts: envelope.artifacts,
+      completedAt: envelope.completedAt
+    });
+
+    let pending = null;
+    if (
+      shouldRelay &&
+      state.sessionActive &&
+      !state.awaitingHuman &&
+      !stateResult?.finished &&
+      !stateResult?.commandError
+    ) {
+      pending = reviewBuildNextTurnPending(envelope.dispatchId, envelope.side);
+      if (pending) {
+        try {
+          await reviewPersistNextTurnPending(pending);
+        } catch (error) {
+          return reviewPauseForAmbiguity(
+            "Could not durably save the next-turn obligation. The source response remains uncommitted: " +
+            (error?.message || error)
+          );
+        }
+      }
+    }
+
+    try {
+      await reviewTransitionDispatch(envelope.dispatchId, DISPATCH_STATUS.RESPONSE_COMMITTED, {
+        completedAt: Number.isFinite(Number(envelope.completedAt)) ? Number(envelope.completedAt) : Date.now()
+      });
+    } catch (error) {
+      return reviewPauseForAmbiguity(
+        "The next-turn obligation is durable but the source response could not be marked committed. Recovery is paused: " +
+        (error?.message || error)
+      );
+    }
+
+    await reviewParkedStore.finalize(envelope.dispatchId);
+
+    if (pending && providerRecoveryMatch) {
+      state.providerRecovery={...state.providerRecovery,active:false,resolvedAt:Date.now(),responseCommitted:true};
+      state.running=false;
+      state.paused=true;
+      state.runtimePhase="PROVIDER_RESPONSE_RECOVERED";
+      state.pauseReason="Provider response recovered for AI "+envelope.side+". The response is committed and the next relay turn is durable. Press Resume to continue.";
+      await saveState();
+      return {ok:true,providerRecovered:true,paused:true,pending:true};
+    }
+    if (pending) return reviewContinueAfterCommittedResponse(envelope.side);
+    state.runtimePhase = state.sessionActive
+      ? (state.awaitingHuman || state.paused ? "PAUSED" : "AWAITING_PROVIDER_RESPONSE")
+      : "IDLE";
+    await saveState();
+    return stateResult;
+  } catch (error) {
+    return reviewPauseForAmbiguity("Response commit was interrupted and cannot be replayed automatically: " + (error?.message || error));
+  }
+}
+async function reviewDrainParkedResponses(side) {
+  await reviewRuntimeReady;
+  const records = reviewParkedStore.snapshot().records.filter(r =>
+    r.state === RECORD_STATE.PARKED && r.envelope?.side === side
+  );
+  for (const record of records) {
+    const result = await reviewProcessIncomingEnvelope(record.envelope, { fromParked: true });
+    if (result?.paused) break;
+  }
+}
+
+function reviewProviderFromUrl(rawUrl) {
+  try {
+    const host = new URL(String(rawUrl || "")).hostname.toLowerCase();
+    if (host === "chatgpt.com" || host === "chat.openai.com") return "chatgpt";
+    if (host === "grok.com") return "grok";
+    if (host === "claude.ai") return "claude";
+    if (host === "gemini.google.com") return "gemini";
+    if (host === "copilot.microsoft.com") return "copilot";
+  } catch (_) {}
+  return null;
+}
+
+function reviewSanitizeIdentity(raw) {
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) throw new Error("Invalid conversation identity.");
+  const provider = String(raw.provider || "").trim().toLowerCase();
+  const kind = String(raw.kind || "").trim();
+  const routeClass = String(raw.routeClass || "").trim();
+  const threadKey = raw.threadKey == null ? null : String(raw.threadKey).trim();
+  const provisional = raw.provisional === true;
+  const writable = raw.writable === true;
+  if (!provider || !kind || !routeClass) throw new Error("Incomplete conversation identity.");
+  if (kind === "conversation" && (!threadKey || provisional)) throw new Error("Invalid conversation identity.");
+  if (kind === "surface" && (!provisional || threadKey !== null)) throw new Error("Invalid surface identity.");
+  if (kind === "share" && writable) throw new Error("Share identity cannot be writable.");
+  return Object.freeze({ provider, kind, routeClass, threadKey, provisional, writable });
+}
+
+function reviewIdentityKey(raw) {
+  const i = reviewSanitizeIdentity(raw);
+  return [i.provider, i.kind, i.routeClass, i.threadKey || "-", i.provisional ? "p" : "f", i.writable ? "w" : "r"].join("|");
+}
+
+function reviewSameIdentity(a, b) {
+  try { return reviewIdentityKey(a) === reviewIdentityKey(b); } catch (_) { return false; }
+}
+
+function reviewInvalidateAuthorityForTab(tabId) {
+  for (const [side, record] of reviewAuthorityBySide) {
+    if (Number(record.tabId) === Number(tabId)) reviewAuthorityBySide.delete(side);
+  }
+}
+
+async function reviewRegisterSideAuthority(side) {
+  const tabId = Number(tabForSide(side));
+  if (!Number.isInteger(tabId) || tabId <= 0) throw new Error("No tab is assigned to this AI.");
+  await ensureTabListener(tabId);
+
+  const tab = await chrome.tabs.get(tabId);
+  const provider = reviewProviderFromUrl(tab?.url);
+  if (!provider) throw new Error("Selected tab is not on a supported AI provider.");
+
+  const probe = await chrome.tabs.sendMessage(tabId, { type: "AI_BRIDGE_IDENTITY_PROBE" });
+  if (!probe?.ok) throw new Error(probe?.error || "Could not derive provider conversation identity.");
+  const expectedIdentity = reviewSanitizeIdentity(probe.identity);
+  if (expectedIdentity.provider !== provider || expectedIdentity.writable !== true) {
+    throw new Error("Provider document is not a writable trusted conversation surface.");
+  }
+
+  const priorLive = reviewAuthorityBySide.get(side);
+  const priorDurable = reviewAuthorityEpochs[side] || null;
+  const prior = priorLive || priorDurable;
+  const equivalent = prior
+    && Number(prior.tabId) === tabId
+    && String(prior.provider || "") === provider
+    && reviewSameIdentity(prior.identity, expectedIdentity);
+  const generationEpoch = equivalent
+    ? Number(prior.generationEpoch)
+    : Number(prior?.generationEpoch || 0) + 1;
+  const nonce = crypto.randomUUID();
+  const authorityRegistrationId = crypto.randomUUID();
+
+  const registration = new Promise((resolve, reject) => {
+    const timer = setTimeout(() => {
+      const current = reviewPendingRegistrations.get(side);
+      if (current?.nonce === nonce && current?.authorityRegistrationId === authorityRegistrationId) {
+        reviewPendingRegistrations.delete(side);
+      }
+      reject(new Error("DOCUMENT_REGISTRATION_TIMEOUT"));
+    }, 5000);
+    reviewPendingRegistrations.set(side, {
+      side, tabId, provider, expectedIdentity, generationEpoch,
+      nonce, authorityRegistrationId, timer, resolve, reject
+    });
+  });
+
+  try {
+    await chrome.tabs.sendMessage(tabId, {
+      type: "AI_BRIDGE_REGISTER_DOCUMENT",
+      side,
+      provider,
+      generationEpoch,
+      nonce,
+      authorityRegistrationId,
+      expectedIdentity
+    });
+  } catch (error) {
+    const pending = reviewPendingRegistrations.get(side);
+    if (pending?.nonce === nonce) {
+      clearTimeout(pending.timer);
+      reviewPendingRegistrations.delete(side);
+    }
+    throw new Error("Could not start document authority registration: " + (error?.message || error));
+  }
+
+  return registration;
+}
+
+function reviewAcceptDocumentRegistration(msg, sender) {
+  const side = String(msg?.side || "").toUpperCase();
+  const pending = reviewPendingRegistrations.get(side);
+  if (!pending) throw new Error("REGISTER_CHALLENGE_MISSING");
+  if (sender?.id !== chrome.runtime.id) throw new Error("REGISTER_EXTENSION_ID_MISMATCH");
+  if (sender?.tab?.id !== pending.tabId || sender.frameId !== 0) throw new Error("REGISTER_TAB_MISMATCH");
+  if (String(sender.documentLifecycle || "").toLowerCase() !== "active") throw new Error("REGISTER_DOCUMENT_NOT_ACTIVE");
+  if (!sender.documentId) throw new Error("REGISTER_DOCUMENT_ID_MISSING");
+  if (String(msg?.nonce || "") !== pending.nonce) throw new Error("REGISTER_NONCE_MISMATCH");
+  if (String(msg?.authorityRegistrationId || "") !== pending.authorityRegistrationId) throw new Error("REGISTER_AUTHORITY_TOKEN_MISMATCH");
+  if (String(msg?.provider || "").toLowerCase() !== pending.provider) throw new Error("REGISTER_PROVIDER_MISMATCH");
+  if (Number(msg?.generationEpoch) !== pending.generationEpoch) throw new Error("REGISTER_GENERATION_MISMATCH");
+  const identity = reviewSanitizeIdentity(msg?.currentIdentity);
+  if (!reviewSameIdentity(identity, pending.expectedIdentity)) throw new Error("REGISTER_IDENTITY_MISMATCH");
+
+  const senderProvider = reviewProviderFromUrl(sender.url || sender.tab?.url);
+  if (senderProvider !== pending.provider) throw new Error("REGISTER_PROVIDER_ORIGIN_MISMATCH");
+
+  const record = Object.freeze({
+    side,
+    tabId: pending.tabId,
+    provider: pending.provider,
+    documentId: String(sender.documentId),
+    generationEpoch: pending.generationEpoch,
+    authorityRegistrationId: pending.authorityRegistrationId,
+    identity,
+    registeredAt: Date.now()
+  });
+  clearTimeout(pending.timer);
+  reviewPendingRegistrations.delete(side);
+  reviewAuthorityBySide.set(side, record);
+  reviewAuthorityEpochs[side] = {
+    side: record.side,
+    tabId: record.tabId,
+    provider: record.provider,
+    generationEpoch: record.generationEpoch,
+    identity: record.identity
+  };
+  reviewPersistAuthorityEpochs()
+    .then(() => reviewDrainParkedResponses(side))
+    .catch(error => console.error("AI Bridge review authority persistence/drain failed", error));
+  pending.resolve(record);
+  return record;
+}
+
 
 function cloneDefaultState() {
   return {
@@ -126,7 +714,11 @@ function cloneDefaultState() {
     pendingHumanQueue: [],
     pendingMainInterjections: [],
     suppressedHumanRequests: [],
+    runtimePhase: "IDLE",
+    nextTurnPending: null,
+    providerRecovery: null,
     transcript: [],
+    providerEvents: [],
     log: []
   };
 }
@@ -889,12 +1481,16 @@ async function loadState() {
       pendingMainInterjections: Array.isArray(bridgeState.pendingMainInterjections) ? bridgeState.pendingMainInterjections : [],
       suppressedHumanRequests: migrateSuppressedHumanRequests(bridgeState),
       transcript: Array.isArray(bridgeState.transcript) ? bridgeState.transcript : [],
+      providerEvents: Array.isArray(bridgeState.providerEvents) ? bridgeState.providerEvents.slice(-MAX_PROVIDER_EVENTS) : [],
       log: Array.isArray(bridgeState.log) ? bridgeState.log : []
     };
     state.agentCount = setActiveAgentCount(state.agentCount);
     state.startSide = SIDES.includes(state.startSide) ? state.startSide : SIDES[0];
     state.mainSide = SIDES.includes(state.mainSide) ? state.mainSide : state.startSide;
     if (state.currentSide && !SIDES.includes(state.currentSide)) state.currentSide = state.startSide;
+    state.runtimePhase = String(state.runtimePhase || "IDLE");
+    state.nextTurnPending = state.nextTurnPending && typeof state.nextTurnPending === "object" ? state.nextTurnPending : null;
+    state.providerRecovery = state.providerRecovery && typeof state.providerRecovery === "object" ? state.providerRecovery : null;
     state.workMode = normalizeWorkMode(state.workMode);
     if (!isBatchWorkMode(state.workMode)) {
       state.workPhase = state.workMode === "collaborate" ? "collaborate" : (state.workMode === "mesh" ? "mesh" : "relay");
@@ -934,13 +1530,32 @@ async function loadState() {
   }
 
   await validateSavedBindings();
+  await reviewRuntimeReady;
+
+  if (await reviewEnforceContinuationConsistency()) {
+    reviewRecoveryPauseReason = state.pauseReason;
+  }
+
+  if (reviewRecoveryPauseReason && state.sessionActive) {
+    const alreadyApplied = state.paused && state.pauseReason === reviewRecoveryPauseReason;
+    state.running = false;
+    state.paused = true;
+    state.runtimePhase = "PAUSED";
+    state.pauseReason = reviewRecoveryPauseReason;
+    if (!alreadyApplied) appendLog({ time: Date.now(), type: "system", text: reviewRecoveryPauseReason });
+    if (!alreadyApplied) await saveState();
+  }
 
   // Manifest V3 service workers are disposable. When Chrome wakes this worker
   // back up, proactively reconnect all active page listeners so a saved running
   // session can continue without the popup having to be opened first.
   if (state.sessionActive && state.running) {
     try {
-      await Promise.all(SIDES.map(side => ensureTabListener(tabForSide(side))));
+      await Promise.all(SIDES.map(side => reviewRegisterSideAuthority(side)));
+      if (state.nextTurnPending) {
+        const recovered = await reviewRecoverNextTurnPending();
+        if (recovered?.paused) throw new Error("Next-turn recovery paused.");
+      }
     } catch (err) {
       state.running = false;
       state.paused = true;
@@ -1181,17 +1796,18 @@ function formatEntry(entry) {
 }
 
 function boundedTranscript(entries, maxChars = 48000) {
+  const relayEntries = (Array.isArray(entries) ? entries : []).filter(entry => entry?.type !== "provider-event");
   const parts = [];
   let used = 0;
 
-  for (let i = entries.length - 1; i >= 0; i--) {
-    const part = formatEntry(entries[i]);
+  for (let i = relayEntries.length - 1; i >= 0; i--) {
+    const part = formatEntry(relayEntries[i]);
     if (parts.length && used + part.length > maxChars) break;
     parts.unshift(part);
     used += part.length;
   }
 
-  const omitted = parts.length < entries.length;
+  const omitted = parts.length < relayEntries.length;
   return `${omitted ? "[Earlier transcript entries omitted to keep the recovery message bounded.]\n\n" : ""}${parts.join("\n\n")}`.trim();
 }
 
@@ -1320,6 +1936,7 @@ function normalTurnMessage(side) {
   const delivered = Number(state.lastDeliveredSeqBySide[side] || 0);
   const unseen = state.transcript.filter(entry =>
     entry.seq > delivered &&
+    entry.type !== "provider_event" &&
     !(entry.type === "response" && entry.side === side) &&
     !(side === state.mainSide && entry.type === "human" && entry.interjection)
   );
@@ -1513,6 +2130,7 @@ async function advanceBatchIfReady() {
 
 function recoveryMessage(side) {
   const recent = boundedTranscript(state.transcript.filter(entry =>
+    entry.type !== "provider_event" &&
     !(side === state.mainSide && entry.type === "human" && entry.interjection)
   ));
   const sourceContext = sourceSectionForSide(side, { force: true });
@@ -1665,34 +2283,109 @@ async function ensureTabListener(tabId) {
   throw new Error("The page listener could not be established after reinjection.");
 }
 
-async function sendToSide(side, text, { record = true, deliveredSeq = null, deliveredSources = false, artifactIds = [], artifacts = [], mainInterjectionIds = [], saveRecord = true } = {}) {
-  const tabId = tabForSide(side);
-  await ensureTabListener(tabId);
+async function sendToSide(side, text, { record = true, deliveredSeq = null, deliveredSources = false, artifactIds = [], artifacts = [], mainInterjectionIds = [], saveRecord = true, continuationSourceDispatchId = null } = {}) {
+  await reviewRuntimeReady;
+  const tabId = Number(tabForSide(side));
+  if (Array.isArray(artifacts) && artifacts.length) {
+    throw new Error("Trusted Upload authority is not available in this review runtime.");
+  }
 
-  const expectedArtifacts = Array.isArray(artifacts) ? artifacts.length : 0;
+  const authority = await reviewRegisterSideAuthority(side);
+  if (authority.identity.kind !== "conversation" || authority.identity.provisional || !authority.identity.writable) {
+    throw new Error("Confirmed writable conversation authority is required before relay. Blank/new-chat surfaces remain fail-closed until trusted New Chat allocation is implemented.");
+  }
+
+  const payloadHash = await reviewPayloadHash(side, text);
+  const unresolved = reviewFindUnresolvedDispatch(side, payloadHash);
+  let dispatch;
+  if (unresolved.blocking) {
+    await reviewPauseForAmbiguity("A prior dispatch for AI " + side + " is unresolved (" + unresolved.blocking.status + "). Automatic resend is blocked.");
+    throw new Error("UNRESOLVED_DISPATCH_BLOCKS_REPLAY");
+  }
+  if (unresolved.exact) {
+    dispatch = unresolved.exact;
+  } else {
+    dispatch = reviewLedger.create({
+      dispatchId: crypto.randomUUID(),
+      side,
+      tabId,
+      generationEpoch: authority.generationEpoch,
+      conversationIdentity: authority.identity,
+      purpose: "RELAY",
+      payloadHash,
+      createdAt: Date.now()
+    });
+    await reviewPersistLedger();
+  }
+
+  if (
+    dispatch.tabId !== tabId ||
+    dispatch.generationEpoch !== authority.generationEpoch ||
+    !reviewSameIdentity(dispatch.conversationIdentity, authority.identity)
+  ) {
+    throw new Error("Persisted dispatch authority no longer matches the verified provider document.");
+  }
+
+  await reviewTransitionDispatch(dispatch.dispatchId, DISPATCH_STATUS.DISPATCHING);
+  state.runtimePhase = "DISPATCHING";
+  await saveState();
+
+  const command = {
+    type: "AI_BRIDGE_ACTION",
+    action: "SEND",
+    commandId: crypto.randomUUID(),
+    dispatchId: dispatch.dispatchId,
+    side,
+    documentId: authority.documentId,
+    authorityRegistrationId: authority.authorityRegistrationId,
+    generationEpoch: authority.generationEpoch,
+    expectedIdentity: authority.identity,
+    payload: { text: String(text || ""), artifacts: [] }
+  };
+
   let result;
   try {
-    result = await chrome.tabs.sendMessage(Number(tabId), { type: "AI_BRIDGE_SEND", text, artifacts });
+    result = await chrome.tabs.sendMessage(tabId, command, { documentId: authority.documentId });
   } catch (_) {
-    await ensureTabListener(tabId);
-    result = await chrome.tabs.sendMessage(Number(tabId), { type: "AI_BRIDGE_SEND", text, artifacts });
+    await reviewTransitionDispatch(dispatch.dispatchId, DISPATCH_STATUS.DELIVERY_AMBIGUOUS, {
+      failureReason: "MESSAGE_ACK_LOST"
+    });
+    await reviewPauseForAmbiguity("Provider delivery result is ambiguous. The same logical prompt will not be replayed automatically.");
+    throw new Error("DELIVERY_AMBIGUOUS");
   }
 
-  const attachmentFailed = !result?.ok || (expectedArtifacts && Number(result.uploadedCount) !== expectedArtifacts);
-  if (attachmentFailed && expectedArtifacts && canFallbackToText(artifacts)) {
-    // ZIP/text artifacts already have bounded previews embedded in `text`.
-    // Send the same handoff without raw files so a provider DOM change cannot
-    // block code review indefinitely. Binary-only artifacts still fail closed.
-    result = await chrome.tabs.sendMessage(Number(tabId), { type: "AI_BRIDGE_SEND", text, artifacts: [] });
-    if (!result?.ok) throw new Error(result?.error || "The page did not accept the text fallback handoff.");
-    appendLog({ time: Date.now(), type: "artifact-fallback", side, text: `AI ${side} received vault text fallback after raw attachment failed`, artifacts: expectedArtifacts });
-  } else if (!result?.ok) {
-    throw new Error(result?.error || "The page did not accept the message.");
-  } else if (expectedArtifacts && Number(result.uploadedCount) !== expectedArtifacts) {
-    throw new Error(`The page accepted ${Number(result.uploadedCount) || 0} of ${expectedArtifacts} relay files and no complete text fallback was available.`);
+  if (result?.outcome === "REJECTED_PRE_ACTION") {
+    await reviewTransitionDispatch(dispatch.dispatchId, DISPATCH_STATUS.FAILED, {
+      failureReason: result.reason || "REJECTED_PRE_ACTION"
+    });
+    throw new Error(result.reason || result.error || "Provider action was rejected before execution.");
   }
 
-  const round = beginRoundTimer(side);
+  if (result?.outcome !== "ACTION_CONFIRMED") {
+    await reviewTransitionDispatch(dispatch.dispatchId, DISPATCH_STATUS.DELIVERY_AMBIGUOUS, {
+      failureReason: result?.reason || "ACTION_CONFIRMATION_NOT_PROVEN"
+    });
+    await reviewPauseForAmbiguity("Provider action may have occurred but confirmation was not proven. Automatic replay is disabled.");
+    throw new Error("DELIVERY_AMBIGUOUS");
+  }
+
+  await reviewTransitionDispatch(dispatch.dispatchId, DISPATCH_STATUS.ACCEPTED, {
+    acceptedAt: Date.now()
+  });
+  if (continuationSourceDispatchId != null) {
+    await reviewClearNextTurnPending(continuationSourceDispatchId);
+  }
+  await reviewTransitionDispatch(dispatch.dispatchId, DISPATCH_STATUS.AWAITING_RESPONSE);
+  if (state.providerRecovery?.dispatchId === dispatch.dispatchId) {
+    state.running = false;
+    state.paused = true;
+    state.runtimePhase = "PROVIDER_RECOVERY_REQUIRED";
+  } else {
+    state.runtimePhase = "AWAITING_PROVIDER_RESPONSE";
+  }
+  await saveState();
+
+const round = beginRoundTimer(side);
   appendLog({
     time: round?.startedAt || Date.now(),
     type: "round-start",
@@ -1718,16 +2411,21 @@ async function sendToSide(side, text, { record = true, deliveredSeq = null, deli
   }
 }
 
+
+
+
+
 async function openDashboard() {
   const url = chrome.runtime.getURL("dashboard.html");
+  const settingsUrl = chrome.runtime.getURL("settings.html");
   const tabs = await chrome.tabs.query({});
-  const existing = tabs.find(tab => tab.url === url);
+  const existing = tabs.find(tab => tab.url === url || tab.url === settingsUrl);
 
   if (existing?.id) {
     if (existing.windowId) {
       try { await chrome.windows.update(existing.windowId, { focused: true }); } catch (_) {}
     }
-    await chrome.tabs.update(existing.id, { active: true });
+    await chrome.tabs.update(existing.id, { url, active: true });
     return existing.id;
   }
 
@@ -1798,27 +2496,7 @@ async function waitForTabReady(tabId, timeoutMs = 20000) {
 async function resetChatTab(tabId) {
   const id = Number(tabId);
   if (!Number.isInteger(id) || id <= 0) throw new Error("Choose an open AI tab first.");
-  const tab = await chrome.tabs.get(id);
-  const target = freshChatUrlFor(tab?.url);
-
-  await ensureTabListener(id);
-  try {
-    const clicked = await chrome.tabs.sendMessage(id, { type: "AI_BRIDGE_NEW_CHAT" });
-    if (clicked?.ok && clicked.clicked) {
-      await new Promise(resolve => setTimeout(resolve, 500));
-      const afterClick = await chrome.tabs.get(id);
-      if (afterClick?.status === "loading") return waitForTabReady(id);
-      return afterClick;
-    }
-  } catch (_) {
-    // A navigation-triggering click can unload the sender before it replies.
-    // The canonical route fallback below still guarantees a fresh conversation.
-  }
-
-  const current = await chrome.tabs.get(id);
-  if (current?.url === target) await chrome.tabs.reload(id);
-  else await chrome.tabs.update(id, { url: target });
-  return waitForTabReady(id);
+  throw new Error("Trusted New Chat authority is not available for this provider in the review runtime. No navigation or broad-text click was attempted.");
 }
 
 async function resetSelectedChats(msg, sides = SIDES, { allowActive = false } = {}) {
@@ -1841,11 +2519,85 @@ async function resetSelectedChats(msg, sides = SIDES, { allowActive = false } = 
   return chosen;
 }
 
+function normalizeProviderEventText(value){
+  return String(value||"").replace(/\s+/g," ").trim().slice(0,500);
+}
+
+async function recordProviderEvent(msg,sender){
+  await stateReady;
+  await reviewRuntimeReady;
+
+  // Provider operational events are control-plane inputs. Authorize them
+  // against the exact live document + dispatch before recording anything.
+  const authorized=reviewAuthorizeProviderEvent(msg,sender);
+  if(!authorized.ok) return { ...authorized, ignored:true };
+
+  const {side,provider,code,policy,dispatchId}=authorized;
+  const text=normalizeProviderEventText(msg.message ?? msg.text);
+  if(!text) return {ok:false,ignored:true,reason:"EMPTY_PROVIDER_EVENT"};
+
+  const event={
+    id:"provider-event-"+Date.now()+"-"+side+"-"+state.nextSeq,
+    time:Number.isFinite(Number(msg.observedAt))?Number(msg.observedAt):Date.now(),
+    side,
+    provider,
+    code,
+    category:policy.category,
+    severity:policy.severity,
+    text,
+    dispatchId
+  };
+  state.providerEvents=Array.isArray(state.providerEvents)?state.providerEvents:[];
+
+  const duplicate=state.providerEvents.some(existing =>
+    existing?.dispatchId===dispatchId &&
+    existing?.code===code &&
+    existing?.text===text
+  );
+  if(duplicate) return {ok:true,recorded:false,duplicate:true,paused:Boolean(state.providerRecovery?.dispatchId===dispatchId)};
+
+  state.providerEvents.push(event);
+  if(state.providerEvents.length>MAX_PROVIDER_EVENTS) state.providerEvents.splice(0,state.providerEvents.length-MAX_PROVIDER_EVENTS);
+
+  if(state.sessionActive){
+    recordTranscript("provider-event",{
+      side,
+      text,
+      provider,
+      eventCode:code,
+      category:policy.category,
+      severity:policy.severity,
+      dispatchId
+    });
+  }
+  appendLog({time:event.time,type:"provider-event",side,text:"AI "+side+" "+provider+" event "+code+": "+text,dispatchId});
+
+  state.providerRecovery={
+    active:true,
+    side,
+    provider,
+    code,
+    category:policy.category,
+    severity:policy.severity,
+    text,
+    dispatchId,
+    observedAt:event.time
+  };
+  state.running=false;
+  state.paused=true;
+  state.runtimePhase="PROVIDER_RECOVERY_REQUIRED";
+  state.pauseReason="AI "+side+" provider reported "+code+": "+text+" AI Bridge did not resend the prompt automatically; provider recovery is required.";
+  appendLog({time:Date.now(),type:"provider-recovery",side,text:state.pauseReason,dispatchId});
+  await saveState();
+  return {ok:true,recorded:true,paused:true,recoveryRequired:true,event};
+}
+
 async function pauseBridge(reason = "Paused by user") {
   if (!state.sessionActive) return;
   state.running = false;
   state.paused = true;
   state.pauseReason = reason;
+  state.runtimePhase = "PAUSED";
   appendLog({ time: Date.now(), type: "system", text: reason });
   await saveState();
 }
@@ -1856,6 +2608,9 @@ async function endBridge(reason = "Stopped") {
   state.paused = false;
   state.pauseReason = "";
   state.currentSide = null;
+  state.runtimePhase = "IDLE";
+  state.nextTurnPending = null;
+  state.providerRecovery = null;
   state.awaitingHuman = false;
   state.pendingHuman = null;
   state.pendingHumanQueue = [];
@@ -2093,6 +2848,66 @@ async function handleCompletedResponse(side, text, { relay = true, artifacts = [
   }
 }
 
+function reviewAuthorizeProviderEvent(msg, sender) {
+  if (!state.sessionActive) return { ok:false, reason:"NO_ACTIVE_SESSION" };
+  if (sender?.id !== chrome.runtime.id) return { ok:false, reason:"PROVIDER_EVENT_EXTENSION_ID_MISMATCH" };
+  if (!sender?.tab?.id || sender.frameId !== 0) return { ok:false, reason:"PROVIDER_EVENT_TAB_MISMATCH" };
+  if (String(sender.documentLifecycle || "").toLowerCase() !== "active") return { ok:false, reason:"PROVIDER_EVENT_DOCUMENT_NOT_ACTIVE" };
+  if (!sender.documentId) return { ok:false, reason:"PROVIDER_EVENT_DOCUMENT_ID_MISSING" };
+
+  const side = sideForTab(sender.tab.id);
+  const dispatchId = String(msg?.dispatchId || "");
+  const code = String(msg?.code || "").toUpperCase();
+  const policy = PROVIDER_EVENT_POLICY[code] || null;
+  const dispatch = dispatchId ? reviewLedger.get(dispatchId) : null;
+  const authority = side ? reviewAuthorityBySide.get(side) : null;
+  const allowedStatuses = new Set([
+    DISPATCH_STATUS.DISPATCHING,
+    DISPATCH_STATUS.ACCEPTED,
+    DISPATCH_STATUS.AWAITING_RESPONSE,
+    DISPATCH_STATUS.DELIVERY_AMBIGUOUS
+  ]);
+
+  if (!side || !policy || !dispatch || !authority || !allowedStatuses.has(dispatch.status)) {
+    return { ok:false, reason:"PROVIDER_EVENT_AUTHORITY_REJECTED" };
+  }
+  if (
+    dispatch.side !== side ||
+    authority.side !== side ||
+    Number(dispatch.tabId) !== Number(sender.tab.id) ||
+    Number(authority.tabId) !== Number(sender.tab.id)
+  ) {
+    return { ok:false, reason:"PROVIDER_EVENT_TAB_SIDE_MISMATCH" };
+  }
+
+  const provider = String(msg?.provider || "").toLowerCase();
+  const senderProvider = reviewProviderFromUrl(sender.url || sender.tab?.url);
+  if (!provider || provider !== authority.provider || senderProvider !== authority.provider) {
+    return { ok:false, reason:"PROVIDER_EVENT_PROVIDER_MISMATCH" };
+  }
+  if (String(sender.documentId) !== String(authority.documentId)) {
+    return { ok:false, reason:"PROVIDER_EVENT_DOCUMENT_MISMATCH" };
+  }
+  if (String(msg?.authorityRegistrationId || "") !== String(authority.authorityRegistrationId || "")) {
+    return { ok:false, reason:"PROVIDER_EVENT_REGISTRATION_MISMATCH" };
+  }
+  if (
+    Number(msg?.generationEpoch) !== Number(authority.generationEpoch) ||
+    Number(msg?.generationEpoch) !== Number(dispatch.generationEpoch)
+  ) {
+    return { ok:false, reason:"PROVIDER_EVENT_GENERATION_MISMATCH" };
+  }
+
+  let identity;
+  try { identity = reviewSanitizeIdentity(msg?.conversationIdentity); }
+  catch (_) { return { ok:false, reason:"PROVIDER_EVENT_IDENTITY_INVALID" }; }
+  if (!reviewSameIdentity(identity, authority.identity) || !reviewSameIdentity(identity, dispatch.conversationIdentity)) {
+    return { ok:false, reason:"PROVIDER_EVENT_IDENTITY_MISMATCH" };
+  }
+
+  return Object.freeze({ ok:true, side, dispatchId, code, policy, dispatch, authority, identity, provider });
+}
+
 chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   (async () => {
     if (msg.type === "AI_BRIDGE_POWER_SET") {
@@ -2110,6 +2925,84 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
     if (msg.type === "AI_BRIDGE_SETTINGS_OPEN") {
       const tab = await chrome.tabs.create({ url: chrome.runtime.getURL("settings.html") });
       sendResponse({ ok: true, tabId: tab.id });
+      return;
+    }
+
+    if (msg.type === "AI_BRIDGE_DOCUMENT_REGISTER") {
+      try {
+        const record = reviewAcceptDocumentRegistration(msg, sender);
+        sendResponse({ ok: true, authorityRegistrationId: record.authorityRegistrationId, generationEpoch: record.generationEpoch });
+      } catch (error) {
+        sendResponse({ ok: false, error: error.message || String(error) });
+      }
+      return;
+    }
+
+    if (msg.type === "AI_BRIDGE_DOCUMENT_ROUTE_CHANGED") {
+      if (sender?.tab?.id) reviewInvalidateAuthorityForTab(sender.tab.id);
+      sendResponse({ ok: true });
+      return;
+    }
+
+    if (msg.type === "AI_BRIDGE_PROVIDER_EVENT") {
+      const result = await recordProviderEvent(msg, sender);
+      sendResponse(result);
+      return;
+    }
+
+    if (msg.type === "AI_BRIDGE_THREAD_LIMIT") {
+      await stateReady;
+      const side = sender?.tab?.id ? sideForTab(sender.tab.id) : null;
+      if (side) {
+        await pauseBridge("AI " + side + " reached an authoritative conversation-length limit. Automatic New Chat is LIMITED until trusted provider New Chat authority is available.");
+      }
+      sendResponse({ ok: true, paused: Boolean(side) });
+      return;
+    }
+
+    if (msg.type === "AI_BRIDGE_PROVIDER_HEALTH") {
+      await stateReady;
+      const tabId = Number(msg.tabId);
+      let connected = false;
+      try {
+        const pong = await chrome.tabs.sendMessage(tabId, { type: "AI_BRIDGE_PING" });
+        connected = pong?.ok === true;
+      } catch (_) {}
+      const side = sideForTab(tabId);
+      let authority = side ? reviewAuthorityBySide.get(side) : null;
+      let pong = null;
+      if (connected) {
+        try { pong = await chrome.tabs.sendMessage(tabId, { type: "AI_BRIDGE_PING" }); } catch (_) {}
+      }
+      if (connected && side && !authority) {
+        try {
+          authority = await reviewRegisterSideAuthority(side);
+        } catch (_) {
+          authority = null;
+        }
+      }
+      const relayReady = Boolean(
+        authority &&
+        authority.identity?.kind === "conversation" &&
+        authority.identity?.provisional !== true &&
+        authority.identity?.writable === true &&
+        pong?.capabilities?.composer === "PASS" &&
+        pong?.capabilities?.send === "PASS"
+      );
+      const providerBlocked = Boolean(side && state.providerRecovery?.side === side);
+      sendResponse({
+        ok: true,
+        connectionStatus: connected ? "CONNECTED" : "DISCONNECTED",
+        actionAuthorityStatus: authority ? "DOCUMENT_AUTHORITY_VERIFIED" : (connected ? "LISTENER_CONNECTED" : "DISCONNECTED"),
+        side: side || null,
+        capabilities: {
+          relay: providerBlocked ? "BLOCKED" : (relayReady ? "READY" : "WAITING"),
+          rollover: "LIMITED",
+          artifacts: "LIMITED",
+          cancel: pong?.capabilities?.stop === "PASS" ? "READY" : "LIMITED"
+        },
+        operationalEvent: providerBlocked ? { ...state.providerRecovery } : null
+      });
       return;
     }
 
@@ -2323,6 +3216,9 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
     if (msg.type === "AI_BRIDGE_RESUME") {
       if (!state.sessionActive) throw new Error("There is no saved session to resume.");
       if (state.awaitingHuman) throw new Error("Answer or suppress the pending human-input request before resuming.");
+      if (state.providerRecovery) {
+        throw new Error("PROVIDER_RECOVERY_REQUIRED: resolve the provider error in AI " + state.providerRecovery.side + " first. AI Bridge will not resend the original prompt automatically.");
+      }
 
       if (Array.isArray(state.pendingHumanQueue) && state.pendingHumanQueue.length) {
         const nextRequest = state.pendingHumanQueue.shift();
@@ -2338,11 +3234,34 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
       }
 
       await bindTabsFromMessage(msg);
+
+      if (state.providerRecovery?.active) {
+        const recoveryDispatch=reviewLedger.get(String(state.providerRecovery.dispatchId||""));
+        if (recoveryDispatch?.status===DISPATCH_STATUS.AWAITING_RESPONSE) {
+          state.providerRecovery={...state.providerRecovery,active:false,resumedAt:Date.now()};
+          state.running=true;
+          state.paused=false;
+          state.pauseReason="";
+          state.runtimePhase="AWAITING_PROVIDER_RESPONSE";
+          await clearAttention();
+          await saveState();
+          sendResponse({ok:true,providerRecovery:"WAITING_SAME_DISPATCH",dispatchId:recoveryDispatch.dispatchId});
+          return;
+        }
+        throw new Error("Provider recovery cannot resume because the original dispatch is no longer awaiting a response.");
+      }
+
       state.running = true;
       state.paused = false;
       state.pauseReason = "";
       await clearAttention();
       await saveState();
+
+      if (state.nextTurnPending) {
+        const recovered=await reviewRecoverNextTurnPending();
+        sendResponse({ok:true,recoveredNextTurn:true,...recovered});
+        return;
+      }
 
       try {
         if (isBatchWorkMode()) {
@@ -2504,27 +3423,29 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
       }
 
       const side = sideForTab(sender.tab.id);
-      if (state.awaitingHuman && !isBatchWorkMode()) {
-        sendResponse({ ok: false, awaitingHuman: true });
+      if (!side) {
+        sendResponse({ ok: false, ignored: true, reason: "SIDE_NOT_BOUND" });
         return;
       }
-      const text = String(msg.text || "").trim();
 
-      // If the user manually paused while the current AI was still generating,
-      // capture that completed work and advance the cursor, but do not relay it.
-      const relay = state.running;
-      const completedAt = Number.isFinite(Number(msg.completedAt)) ? Number(msg.completedAt) : null;
-      const diagnostics = msg.artifactDiagnostics && typeof msg.artifactDiagnostics === "object" ? msg.artifactDiagnostics : null;
-      if (diagnostics?.candidateCount || diagnostics?.errors?.length) {
-        appendLog({
-          time: Date.now(),
-          type: diagnostics.errors?.length ? "artifact-capture-warning" : "artifact-capture",
-          side,
-          text: `AI ${side} artifact scan: ${Number(diagnostics.candidateCount) || 0} candidate(s), ${Array.isArray(msg.artifacts) ? msg.artifacts.length : 0} captured`,
-          errors: Array.isArray(diagnostics.errors) ? diagnostics.errors.slice(0, 8) : []
-        });
+      const envelope = {
+        dispatchId: String(msg.dispatchId || ""),
+        side,
+        senderTabId: Number(sender.tab.id),
+        generationEpoch: Number(msg.generationEpoch),
+        conversationIdentity: msg.conversationIdentity,
+        rolloverId: msg.rolloverId || null,
+        text: String(msg.text || "").trim(),
+        artifacts: Array.isArray(msg.artifacts) ? msg.artifacts : [],
+        completedAt: Number.isFinite(Number(msg.completedAt)) ? Number(msg.completedAt) : Date.now()
+      };
+
+      if (!envelope.dispatchId || !envelope.text) {
+        sendResponse({ ok: false, ignored: true, reason: "MALFORMED_RESPONSE_ENVELOPE" });
+        return;
       }
-      const task = () => handleCompletedResponse(side, text, { relay, artifacts: msg.artifacts, completedAt });
+
+      const task = () => reviewProcessIncomingEnvelope(envelope);
       responseCommitQueue = responseCommitQueue.catch(() => {}).then(task);
       const result = await responseCommitQueue;
       sendResponse(result);
@@ -2546,6 +3467,7 @@ chrome.notifications.onClicked.addListener(async notificationId => {
 });
 
 chrome.tabs.onRemoved.addListener(async tabId => {
+  reviewInvalidateAuthorityForTab(tabId);
   await stateReady;
   if (!state.sessionActive) return;
   const side = sideForTab(tabId);

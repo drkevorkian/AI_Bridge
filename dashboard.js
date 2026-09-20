@@ -20,6 +20,13 @@ let renderedSeq = 0;
 let autoScroll = true;
 let selectedSourceFiles = [];
 let activeHumanModalKey = "";
+function renderBuildIdentity() {
+  const manifest = chrome.runtime.getManifest();
+  const build = manifest.version_name || manifest.version;
+  const el = $("buildIdentity");
+  if (el) el.textContent = `v${manifest.version} · ${build}`;
+}
+
 const WORK_MODE_INFO = {
   relay: { label: "Relay" },
   collaborate: { label: "Collaborate" },
@@ -28,6 +35,8 @@ const WORK_MODE_INFO = {
   review: { label: "Peer Review" },
   mesh: { label: "Direct Mesh" }
 };
+
+renderBuildIdentity();
 
 function normalizeAgentCount(raw) {
   const value = Number(raw);
@@ -297,6 +306,8 @@ function hydrateFromState(s) {
   updateWorkModeUI();
   if (Number.isInteger(Number(s.maxTurns))) $("maxTurns").value = String(s.maxTurns);
   if (Number.isFinite(Number(s.delayMs))) $("delayMs").value = String(s.delayMs);
+  $("freshOnStart").checked = false;
+  $("freshOnStart").disabled = true;
   selectedSourceFiles = Array.isArray(s.sourceFiles) ? s.sourceFiles.map(file => ({ ...file })) : [];
   renderSourceFiles();
   renderHistory(s.history);
@@ -548,7 +559,7 @@ function clearTranscript() {
 
 function transcriptCard(entry) {
   const card = document.createElement("article");
-  const sideClass = entry.type === "human" ? "human" : String(entry.side || "").toLowerCase();
+  const sideClass = entry.type === "human" ? "human" : (entry.type === "provider-event" ? "provider-event" : String(entry.side || "").toLowerCase());
   card.className = `transcript-card side-${sideClass}`;
   card.dataset.seq = String(entry.seq);
 
@@ -559,6 +570,8 @@ function transcriptCard(entry) {
   title.className = "transcript-title";
   if (entry.type === "human") {
     title.textContent = entry.interjection ? "Human controller · interjection" : "Human controller";
+  } else if (entry.type === "provider-event") {
+    title.textContent = `Provider event · AI ${entry.side || "?"} · ${String(entry.provider || "provider").toUpperCase()}`;
   } else {
     title.textContent = `AI ${entry.side || "?"} · ${entry.label || "AI"}`;
   }
@@ -569,7 +582,8 @@ function transcriptCard(entry) {
   const phase = entry.workPhase && !["relay", "collaborate"].includes(entry.workPhase) ? ` · ${String(entry.workPhase).toUpperCase()}` : "";
   const elapsed = Number.isFinite(Number(entry.roundDurationMs)) ? ` · ${formatRoundDuration(Number(entry.roundDurationMs))}` : "";
   const round = Number.isFinite(Number(entry.roundNumber)) && Number(entry.roundNumber) > 0 ? ` · R${Number(entry.roundNumber)}` : "";
-  meta.textContent = `#${entry.seq}${phase}${round}${elapsed}${when ? ` · ${when}` : ""}`;
+  const providerCode = entry.type === "provider-event" && entry.eventCode ? ` · ${entry.eventCode}` : "";
+  meta.textContent = `#${entry.seq}${providerCode}${phase}${round}${elapsed}${when ? ` · ${when}` : ""}`;
 
   const body = document.createElement("div");
   body.className = "transcript-body";
@@ -601,7 +615,7 @@ function renderTranscript(s) {
     clearTranscript();
   }
 
-  const fresh = entries.filter(e => Number(e.seq) > renderedSeq && (e.type === "response" || e.type === "human"));
+  const fresh = entries.filter(e => Number(e.seq) > renderedSeq && (e.type === "response" || e.type === "human" || e.type === "provider-event"));
   if (!fresh.length) return;
 
   $("emptyTranscript").classList.add("hidden");
@@ -753,8 +767,9 @@ function updateControls(s) {
   $("pause").disabled = !s.sessionActive || !s.running || s.awaitingHuman;
   $("resume").disabled = !s.sessionActive || s.running || s.awaitingHuman;
   $("stop").disabled = !s.sessionActive;
-  $("newAllChats").disabled = Boolean(s.sessionActive);
-  $("freshOnStart").disabled = Boolean(s.sessionActive);
+  $("newAllChats").disabled = true;
+  $("freshOnStart").checked = false;
+  $("freshOnStart").disabled = true;
   $("agentCount").disabled = Boolean(s.sessionActive);
   $("workMode").disabled = Boolean(s.sessionActive);
   $("teamRules").disabled = false;
@@ -766,7 +781,7 @@ function updateControls(s) {
   updateWorkModeUI();
 
   for (const side of SIDES) {
-    $(`newChat${side}`).disabled = Boolean(s.sessionActive) || !selectedTab(side);
+    $(`newChat${side}`).disabled = true;
     const batchDone = ["compete", "parallel", "review"].includes(s.workMode) && Array.isArray(s.phaseCompletedSides) && s.phaseCompletedSides.includes(side);
     $(`resend${side}`).disabled = !s.sessionActive || !s.running || s.awaitingHuman || !s.lastSentBySide?.[side] || batchDone;
   }
@@ -774,29 +789,81 @@ function updateControls(s) {
   $("commandHistory").querySelectorAll(".history-use").forEach(button => { button.disabled = Boolean(s.sessionActive); });
 }
 
+function runtimePhaseLabel(raw) {
+  return ({
+    IDLE: "Idle",
+    DISPATCHING: "Dispatching provider action",
+    AWAITING_PROVIDER_RESPONSE: "Awaiting provider response",
+    NEXT_TURN_PENDING: "Next relay turn pending",
+    RECOVERING_NEXT_TURN: "Recovering next relay turn",
+    PROVIDER_RECOVERY_REQUIRED: "Provider recovery required",
+    PROVIDER_RESPONSE_RECOVERED: "Provider response recovered",
+    PAUSED: "Paused"
+  })[String(raw || "IDLE")] || String(raw || "Unknown").replaceAll("_", " ");
+}
+
 function updateStatus(s) {
   const limit = limitLabel(s);
   $("turnCounter").textContent = `${s.turn || 0} / ${limit}`;
   updateSessionPill(s);
+  const phase = runtimePhaseLabel(s.runtimePhase);
 
   if (s.sessionActive && s.awaitingHuman && s.pendingHuman) {
-    $("status").textContent = `PAUSED — HUMAN INPUT NEEDED\nWaiting on controller for ${s.pendingHuman.requestingLabel || `AI ${s.pendingHuman.requestingSide}`}.`;
+    $("status").textContent = `PAUSED — HUMAN INPUT NEEDED\nRuntime: ${phase}\nWaiting on controller for ${s.pendingHuman.requestingLabel || `AI ${s.pendingHuman.requestingSide}`}.`;
+  } else if (s.sessionActive && s.providerRecovery) {
+    const event = s.providerRecovery;
+    $("status").textContent = `PAUSED — provider action needed
+Runtime: ${phase}
+AI ${event.side || "?"} / ${event.provider || "provider"}: ${event.message || event.code || "Provider error"}
+AI Bridge did not resend the prompt automatically because that could duplicate work. Resolve/retry in the provider tab; the same dispatch remains correlated.`;
+  } else if (s.sessionActive && ["NEXT_TURN_PENDING","RECOVERING_NEXT_TURN"].includes(s.runtimePhase)) {
+    $("status").textContent = `Running — recovering next relay turn\nRuntime: ${phase}\nAI turns: ${s.turn}/${limit}`;
   } else if (s.sessionActive && s.running) {
     const batch = ["compete", "parallel", "review"].includes(s.workMode);
     if (batch) {
       const pending = Array.isArray(s.phasePendingSides) && s.phasePendingSides.length ? s.phasePendingSides.map(side => `AI ${side}`).join(", ") : "phase transition";
-      $("status").textContent = `Running — ${WORK_MODE_INFO[s.workMode]?.label || s.workMode} / ${String(s.workPhase || "primary").toUpperCase()}\nWaiting on: ${pending}\nAI turns: ${s.turn}/${limit}`;
+      $("status").textContent = `Running — ${WORK_MODE_INFO[s.workMode]?.label || s.workMode} / ${String(s.workPhase || "primary").toUpperCase()}\nRuntime: ${phase}\nWaiting on: ${pending}\nAI turns: ${s.turn}/${limit}`;
     } else {
-      $("status").textContent = `Running — ${WORK_MODE_INFO[s.workMode]?.label || "Relay"}\nWaiting on: ${currentLabel(s)}\nAI turns: ${s.turn}/${limit}`;
+      $("status").textContent = `Running — ${WORK_MODE_INFO[s.workMode]?.label || "Relay"}\nRuntime: ${phase}\nWaiting on: ${currentLabel(s)}\nAI turns: ${s.turn}/${limit}`;
     }
   } else if (s.sessionActive && s.paused) {
     const batch = ["compete", "parallel", "review"].includes(s.workMode);
     const next = batch ? ((s.phasePendingSides || []).map(side => `AI ${side}`).join(", ") || "phase transition") : currentLabel(s);
     const suppressed = Array.isArray(s.suppressedHumanRequests) ? s.suppressedHumanRequests.length : 0;
-    $("status").textContent = `PAUSED — ${s.pauseReason || "Session saved."}\nNext/current: ${next}\nAI turns: ${s.turn}/${limit}${suppressed ? `\nSuppressed human requests: ${suppressed}` : ""}`;
+    $("status").textContent = `PAUSED — ${s.pauseReason || "Session saved."}\nRuntime: ${phase}\nNext/current: ${next}\nAI turns: ${s.turn}/${limit}${suppressed ? `\nSuppressed human requests: ${suppressed}` : ""}`;
   } else {
     const last = s.log?.length ? s.log[s.log.length - 1]?.text : "";
-    $("status").textContent = `Idle${last ? ` — ${last}` : ""}`;
+    $("status").textContent = `Idle · Runtime: ${phase}${last ? ` — ${last}` : ""}`;
+  }
+}
+
+async function refreshProviderHealth() {
+  for (const side of ALL_SIDES) {
+    const node = $(`health${side}`);
+    if (!node) continue;
+    if (!SIDES.includes(side)) {
+      node.textContent = "Connection: — · Authority: — · Relay: — · Rollover: Limited · Artifacts: Limited";
+      continue;
+    }
+    const tabId = selectedTab(side) || Number(latestState?.[`tab${side}`]);
+    if (!Number.isInteger(Number(tabId)) || Number(tabId) <= 0) {
+      node.textContent = "Connection: Disconnected · Authority: Not verified · Relay: WAITING · Rollover: LIMITED · Artifacts: LIMITED";
+      continue;
+    }
+    try {
+      const res = await chrome.runtime.sendMessage({ type:"AI_BRIDGE_PROVIDER_HEALTH", tabId:Number(tabId) });
+      if (!res?.ok) throw new Error(res?.error || "health unavailable");
+      const connection = res.connectionStatus === "CONNECTED" ? "Connected" : "Disconnected";
+      const authority = res.actionAuthorityStatus === "DOCUMENT_AUTHORITY_VERIFIED" ? "Verified"
+        : (res.actionAuthorityStatus === "LISTENER_CONNECTED" ? "Registering" : "Not verified");
+      const relay = String(res.capabilities?.relay || "WAITING").toUpperCase();
+      const rollover = String(res.capabilities?.rollover || "LIMITED").toUpperCase();
+      const artifacts = String(res.capabilities?.artifacts || "LIMITED").toUpperCase();
+      const event = res.operationalEvent;
+      node.textContent = `Connection: ${connection} · Authority: ${authority} · Relay: ${relay} · Rollover: ${rollover} · Artifacts: ${artifacts}${event?.message ? ` · Provider event: ${event.code || "ERROR"} — ${event.message}` : ""}`;
+    } catch (_) {
+      node.textContent = "Connection: Disconnected · Authority: Not verified · Relay: WAITING · Rollover: LIMITED · Artifacts: LIMITED";
+    }
   }
 }
 
@@ -817,6 +884,7 @@ async function refreshState() {
     updateRoundTimers(s);
     updateStatus(s);
     updateControls(s);
+    await refreshProviderHealth();
     setHumanModal(s);
     renderTranscript(s);
   } catch (err) {
@@ -893,38 +961,8 @@ chrome.storage.onChanged.addListener((changes, area) => {
   if (area === "local" && changes[THEME_KEY]) applyTheme(changes[THEME_KEY].newValue);
 });
 
-async function openFreshChats(sides) {
-  if (latestState?.sessionActive) return;
-  const chosen = Array.isArray(sides) ? sides : SIDES;
-  const tabError = validateActiveTabs();
-  if (chosen.length === SIDES.length && tabError) {
-    $("status").textContent = tabError;
-    return;
-  }
-
-  const oldLabels = new Map();
-  for (const side of chosen) {
-    const button = chosen.length === 1 ? $(`newChat${side}`) : null;
-    if (button) { oldLabels.set(button, button.textContent); button.textContent = "Opening…"; button.disabled = true; }
-  }
-  if (chosen.length === SIDES.length) { oldLabels.set($("newAllChats"), $("newAllChats").textContent); $("newAllChats").textContent = "Opening…"; $("newAllChats").disabled = true; }
-
-  try {
-    const payload = { type: "AI_BRIDGE_NEW_CHATS", sides: chosen };
-    for (const side of chosen) {
-      payload[`tab${side}`] = selectedTab(side);
-      if (!payload[`tab${side}`]) throw new Error(`Choose an open AI tab for AI ${side}.`);
-    }
-    const res = await chrome.runtime.sendMessage(payload);
-    if (!res?.ok) throw new Error(res?.error || "Could not open fresh AI chat.");
-    $("status").textContent = `Fresh chat${chosen.length === 1 ? "" : "s"} opened for AI ${chosen.join(", AI ")}.`;
-    await loadTabs({ preserve: true });
-    await refreshState();
-  } catch (err) {
-    $("status").textContent = `New chat failed: ${err.message}`;
-  } finally {
-    for (const [button, label] of oldLabels) button.textContent = label;
-  }
+async function openFreshChats(_sides) {
+  $("status").textContent = "New Chat is LIMITED — AI Bridge does not currently have trusted provider New Chat authority.";
 }
 
 async function clearHistory(kind) {

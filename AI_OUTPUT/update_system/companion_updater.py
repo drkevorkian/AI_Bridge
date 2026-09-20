@@ -10,7 +10,9 @@ batch succeeds.
 from __future__ import annotations
 
 import argparse
+import base64
 import hashlib
+import hmac
 import json
 import os
 import shutil
@@ -25,7 +27,17 @@ MANIFEST_URL = (
     "https://raw.githubusercontent.com/drkevorkian/AI_Bridge/main/"
     "update-manifest.json"
 )
+SIGNATURE_URL = (
+    "https://raw.githubusercontent.com/drkevorkian/AI_Bridge/main/"
+    "update-manifest.sig"
+)
 RAW_PREFIX = "https://raw.githubusercontent.com/drkevorkian/AI_Bridge/main/"
+
+# Human release public key. This must be populated with the approved RSA public
+# modulus before automatic native replacement can ever succeed. Leaving it
+# blank is intentionally fail-closed.
+PINNED_RELEASE_RSA_N_HEX = ""
+PINNED_RELEASE_RSA_E = 65537
 
 # Only runtime extension files may ever be replaced from main. Development
 # workspaces and tests are intentionally excluded.
@@ -52,6 +64,70 @@ ALLOWED_FILES = frozenset(
 
 MAX_FILE_BYTES = 2 * 1024 * 1024
 MAX_MANIFEST_BYTES = 256 * 1024
+
+
+_SHA256_DIGESTINFO_PREFIX = bytes.fromhex(
+    "3031300d060960864801650304020105000420"
+)
+
+
+def _decode_signature(payload: bytes | str) -> bytes:
+    raw = payload.decode("ascii") if isinstance(payload, bytes) else str(payload)
+    compact = "".join(raw.split())
+    if not compact:
+        raise UpdateError("Detached release signature is empty.")
+    try:
+        return base64.b64decode(compact, validate=True)
+    except Exception as exc:
+        raise UpdateError("Detached release signature is not valid base64.") from exc
+
+
+def verify_detached_signature(
+    manifest_bytes: bytes,
+    signature_payload: bytes | str,
+    *,
+    modulus_hex: str = PINNED_RELEASE_RSA_N_HEX,
+    exponent: int = PINNED_RELEASE_RSA_E,
+) -> None:
+    """Verify RSA PKCS#1 v1.5 + SHA-256 using only the Python standard library."""
+
+    if not isinstance(manifest_bytes, (bytes, bytearray)):
+        raise TypeError("manifest_bytes must be bytes.")
+    modulus_hex = str(modulus_hex or "").strip().lower()
+    if not modulus_hex:
+        raise UpdateError(
+            "Release public key is not configured; refusing automatic update."
+        )
+    if any(ch not in "0123456789abcdef" for ch in modulus_hex):
+        raise UpdateError("Pinned release RSA modulus is malformed.")
+
+    try:
+        modulus = int(modulus_hex, 16)
+        exponent = int(exponent)
+    except (TypeError, ValueError) as exc:
+        raise UpdateError("Pinned release RSA public key is malformed.") from exc
+    if modulus <= 0 or exponent < 3 or exponent % 2 == 0:
+        raise UpdateError("Pinned release RSA public key is invalid.")
+
+    signature = _decode_signature(signature_payload)
+    key_bytes = (modulus.bit_length() + 7) // 8
+    if len(signature) != key_bytes:
+        raise UpdateError("Detached release signature length does not match key.")
+
+    sig_int = int.from_bytes(signature, "big")
+    if sig_int <= 0 or sig_int >= modulus:
+        raise UpdateError("Detached release signature is outside RSA key range.")
+
+    encoded = pow(sig_int, exponent, modulus).to_bytes(key_bytes, "big")
+    digest = hashlib.sha256(bytes(manifest_bytes)).digest()
+    digest_info = _SHA256_DIGESTINFO_PREFIX + digest
+    padding_len = key_bytes - len(digest_info) - 3
+    if padding_len < 8:
+        raise UpdateError("Pinned release RSA key is too small for SHA-256.")
+    expected = b"\x00\x01" + (b"\xff" * padding_len) + b"\x00" + digest_info
+
+    if not hmac.compare_digest(encoded, expected):
+        raise UpdateError("Detached release signature verification failed.")
 
 
 class UpdateError(RuntimeError):
@@ -179,10 +255,19 @@ def _fetch_bytes(url: str, max_bytes: int) -> bytes:
     return data
 
 
-def fetch_manifest(url: str = MANIFEST_URL) -> UpdateManifest:
+def fetch_manifest(
+    url: str = MANIFEST_URL,
+    signature_url: str = SIGNATURE_URL,
+) -> UpdateManifest:
     if url != MANIFEST_URL:
         raise UpdateError("Only the pinned AI Bridge main update manifest is allowed.")
-    return parse_manifest(_fetch_bytes(url, MAX_MANIFEST_BYTES))
+    if signature_url != SIGNATURE_URL:
+        raise UpdateError("Only the pinned AI Bridge main detached signature is allowed.")
+
+    manifest_bytes = _fetch_bytes(url, MAX_MANIFEST_BYTES)
+    signature_bytes = _fetch_bytes(signature_url, 64 * 1024)
+    verify_detached_signature(manifest_bytes, signature_bytes)
+    return parse_manifest(manifest_bytes)
 
 
 def _file_url(rel_path: str) -> str:
@@ -282,8 +367,12 @@ class AtomicUpdater:
             shutil.rmtree(backup_dir, ignore_errors=True)
 
 
-def apply_update(extension_root: Path, manifest_url: str = MANIFEST_URL) -> dict[str, object]:
-    manifest = fetch_manifest(manifest_url)
+def apply_update(
+    extension_root: Path,
+    manifest_url: str = MANIFEST_URL,
+    signature_url: str = SIGNATURE_URL,
+) -> dict[str, object]:
+    manifest = fetch_manifest(manifest_url, signature_url)
     return AtomicUpdater(extension_root).apply(manifest)
 
 
@@ -300,10 +389,19 @@ def main(argv: Iterable[str] | None = None) -> int:
         default=MANIFEST_URL,
         help="Pinned main-branch runtime update manifest.",
     )
+    parser.add_argument(
+        "--signature-url",
+        default=SIGNATURE_URL,
+        help="Pinned detached signature for the main-branch update manifest.",
+    )
     args = parser.parse_args(list(argv) if argv is not None else None)
 
     try:
-        result = apply_update(args.extension_root, args.manifest_url)
+        result = apply_update(
+            args.extension_root,
+            args.manifest_url,
+            args.signature_url,
+        )
     except UpdateError as exc:
         print(json.dumps({"ok": False, "error": str(exc)}, sort_keys=True))
         return 1

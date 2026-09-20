@@ -370,6 +370,7 @@ h2 { margin: 4px 0 0; font-size: 20px; }
 .transcript-card.side-d { border-left-color: var(--d); }
 .transcript-card.side-e { border-left-color: var(--e); }
 .transcript-card.side-human { border-left-color: var(--human); }
+.transcript-card.side-provider-event { border-left-color: var(--danger); }
 .transcript-head { display: flex; justify-content: space-between; gap: 14px; align-items: center; padding: 9px 12px; background: var(--panel-2); border-bottom: 1px solid var(--line); }
 .transcript-title { font-weight: 850; font-size: 12px; }
 .transcript-meta { color: var(--muted); font-size: 10px; white-space: nowrap; }
