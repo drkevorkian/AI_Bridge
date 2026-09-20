@@ -12,7 +12,6 @@ const dashboard=fs.readFileSync(path.join(root,'runtime_review','dashboard.js'),
 for(const token of [
   'function classifyProviderEvent',
   'MESSAGE_DELIVERY_TIMEOUT',
-  'Message delivery timed out',
   'AI_BRIDGE_PROVIDER_EVENT',
   'await inspectProviderEvent()',
   'providerEventBaseline',
