@@ -6,6 +6,7 @@ function looksLikePromptEcho(text){
   const signatures=['you are ai ','your assigned job:','team roster:','team rules (all members):','primary objective from the human controller:','shared updates since your last handoff:'];
   const matches=signatures.filter(sig=>t.includes(sig)).length;
   const hasReviewLanguage=/\b(confirm|challenge|found|defect|agree|disagree|pass|fail|reviewed|tested)\b/.test(t);
+  if(matches>=5)return true;
   return matches>=4&&!hasReviewLanguage;
 }
 function isSubstantive(text,{minChars=80}={}){

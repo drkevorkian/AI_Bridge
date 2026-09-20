@@ -4,6 +4,8 @@ const require=createRequire(import.meta.url);
 const {STATUS,looksLikePromptEcho,AgentParticipationGuard}=require('../team_coordination/agent-participation-guard.js');
 const echo='You are AI C. YOUR ASSIGNED JOB: frontend. TEAM ROSTER: A/B/C. TEAM RULES (ALL MEMBERS): security first. PRIMARY OBJECTIVE FROM THE HUMAN CONTROLLER: do work. SHARED UPDATES SINCE YOUR LAST HANDOFF: repeated prompt.';
 assert.equal(looksLikePromptEcho(echo),true);
+const echoedWithReviewWords=echo+' SHARED UPDATE: AI B CONFIRMED defects, reviewed tests, PASS.';
+assert.equal(looksLikePromptEcho(echoedWithReviewWords),true);
 const guard=new AgentParticipationGuard({threshold:3});
 assert.equal(guard.record('C',echo).status,STATUS.DEGRADED);
 assert.equal(guard.record('C',echo).status,STATUS.DEGRADED);
