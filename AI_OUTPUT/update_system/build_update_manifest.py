@@ -29,6 +29,7 @@ ALLOWED_FILES = (
     "settings.css",
     "icon128.png",
     "manifest.json",
+    "update-checkpoint.js",
 )
 
 MAX_FILE_BYTES = 2 * 1024 * 1024

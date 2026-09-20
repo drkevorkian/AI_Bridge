@@ -32,6 +32,7 @@ RAW_PREFIX = "https://raw.githubusercontent.com/drkevorkian/AI_Bridge/main/"
 ALLOWED_FILES = frozenset(
     {
         "manifest.json",
+        "update-checkpoint.js",
         "background.js",
         "content.js",
         "dashboard.html",

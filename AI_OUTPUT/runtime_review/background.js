@@ -1,4 +1,4 @@
-importScripts("runtime-core.js");
+importScripts("runtime-core.js","update-checkpoint.js");
 const ALL_SIDES = ["A", "B", "C", "D", "E"];
 const DEFAULT_AGENT_COUNT = 3;
 const MIN_AGENT_COUNT = 1;
@@ -42,6 +42,7 @@ const DEFAULT_STATE = {
   runtimePhase: "IDLE",
   nextTurnPending: null,
   providerRecovery: null,
+  updateCheckpoint: null,
 
   tabA: null,
   tabB: null,
@@ -117,6 +118,7 @@ const { RolloverCoordinator } = AIBridgeRuntimeCore.rollover;
 const { validateIncomingResponse, DISPOSITION } = AIBridgeRuntimeCore.responseGate;
 const { ParkedResponseStore, RECORD_STATE } = AIBridgeRuntimeCore.parked;
 const { createConversationAuthority, AUTHORITY_STATES } = AIBridgeRuntimeCore.authority;
+const { UPDATE_PHASE, classifySafeBoundary, createCheckpoint, transitionCheckpoint, isDispatchBlocked, verifyReloadTarget } = AIBridgeUpdateCheckpoint;
 const REVIEW_DISPATCH_KEY = "aiBridgeRuntimeDispatchLedger";
 const REVIEW_AUTH_EPOCH_KEY = "aiBridgeRuntimeAuthorityEpochs";
 const PROVIDER_EVENT_POLICY = Object.freeze({
@@ -308,6 +310,115 @@ async function reviewEnforceContinuationConsistency() {
   return true;
 }
 
+function reviewUpdateBoundary(){
+  return classifySafeBoundary({
+    ledgerRecords:reviewLedger.snapshot(),
+    parkedRecords:reviewParkedStore.snapshot().records,
+    providerRecovery:state.providerRecovery,
+    threadRollover:state.threadRollover,
+    nextTurnPending:state.nextTurnPending,
+    sessionActive:state.sessionActive,
+    running:state.running
+  });
+}
+function reviewTrustedExtensionPage(sender){
+  if(sender?.tab)return false;
+  return sender?.id===chrome.runtime.id&&String(sender?.url||"").startsWith("chrome-extension://"+chrome.runtime.id+"/");
+}
+async function reviewCheckpointAtSafeBoundary(){
+  const checkpoint=state.updateCheckpoint;
+  if(!checkpoint||checkpoint.phase!==UPDATE_PHASE.DRAINING)return {ok:false,reason:"NO_DRAINING_UPDATE"};
+  const boundary=reviewUpdateBoundary();
+  if(!boundary.safe)return {ok:false,draining:Boolean(boundary.draining),reason:boundary.code,boundary};
+  state.updateCheckpoint=transitionCheckpoint(checkpoint,UPDATE_PHASE.CHECKPOINTED,{nextTurnPending:state.nextTurnPending});
+  state.running=false;state.paused=true;state.runtimePhase="UPDATE_CHECKPOINTED";
+  state.pauseReason="Update checkpoint is durable. AI Bridge will not dispatch another provider turn until the verified update completes or is cancelled.";
+  appendLog({time:Date.now(),type:"update",text:"Update checkpoint reached safe boundary",checkpointId:checkpoint.checkpointId});
+  await saveState();
+  return {ok:true,ready:true,checkpoint:{...state.updateCheckpoint}};
+}
+async function reviewPrepareUpdateCheckpoint(msg){
+  if(state.updateCheckpoint&&![UPDATE_PHASE.COMPLETE,UPDATE_PHASE.FAILED,UPDATE_PHASE.CANCELLED].includes(state.updateCheckpoint.phase))return {ok:false,reason:"UPDATE_ALREADY_ACTIVE",checkpoint:{...state.updateCheckpoint}};
+  const targetVersion=String(msg?.targetVersion||"").trim(),targetBuild=String(msg?.targetBuild||"").trim();
+  if(!targetVersion||!targetBuild)return {ok:false,reason:"UPDATE_TARGET_REQUIRED"};
+  const boundary=reviewUpdateBoundary();
+  if(!boundary.safe&&!boundary.draining)return {ok:false,reason:boundary.code,boundary};
+  const m=chrome.runtime.getManifest();
+  state.updateCheckpoint=createCheckpoint({checkpointId:crypto.randomUUID(),targetVersion,targetBuild,currentVersion:String(m.version||""),currentBuild:String(m.version_name||m.version||""),sessionActive:state.sessionActive,resumeRequested:Boolean(state.sessionActive&&state.running),nextTurnPending:state.nextTurnPending});
+  state.runtimePhase=boundary.safe?"UPDATE_CHECKPOINTING":"UPDATE_DRAINING";
+  appendLog({time:Date.now(),type:"update",text:boundary.safe?"Update safe boundary available":"Update waiting for current provider response",checkpointId:state.updateCheckpoint.checkpointId});
+  await saveState();
+  if(boundary.safe)return reviewCheckpointAtSafeBoundary();
+  return {ok:true,ready:false,draining:true,checkpoint:{...state.updateCheckpoint},boundary};
+}
+async function reviewBeginUpdateApply(checkpointId){
+  const checkpoint=state.updateCheckpoint;
+  if(!checkpoint||checkpoint.phase!==UPDATE_PHASE.CHECKPOINTED)return {ok:false,reason:"UPDATE_NOT_CHECKPOINTED"};
+  if(String(checkpointId||"")!==checkpoint.checkpointId)return {ok:false,reason:"UPDATE_CHECKPOINT_ID_MISMATCH"};
+  const boundary=reviewUpdateBoundary();
+  if(!boundary.safe)return {ok:false,reason:boundary.code,boundary};
+  state.updateCheckpoint=transitionCheckpoint(checkpoint,UPDATE_PHASE.APPLYING);
+  state.runtimePhase="UPDATE_APPLYING";state.running=false;state.paused=true;await saveState();
+  return {ok:true,checkpoint:{...state.updateCheckpoint}};
+}
+async function reviewRequestUpdateReload({checkpointId,version,build}={}){
+  const checkpoint=state.updateCheckpoint;
+  if(!checkpoint||checkpoint.phase!==UPDATE_PHASE.APPLYING)return {ok:false,reason:"UPDATE_NOT_APPLYING"};
+  if(String(checkpointId||"")!==checkpoint.checkpointId)return {ok:false,reason:"UPDATE_CHECKPOINT_ID_MISMATCH"};
+  if(String(version||"")!==checkpoint.targetVersion||String(build||"")!==checkpoint.targetBuild)return {ok:false,reason:"UPDATE_APPLIED_TARGET_MISMATCH"};
+  state.updateCheckpoint=transitionCheckpoint(checkpoint,UPDATE_PHASE.RELOAD_REQUESTED);
+  state.runtimePhase="UPDATE_RELOAD_REQUESTED";state.running=false;state.paused=true;await saveState();
+  return {ok:true,reload:true,checkpoint:{...state.updateCheckpoint}};
+}
+async function reviewCancelUpdateCheckpoint(checkpointId){
+  const checkpoint=state.updateCheckpoint;
+  if(!checkpoint||![UPDATE_PHASE.DRAINING,UPDATE_PHASE.CHECKPOINTED].includes(checkpoint.phase))return {ok:false,reason:"UPDATE_NOT_CANCELLABLE"};
+  if(String(checkpointId||"")!==checkpoint.checkpointId)return {ok:false,reason:"UPDATE_CHECKPOINT_ID_MISMATCH"};
+  state.updateCheckpoint=transitionCheckpoint(checkpoint,UPDATE_PHASE.CANCELLED);
+  state.running=Boolean(checkpoint.resumeRequested&&state.sessionActive&&!state.awaitingHuman&&!state.providerRecovery);
+  state.paused=Boolean(state.sessionActive&&!state.running);
+  state.runtimePhase=state.running?(state.nextTurnPending?"NEXT_TURN_PENDING":"AWAITING_PROVIDER_RESPONSE"):(state.sessionActive?"PAUSED":"IDLE");
+  state.pauseReason=state.paused?"Update cancelled; session remains paused.":"";
+  await saveState();
+  if(state.running&&state.nextTurnPending)await reviewRecoverNextTurnPending();
+  return {ok:true,cancelled:true};
+}
+async function reviewRestoreUpdateCheckpointIfNeeded(){
+  const checkpoint=state.updateCheckpoint;
+  if(!checkpoint||checkpoint.phase!==UPDATE_PHASE.RELOAD_REQUESTED)return {restored:false};
+  const m=chrome.runtime.getManifest();
+  const verified=verifyReloadTarget(checkpoint,{version:String(m.version||""),build:String(m.version_name||m.version||"")});
+  if(!verified.ok){
+    state.updateCheckpoint=transitionCheckpoint(checkpoint,UPDATE_PHASE.FAILED,{failureReason:"UPDATE_RELOAD_"+verified.reason});
+    state.running=false;state.paused=true;state.runtimePhase="UPDATE_RECOVERY_FAILED";
+    state.pauseReason="Updated files reloaded with an unexpected build identity. AI Bridge paused instead of resuming.";
+    await saveState();return {restored:false,paused:true,reason:verified.reason};
+  }
+  const restoring=transitionCheckpoint(checkpoint,UPDATE_PHASE.RESTORING);
+  state.updateCheckpoint=restoring;state.running=false;state.paused=true;state.runtimePhase="UPDATE_RESTORING";await saveState();
+  const boundary=reviewUpdateBoundary();
+  if(!boundary.safe){
+    state.updateCheckpoint=transitionCheckpoint(restoring,UPDATE_PHASE.FAILED,{failureReason:"UPDATE_RESTORE_"+boundary.code});
+    state.runtimePhase="UPDATE_RECOVERY_FAILED";state.pauseReason="Update completed, but runtime reconciliation found "+boundary.code+". AI Bridge paused instead of guessing.";
+    await saveState();return {restored:false,paused:true,reason:boundary.code};
+  }
+  if(state.sessionActive){
+    try{await Promise.all(SIDES.map(side=>reviewRegisterSideAuthority(side)));}
+    catch(error){
+      state.updateCheckpoint=transitionCheckpoint(restoring,UPDATE_PHASE.FAILED,{failureReason:"UPDATE_AUTHORITY_RESTORE_FAILED"});
+      state.runtimePhase="UPDATE_RECOVERY_FAILED";state.pauseReason="Update completed, but provider authority could not be restored: "+(error?.message||error);
+      await saveState();return {restored:false,paused:true,reason:"UPDATE_AUTHORITY_RESTORE_FAILED"};
+    }
+  }
+  state.updateCheckpoint=transitionCheckpoint(restoring,UPDATE_PHASE.COMPLETE);
+  state.running=Boolean(checkpoint.resumeRequested&&state.sessionActive&&!state.awaitingHuman&&!state.providerRecovery);
+  state.paused=Boolean(state.sessionActive&&!state.running);
+  state.runtimePhase=state.running?(state.nextTurnPending?"NEXT_TURN_PENDING":"AWAITING_PROVIDER_RESPONSE"):(state.sessionActive?"PAUSED":"IDLE");
+  state.pauseReason=state.paused?"Update restored successfully; session remains paused.":"";
+  appendLog({time:Date.now(),type:"update",text:"Update restored and reconciled",checkpointId:checkpoint.checkpointId});
+  await saveState();return {restored:true,resumeRequested:state.running};
+}
+
 async function reviewRecoverNextTurnPending() {
   const pending = state.nextTurnPending;
   if (!pending || !state.sessionActive) return { recovered: false };
@@ -466,7 +577,8 @@ async function reviewProcessIncomingEnvelope(envelope, { fromParked = false } = 
       String(state.providerRecovery.dispatchId||"")===String(envelope.dispatchId) &&
       state.providerRecovery.side===envelope.side
     );
-    const shouldRelay = state.running || providerRecoveryMatch;
+    const updateDrainMatch=state.updateCheckpoint?.phase===UPDATE_PHASE.DRAINING;
+    const shouldRelay = state.running || providerRecoveryMatch || updateDrainMatch;
     const stateResult = await handleCompletedResponse(envelope.side, envelope.text, {
       relay: false,
       artifacts: envelope.artifacts,
@@ -506,6 +618,12 @@ async function reviewProcessIncomingEnvelope(envelope, { fromParked = false } = 
     }
 
     await reviewParkedStore.finalize(envelope.dispatchId);
+
+    if(state.updateCheckpoint?.phase===UPDATE_PHASE.DRAINING){
+      const updateReady=await reviewCheckpointAtSafeBoundary();
+      if(updateReady?.ok)return {ok:true,updateCheckpointed:true,pending:Boolean(pending),checkpoint:updateReady.checkpoint};
+      if(!updateReady?.draining)return reviewPauseForAmbiguity("Update drain could not reach a safe checkpoint: "+(updateReady?.reason||"UNKNOWN"));
+    }
 
     if (pending && providerRecoveryMatch) {
       state.providerRecovery={...state.providerRecovery,active:false,resolvedAt:Date.now(),responseCommitted:true};
@@ -717,6 +835,7 @@ function cloneDefaultState() {
     runtimePhase: "IDLE",
     nextTurnPending: null,
     providerRecovery: null,
+    updateCheckpoint: null,
     transcript: [],
     providerEvents: [],
     log: []
@@ -1491,6 +1610,7 @@ async function loadState() {
     state.runtimePhase = String(state.runtimePhase || "IDLE");
     state.nextTurnPending = state.nextTurnPending && typeof state.nextTurnPending === "object" ? state.nextTurnPending : null;
     state.providerRecovery = state.providerRecovery && typeof state.providerRecovery === "object" ? state.providerRecovery : null;
+    state.updateCheckpoint = state.updateCheckpoint && typeof state.updateCheckpoint === "object" ? state.updateCheckpoint : null;
     state.workMode = normalizeWorkMode(state.workMode);
     if (!isBatchWorkMode(state.workMode)) {
       state.workPhase = state.workMode === "collaborate" ? "collaborate" : (state.workMode === "mesh" ? "mesh" : "relay");
@@ -1531,6 +1651,7 @@ async function loadState() {
 
   await validateSavedBindings();
   await reviewRuntimeReady;
+  await reviewRestoreUpdateCheckpointIfNeeded();
 
   if (await reviewEnforceContinuationConsistency()) {
     reviewRecoveryPauseReason = state.pauseReason;
@@ -2285,6 +2406,7 @@ async function ensureTabListener(tabId) {
 
 async function sendToSide(side, text, { record = true, deliveredSeq = null, deliveredSources = false, artifactIds = [], artifacts = [], mainInterjectionIds = [], saveRecord = true, continuationSourceDispatchId = null } = {}) {
   await reviewRuntimeReady;
+  if(isDispatchBlocked(state.updateCheckpoint))throw new Error("UPDATE_CHECKPOINT_BLOCKS_NEW_DISPATCH");
   const tabId = Number(tabForSide(side));
   if (Array.isArray(artifacts) && artifacts.length) {
     throw new Error("Trusted Upload authority is not available in this review runtime.");
@@ -2956,6 +3078,24 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
       await aiBridgeConfigureUpdateAlarm(Boolean(msg.enabled));
       sendResponse({ ok: true, enabled: Boolean(msg.enabled) });
       return;
+    }
+
+    if (msg.type === "AI_BRIDGE_UPDATE_PREPARE") {
+      if(!reviewTrustedExtensionPage(sender)){sendResponse({ok:false,reason:"UPDATE_CONTROL_UNTRUSTED_SENDER"});return;}
+      await stateReady;sendResponse(await reviewPrepareUpdateCheckpoint(msg));return;
+    }
+    if (msg.type === "AI_BRIDGE_UPDATE_BEGIN_APPLY") {
+      if(!reviewTrustedExtensionPage(sender)){sendResponse({ok:false,reason:"UPDATE_CONTROL_UNTRUSTED_SENDER"});return;}
+      await stateReady;sendResponse(await reviewBeginUpdateApply(msg.checkpointId));return;
+    }
+    if (msg.type === "AI_BRIDGE_UPDATE_APPLIED") {
+      if(!reviewTrustedExtensionPage(sender)){sendResponse({ok:false,reason:"UPDATE_CONTROL_UNTRUSTED_SENDER"});return;}
+      await stateReady;const result=await reviewRequestUpdateReload(msg);sendResponse(result);
+      if(result?.ok&&result.reload)setTimeout(()=>chrome.runtime.reload(),50);return;
+    }
+    if (msg.type === "AI_BRIDGE_UPDATE_CANCEL") {
+      if(!reviewTrustedExtensionPage(sender)){sendResponse({ok:false,reason:"UPDATE_CONTROL_UNTRUSTED_SENDER"});return;}
+      await stateReady;sendResponse(await reviewCancelUpdateCheckpoint(msg.checkpointId));return;
     }
 
     if (msg.type === "AI_BRIDGE_SETTINGS_OPEN") {

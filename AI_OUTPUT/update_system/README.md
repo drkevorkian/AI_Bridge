@@ -53,6 +53,7 @@ The update design therefore has two cooperating pieces:
 Only these root extension files are eligible:
 
 - manifest.json
+- update-checkpoint.js
 - background.js
 - content.js
 - dashboard.html
@@ -173,10 +174,22 @@ outcome is ambiguous.
 
 - native-messaging framing/host installer;
 - extension-side `nativeMessaging` permission;
-- update checkpoint state machine;
-- automatic `chrome.runtime.reload()`;
-- startup resume after update;
+- Native Messaging transport is not wired yet, but the extension-side durable update checkpoint state machine and guarded `chrome.runtime.reload()` transition are implemented in the review runtime;
+- startup resume/reconciliation after an applied build is implemented in the review runtime;
 - production root `update-manifest.json`;
 - AI_INPUT promotion.
 
 Those remain gated on review and green CI.
+
+
+## Durable checkpoint semantics
+
+The review runtime freezes new provider dispatches before update mutation. If a provider response is already in flight, the update enters `DRAINING`: that answer may finish, its response is committed, and its exact `nextTurnPending` obligation is persisted, but the next provider send is not allowed to start.
+
+Only a boundary with no `CREATED`, `DISPATCHING`, `ACCEPTED`, `AWAITING_RESPONSE`, or `DELIVERY_AMBIGUOUS` dispatch and no parked/claimed response may become `CHECKPOINTED`.
+
+Checkpoint phases:
+
+`DRAINING → CHECKPOINTED → APPLYING → RELOAD_REQUESTED → RESTORING → COMPLETE`
+
+A reload resumes only when the newly loaded manifest version/build exactly matches the requested target, provider authority re-registers successfully, the ledger remains at a safe boundary, and no provider recovery/thread rollover is active.
