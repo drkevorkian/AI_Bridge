@@ -297,6 +297,8 @@ function hydrateFromState(s) {
   updateWorkModeUI();
   if (Number.isInteger(Number(s.maxTurns))) $("maxTurns").value = String(s.maxTurns);
   if (Number.isFinite(Number(s.delayMs))) $("delayMs").value = String(s.delayMs);
+  $("freshOnStart").checked = false;
+  $("freshOnStart").disabled = true;
   selectedSourceFiles = Array.isArray(s.sourceFiles) ? s.sourceFiles.map(file => ({ ...file })) : [];
   renderSourceFiles();
   renderHistory(s.history);
@@ -753,8 +755,9 @@ function updateControls(s) {
   $("pause").disabled = !s.sessionActive || !s.running || s.awaitingHuman;
   $("resume").disabled = !s.sessionActive || s.running || s.awaitingHuman;
   $("stop").disabled = !s.sessionActive;
-  $("newAllChats").disabled = Boolean(s.sessionActive);
-  $("freshOnStart").disabled = Boolean(s.sessionActive);
+  $("newAllChats").disabled = true;
+  $("freshOnStart").checked = false;
+  $("freshOnStart").disabled = true;
   $("agentCount").disabled = Boolean(s.sessionActive);
   $("workMode").disabled = Boolean(s.sessionActive);
   $("teamRules").disabled = false;
@@ -766,7 +769,7 @@ function updateControls(s) {
   updateWorkModeUI();
 
   for (const side of SIDES) {
-    $(`newChat${side}`).disabled = Boolean(s.sessionActive) || !selectedTab(side);
+    $(`newChat${side}`).disabled = true;
     const batchDone = ["compete", "parallel", "review"].includes(s.workMode) && Array.isArray(s.phaseCompletedSides) && s.phaseCompletedSides.includes(side);
     $(`resend${side}`).disabled = !s.sessionActive || !s.running || s.awaitingHuman || !s.lastSentBySide?.[side] || batchDone;
   }
@@ -800,6 +803,29 @@ function updateStatus(s) {
   }
 }
 
+async function refreshProviderHealth() {
+  for (const side of SIDES) {
+    const node = $(`health${side}`);
+    const tabId = selectedTab(side);
+    if (!node) continue;
+    if (!tabId) {
+      node.textContent = "Connection: — · Authority: — · Relay: Waiting · Rollover: Limited · Artifacts: Limited";
+      continue;
+    }
+    try {
+      const res = await chrome.runtime.sendMessage({ type: "AI_BRIDGE_PROVIDER_HEALTH", tabId });
+      const connection = res?.connectionStatus === "CONNECTED" ? "Connected" : "Disconnected";
+      const authority = res?.actionAuthorityStatus === "DOCUMENT_AUTHORITY_VERIFIED"
+        ? "Verified"
+        : (res?.actionAuthorityStatus === "REGISTERING" ? "Registering" : "Not verified");
+      node.textContent =
+        `Connection: ${connection} · Authority: ${authority} · Relay: ${res?.capabilities?.relay || "WAITING"} · Rollover: ${res?.capabilities?.rollover || "LIMITED"} · Artifacts: ${res?.capabilities?.artifacts || "LIMITED"}`;
+    } catch (_) {
+      node.textContent = "Connection: Disconnected · Authority: Not verified · Relay: Waiting · Rollover: Limited · Artifacts: Limited";
+    }
+  }
+}
+
 async function refreshState() {
   try {
     const res = await chrome.runtime.sendMessage({
@@ -817,6 +843,7 @@ async function refreshState() {
     updateRoundTimers(s);
     updateStatus(s);
     updateControls(s);
+    await refreshProviderHealth();
     setHumanModal(s);
     renderTranscript(s);
   } catch (err) {
@@ -893,38 +920,8 @@ chrome.storage.onChanged.addListener((changes, area) => {
   if (area === "local" && changes[THEME_KEY]) applyTheme(changes[THEME_KEY].newValue);
 });
 
-async function openFreshChats(sides) {
-  if (latestState?.sessionActive) return;
-  const chosen = Array.isArray(sides) ? sides : SIDES;
-  const tabError = validateActiveTabs();
-  if (chosen.length === SIDES.length && tabError) {
-    $("status").textContent = tabError;
-    return;
-  }
-
-  const oldLabels = new Map();
-  for (const side of chosen) {
-    const button = chosen.length === 1 ? $(`newChat${side}`) : null;
-    if (button) { oldLabels.set(button, button.textContent); button.textContent = "Opening…"; button.disabled = true; }
-  }
-  if (chosen.length === SIDES.length) { oldLabels.set($("newAllChats"), $("newAllChats").textContent); $("newAllChats").textContent = "Opening…"; $("newAllChats").disabled = true; }
-
-  try {
-    const payload = { type: "AI_BRIDGE_NEW_CHATS", sides: chosen };
-    for (const side of chosen) {
-      payload[`tab${side}`] = selectedTab(side);
-      if (!payload[`tab${side}`]) throw new Error(`Choose an open AI tab for AI ${side}.`);
-    }
-    const res = await chrome.runtime.sendMessage(payload);
-    if (!res?.ok) throw new Error(res?.error || "Could not open fresh AI chat.");
-    $("status").textContent = `Fresh chat${chosen.length === 1 ? "" : "s"} opened for AI ${chosen.join(", AI ")}.`;
-    await loadTabs({ preserve: true });
-    await refreshState();
-  } catch (err) {
-    $("status").textContent = `New chat failed: ${err.message}`;
-  } finally {
-    for (const [button, label] of oldLabels) button.textContent = label;
-  }
+async function openFreshChats(_sides) {
+  $("status").textContent = "New Chat is LIMITED — AI Bridge does not currently have trusted provider New Chat authority.";
 }
 
 async function clearHistory(kind) {

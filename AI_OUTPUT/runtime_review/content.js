@@ -2,7 +2,7 @@
   if (globalThis.__AI_BRIDGE_REVIEW_CONTENT__) return;
   globalThis.__AI_BRIDGE_REVIEW_CONTENT__ = true;
 
-  const VERSION = "1.18.0-review.1";
+  const VERSION = "1.18.0-review.2";
   const host = location.hostname.toLowerCase();
   const provider = host === "chatgpt.com" || host === "chat.openai.com" ? "chatgpt"
     : host === "grok.com" ? "grok"
@@ -200,7 +200,19 @@
     lastResponseSignature=signature;
     const dispatchId=awaitingDispatchId;
     awaitingDispatchId=null;
-    try{await chrome.runtime.sendMessage({type:"AI_BRIDGE_RESPONSE",text,completedAt:Date.now(),dispatchId,artifacts:[]});}catch(_){}
+    try{
+      if(!registration) return;
+      await chrome.runtime.sendMessage({
+        type:"AI_BRIDGE_RESPONSE",
+        text,
+        completedAt:Date.now(),
+        dispatchId,
+        generationEpoch:registration.generationEpoch,
+        conversationIdentity:registration.identity,
+        side:registration.side,
+        artifacts:[]
+      });
+    }catch(_){}
   }
   function scheduleMonitor(ms=250){ if(monitorTimer) return; monitorTimer=setTimeout(()=>monitor().catch(()=>{}),ms); }
 

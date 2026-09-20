@@ -1,3 +1,4 @@
+importScripts("runtime-core.js");
 const ALL_SIDES = ["A", "B", "C", "D", "E"];
 const DEFAULT_AGENT_COUNT = 3;
 const MIN_AGENT_COUNT = 1;
@@ -106,9 +107,242 @@ let stateReady = loadState();
  * Chrome listeners remain top-level/synchronous; these maps hold only ephemeral
  * per-worker authority. A restarted worker must re-register before any action.
  */
-const REVIEW_RUNTIME_VERSION = "1.18.0-review.1";
+const REVIEW_RUNTIME_VERSION = "1.18.0-review.2";
+const { DispatchLedger, DISPATCH_STATUS } = AIBridgeRuntimeCore.ledger;
+const { RolloverCoordinator } = AIBridgeRuntimeCore.rollover;
+const { validateIncomingResponse, DISPOSITION } = AIBridgeRuntimeCore.responseGate;
+const { ParkedResponseStore, RECORD_STATE } = AIBridgeRuntimeCore.parked;
+const { createConversationAuthority, AUTHORITY_STATES } = AIBridgeRuntimeCore.authority;
+const REVIEW_DISPATCH_KEY = "aiBridgeRuntimeDispatchLedger";
+const REVIEW_AUTH_EPOCH_KEY = "aiBridgeRuntimeAuthorityEpochs";
+let reviewLedger = new DispatchLedger();
+let reviewRollover = new RolloverCoordinator();
+let reviewAuthorityEpochs = {};
+let reviewRecoveryPauseReason = "";
+const reviewChromeParkedAdapter = Object.freeze({
+  async load(key) { const data = await chrome.storage.local.get(key); return data[key] || null; },
+  async save(key, value) { await chrome.storage.local.set({ [key]: value }); }
+});
+let reviewParkedStore = new ParkedResponseStore({ store: reviewChromeParkedAdapter, key: "aiBridgeRuntimeParkedResponses" });
+let reviewRuntimeReady = reviewInitializeDurableRuntime();
 const reviewAuthorityBySide = new Map();
 const reviewPendingRegistrations = new Map();
+
+
+async function reviewPersistLedger() {
+  await chrome.storage.local.set({ [REVIEW_DISPATCH_KEY]: { records: reviewLedger.snapshot() } });
+}
+async function reviewPersistAuthorityEpochs() {
+  await chrome.storage.local.set({ [REVIEW_AUTH_EPOCH_KEY]: reviewAuthorityEpochs });
+}
+async function reviewInitializeDurableRuntime() {
+  const stored = await chrome.storage.local.get([REVIEW_DISPATCH_KEY, REVIEW_AUTH_EPOCH_KEY]);
+  const records = Array.isArray(stored?.[REVIEW_DISPATCH_KEY]?.records) ? stored[REVIEW_DISPATCH_KEY].records : [];
+  reviewLedger = new DispatchLedger(records);
+  reviewAuthorityEpochs = stored?.[REVIEW_AUTH_EPOCH_KEY] && typeof stored[REVIEW_AUTH_EPOCH_KEY] === "object"
+    ? stored[REVIEW_AUTH_EPOCH_KEY] : {};
+  reviewRollover = new RolloverCoordinator();
+  reviewParkedStore = new ParkedResponseStore({ store: reviewChromeParkedAdapter, key: "aiBridgeRuntimeParkedResponses" });
+  await reviewParkedStore.init();
+
+  let changed = false;
+  for (const record of reviewLedger.snapshot()) {
+    if (record.status === DISPATCH_STATUS.DISPATCHING || record.status === DISPATCH_STATUS.ACCEPTED) {
+      reviewLedger.transition(record.dispatchId, DISPATCH_STATUS.DELIVERY_AMBIGUOUS, {
+        failureReason: "MV3_WORKER_RESTART_DURING_DELIVERY"
+      });
+      reviewRecoveryPauseReason = "A provider delivery was interrupted by a service-worker restart and may already have been sent. Automatic replay is blocked.";
+      changed = true;
+    }
+  }
+  if (changed) await reviewPersistLedger();
+
+  for (const record of reviewParkedStore.snapshot().records) {
+    if (record.state !== RECORD_STATE.CLAIMED) continue;
+    const reconciliation = await reviewParkedStore.reconcileClaimed(record.dispatchId, reviewLedger);
+    if (reconciliation.action === "PAUSE") {
+      reviewRecoveryPauseReason = "A provider response was interrupted during durable commit. Automatic replay is blocked until the ambiguous response is reviewed.";
+    }
+  }
+}
+async function reviewPayloadHash(side, text) {
+  const bytes = new TextEncoder().encode(JSON.stringify({ side: String(side), text: String(text || "") }));
+  const digest = new Uint8Array(await crypto.subtle.digest("SHA-256", bytes));
+  return [...digest].map(b => b.toString(16).padStart(2, "0")).join("");
+}
+function reviewFindUnresolvedDispatch(side, payloadHash) {
+  const active = new Set([
+    DISPATCH_STATUS.CREATED, DISPATCH_STATUS.DISPATCHING, DISPATCH_STATUS.ACCEPTED,
+    DISPATCH_STATUS.AWAITING_RESPONSE, DISPATCH_STATUS.DELIVERY_AMBIGUOUS
+  ]);
+  const candidates = reviewLedger.snapshot().filter(r =>
+    r.side === String(side).toUpperCase() && active.has(r.status)
+  );
+  const exact = candidates.find(r => r.payloadHash === payloadHash) || null;
+  const blocking = candidates.find(r => r.status !== DISPATCH_STATUS.CREATED || r.payloadHash !== payloadHash) || null;
+  return { exact, blocking };
+}
+async function reviewTransitionDispatch(dispatchId, status, patch = {}) {
+  const record = reviewLedger.transition(dispatchId, status, patch);
+  await reviewPersistLedger();
+  return record;
+}
+function reviewConversationAuthority(record) {
+  if (!record || record.identity?.kind !== "conversation" || record.identity?.provisional || !record.identity?.writable) return null;
+  try {
+    return createConversationAuthority({
+      side: record.side,
+      tabId: record.tabId,
+      generationEpoch: record.generationEpoch,
+      identity: record.identity,
+      state: AUTHORITY_STATES.CONFIRMED
+    });
+  } catch (_) {
+    return null;
+  }
+}
+async function reviewPauseForAmbiguity(reason) {
+  await pauseBridge(reason);
+  return { ok: false, paused: true, reason };
+}
+async function reviewContinueAfterCommittedResponse(sourceSide) {
+  if (!state.sessionActive || state.awaitingHuman) return { ok: true, paused: true };
+  if (hasReachedTurnLimit()) return { ok: true, finished: true };
+
+  state.running = true;
+  state.paused = false;
+  state.pauseReason = "";
+  await saveState();
+
+  if (isBatchWorkMode()) {
+    const transition = await advanceBatchIfReady();
+    return { ok: true, ...transition };
+  }
+
+  const targetSide = SIDES.includes(state.currentSide) ? state.currentSide : nextSide(sourceSide);
+  await new Promise(resolve => setTimeout(resolve, state.delayMs));
+  if (!state.sessionActive || !state.running || state.awaitingHuman) return { ok: false, stopped: true };
+
+  const entry = [...state.transcript].reverse().find(item =>
+    item?.type === "response" && item?.side === sourceSide
+  ) || null;
+  const outgoing = entry?.directToSide
+    ? directTurnMessage(sourceSide, targetSide, entry)
+    : normalTurnMessage(targetSide);
+
+  try {
+    await sendToSide(targetSide, outgoing.text, {
+      deliveredSeq: outgoing.deliveredSeq,
+      deliveredSources: outgoing.deliveredSources,
+      artifactIds: outgoing.artifactIds,
+      artifacts: outgoing.artifacts,
+      mainInterjectionIds: outgoing.mainInterjectionIds || []
+    });
+    return { ok: true, direct: Boolean(entry?.directToSide), targetSide };
+  } catch (error) {
+    await pauseBridge("Could not send to AI " + targetSide + ": " + (error?.message || error));
+    return { ok: false, error: error?.message || String(error) };
+  }
+}
+
+async function reviewProcessIncomingEnvelope(envelope, { fromParked = false } = {}) {
+  await reviewRuntimeReady;
+  const dispatch = reviewLedger.get(envelope.dispatchId);
+  if (!dispatch) return { ok: false, ignored: true, reason: "UNKNOWN_DISPATCH" };
+  if (dispatch.status === DISPATCH_STATUS.DELIVERY_AMBIGUOUS) {
+    return reviewPauseForAmbiguity("Delivery is ambiguous for dispatch " + dispatch.dispatchId + "; response progression is paused.");
+  }
+
+  const liveRecord = reviewAuthorityBySide.get(envelope.side);
+  const authority = reviewConversationAuthority(liveRecord);
+  if (!authority) {
+    if (!fromParked) {
+      const parked = await reviewParkedStore.park(envelope.dispatchId, envelope);
+      if (!parked.stored && parked.reason !== "ALREADY_PARKED") {
+        return reviewPauseForAmbiguity("Could not durably park an inbound provider response: " + parked.reason);
+      }
+    }
+    return { ok: false, parked: true, reason: "DOCUMENT_AUTHORITY_PENDING" };
+  }
+
+  const gate = validateIncomingResponse({
+    ledger: reviewLedger,
+    coordinator: reviewRollover,
+    authority,
+    senderTabId: envelope.senderTabId,
+    side: envelope.side,
+    dispatchId: envelope.dispatchId,
+    generationEpoch: envelope.generationEpoch,
+    conversationIdentity: envelope.conversationIdentity,
+    rolloverId: envelope.rolloverId || null
+  });
+
+  if (gate.disposition === DISPOSITION.DROP) {
+    if (fromParked) await reviewParkedStore.drop(envelope.dispatchId);
+    return { ok: false, ignored: true, reason: gate.reason };
+  }
+  if (gate.disposition === DISPOSITION.PAUSE) {
+    return reviewPauseForAmbiguity("Inbound response authority paused: " + gate.reason);
+  }
+  if (gate.disposition === DISPOSITION.PARK) {
+    if (!fromParked) {
+      const parked = await reviewParkedStore.park(envelope.dispatchId, envelope);
+      if (!parked.stored && parked.reason !== "ALREADY_PARKED") {
+        return reviewPauseForAmbiguity("Could not park provider response: " + parked.reason);
+      }
+    }
+    return { ok: false, parked: true, reason: gate.reason };
+  }
+
+  if (!fromParked) {
+    const parked = await reviewParkedStore.park(envelope.dispatchId, envelope);
+    if (!parked.stored && parked.reason !== "ALREADY_PARKED") {
+      return reviewPauseForAmbiguity("Could not establish durable response commit barrier: " + parked.reason);
+    }
+  }
+
+  const claim = await reviewParkedStore.claim(envelope.dispatchId);
+  if (!claim.claimed) {
+    return reviewPauseForAmbiguity("Response commit ownership is ambiguous: " + claim.reason);
+  }
+
+  try {
+    const shouldRelay = state.running;
+    const stateResult = await handleCompletedResponse(envelope.side, envelope.text, {
+      relay: false,
+      artifacts: envelope.artifacts,
+      completedAt: envelope.completedAt
+    });
+
+    await reviewTransitionDispatch(envelope.dispatchId, DISPATCH_STATUS.RESPONSE_COMMITTED, {
+      completedAt: Number.isFinite(Number(envelope.completedAt)) ? Number(envelope.completedAt) : Date.now()
+    });
+    await reviewParkedStore.finalize(envelope.dispatchId);
+
+    if (
+      shouldRelay &&
+      state.sessionActive &&
+      !state.awaitingHuman &&
+      !stateResult?.finished &&
+      !stateResult?.commandError
+    ) {
+      return reviewContinueAfterCommittedResponse(envelope.side);
+    }
+    return stateResult;
+  } catch (error) {
+    return reviewPauseForAmbiguity("Response commit was interrupted and cannot be replayed automatically: " + (error?.message || error));
+  }
+}
+async function reviewDrainParkedResponses(side) {
+  await reviewRuntimeReady;
+  const records = reviewParkedStore.snapshot().records.filter(r =>
+    r.state === RECORD_STATE.PARKED && r.envelope?.side === side
+  );
+  for (const record of records) {
+    const result = await reviewProcessIncomingEnvelope(record.envelope, { fromParked: true });
+    if (result?.paused) break;
+  }
+}
 
 function reviewProviderFromUrl(rawUrl) {
   try {
@@ -168,9 +402,15 @@ async function reviewRegisterSideAuthority(side) {
     throw new Error("Provider document is not a writable trusted conversation surface.");
   }
 
-  const prior = reviewAuthorityBySide.get(side);
-  const generationEpoch = prior && reviewSameIdentity(prior.identity, expectedIdentity)
-    ? Number(prior.generationEpoch) + 1
+  const priorLive = reviewAuthorityBySide.get(side);
+  const priorDurable = reviewAuthorityEpochs[side] || null;
+  const prior = priorLive || priorDurable;
+  const equivalent = prior
+    && Number(prior.tabId) === tabId
+    && String(prior.provider || "") === provider
+    && reviewSameIdentity(prior.identity, expectedIdentity);
+  const generationEpoch = equivalent
+    ? Number(prior.generationEpoch)
     : Number(prior?.generationEpoch || 0) + 1;
   const nonce = crypto.randomUUID();
   const authorityRegistrationId = crypto.randomUUID();
@@ -242,6 +482,16 @@ function reviewAcceptDocumentRegistration(msg, sender) {
   clearTimeout(pending.timer);
   reviewPendingRegistrations.delete(side);
   reviewAuthorityBySide.set(side, record);
+  reviewAuthorityEpochs[side] = {
+    side: record.side,
+    tabId: record.tabId,
+    provider: record.provider,
+    generationEpoch: record.generationEpoch,
+    identity: record.identity
+  };
+  reviewPersistAuthorityEpochs()
+    .then(() => reviewDrainParkedResponses(side))
+    .catch(error => console.error("AI Bridge review authority persistence/drain failed", error));
   pending.resolve(record);
   return record;
 }
@@ -1079,13 +1329,21 @@ async function loadState() {
   }
 
   await validateSavedBindings();
+  await reviewRuntimeReady;
+  if (reviewRecoveryPauseReason && state.sessionActive) {
+    state.running = false;
+    state.paused = true;
+    state.pauseReason = reviewRecoveryPauseReason;
+    appendLog({ time: Date.now(), type: "system", text: reviewRecoveryPauseReason });
+    await saveState();
+  }
 
   // Manifest V3 service workers are disposable. When Chrome wakes this worker
   // back up, proactively reconnect all active page listeners so a saved running
   // session can continue without the popup having to be opened first.
   if (state.sessionActive && state.running) {
     try {
-      await Promise.all(SIDES.map(side => ensureTabListener(tabForSide(side))));
+      await Promise.all(SIDES.map(side => reviewRegisterSideAuthority(side)));
     } catch (err) {
       state.running = false;
       state.paused = true;
@@ -1811,19 +2069,55 @@ async function ensureTabListener(tabId) {
 }
 
 async function sendToSide(side, text, { record = true, deliveredSeq = null, deliveredSources = false, artifactIds = [], artifacts = [], mainInterjectionIds = [], saveRecord = true } = {}) {
+  await reviewRuntimeReady;
   const tabId = Number(tabForSide(side));
   if (Array.isArray(artifacts) && artifacts.length) {
     throw new Error("Trusted Upload authority is not available in this review runtime.");
   }
 
   const authority = await reviewRegisterSideAuthority(side);
-  const commandId = crypto.randomUUID();
-  const dispatchId = crypto.randomUUID();
+  if (authority.identity.kind !== "conversation" || authority.identity.provisional || !authority.identity.writable) {
+    throw new Error("Confirmed writable conversation authority is required before relay. Blank/new-chat surfaces remain fail-closed until trusted New Chat allocation is implemented.");
+  }
+
+  const payloadHash = await reviewPayloadHash(side, text);
+  const unresolved = reviewFindUnresolvedDispatch(side, payloadHash);
+  let dispatch;
+  if (unresolved.blocking) {
+    await reviewPauseForAmbiguity("A prior dispatch for AI " + side + " is unresolved (" + unresolved.blocking.status + "). Automatic resend is blocked.");
+    throw new Error("UNRESOLVED_DISPATCH_BLOCKS_REPLAY");
+  }
+  if (unresolved.exact) {
+    dispatch = unresolved.exact;
+  } else {
+    dispatch = reviewLedger.create({
+      dispatchId: crypto.randomUUID(),
+      side,
+      tabId,
+      generationEpoch: authority.generationEpoch,
+      conversationIdentity: authority.identity,
+      purpose: "RELAY",
+      payloadHash,
+      createdAt: Date.now()
+    });
+    await reviewPersistLedger();
+  }
+
+  if (
+    dispatch.tabId !== tabId ||
+    dispatch.generationEpoch !== authority.generationEpoch ||
+    !reviewSameIdentity(dispatch.conversationIdentity, authority.identity)
+  ) {
+    throw new Error("Persisted dispatch authority no longer matches the verified provider document.");
+  }
+
+  await reviewTransitionDispatch(dispatch.dispatchId, DISPATCH_STATUS.DISPATCHING);
+
   const command = {
     type: "AI_BRIDGE_ACTION",
     action: "SEND",
-    commandId,
-    dispatchId,
+    commandId: crypto.randomUUID(),
+    dispatchId: dispatch.dispatchId,
     side,
     documentId: authority.documentId,
     authorityRegistrationId: authority.authorityRegistrationId,
@@ -1835,16 +2129,33 @@ async function sendToSide(side, text, { record = true, deliveredSeq = null, deli
   let result;
   try {
     result = await chrome.tabs.sendMessage(tabId, command, { documentId: authority.documentId });
-  } catch (error) {
-    throw new Error("DELIVERY_AMBIGUOUS: provider action result could not be proven; automatic replay is disabled.");
+  } catch (_) {
+    await reviewTransitionDispatch(dispatch.dispatchId, DISPATCH_STATUS.DELIVERY_AMBIGUOUS, {
+      failureReason: "MESSAGE_ACK_LOST"
+    });
+    await reviewPauseForAmbiguity("Provider delivery result is ambiguous. The same logical prompt will not be replayed automatically.");
+    throw new Error("DELIVERY_AMBIGUOUS");
   }
 
   if (result?.outcome === "REJECTED_PRE_ACTION") {
+    await reviewTransitionDispatch(dispatch.dispatchId, DISPATCH_STATUS.FAILED, {
+      failureReason: result.reason || "REJECTED_PRE_ACTION"
+    });
     throw new Error(result.reason || result.error || "Provider action was rejected before execution.");
   }
+
   if (result?.outcome !== "ACTION_CONFIRMED") {
-    throw new Error("DELIVERY_AMBIGUOUS: provider action was attempted but confirmation was not proven; automatic replay is disabled.");
+    await reviewTransitionDispatch(dispatch.dispatchId, DISPATCH_STATUS.DELIVERY_AMBIGUOUS, {
+      failureReason: result?.reason || "ACTION_CONFIRMATION_NOT_PROVEN"
+    });
+    await reviewPauseForAmbiguity("Provider action may have occurred but confirmation was not proven. Automatic replay is disabled.");
+    throw new Error("DELIVERY_AMBIGUOUS");
   }
+
+  await reviewTransitionDispatch(dispatch.dispatchId, DISPATCH_STATUS.ACCEPTED, {
+    acceptedAt: Date.now()
+  });
+  await reviewTransitionDispatch(dispatch.dispatchId, DISPATCH_STATUS.AWAITING_RESPONSE);
 
 const round = beginRoundTimer(side);
   appendLog({
@@ -1871,6 +2182,8 @@ const round = beginRoundTimer(side);
     if (saveRecord) await saveState();
   }
 }
+
+
 
 
 
@@ -2285,12 +2598,29 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
       } catch (_) {}
       const side = sideForTab(tabId);
       const authority = side ? reviewAuthorityBySide.get(side) : null;
+      let pong = null;
+      if (connected) {
+        try { pong = await chrome.tabs.sendMessage(tabId, { type: "AI_BRIDGE_PING" }); } catch (_) {}
+      }
+      const relayReady = Boolean(
+        authority &&
+        authority.identity?.kind === "conversation" &&
+        authority.identity?.provisional !== true &&
+        authority.identity?.writable === true &&
+        pong?.capabilities?.composer === "PASS" &&
+        pong?.capabilities?.send === "PASS"
+      );
       sendResponse({
         ok: true,
         connectionStatus: connected ? "CONNECTED" : "DISCONNECTED",
         actionAuthorityStatus: authority ? "DOCUMENT_AUTHORITY_VERIFIED" : (connected ? "LISTENER_CONNECTED" : "DISCONNECTED"),
         side: side || null,
-        capabilities: authority ? { relay: "READY", rollover: "LIMITED", artifacts: "LIMITED" } : { relay: "WAITING", rollover: "LIMITED", artifacts: "LIMITED" }
+        capabilities: {
+          relay: relayReady ? "READY" : "WAITING",
+          rollover: "LIMITED",
+          artifacts: "LIMITED",
+          cancel: pong?.capabilities?.stop === "PASS" ? "READY" : "LIMITED"
+        }
       });
       return;
     }
@@ -2686,27 +3016,29 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
       }
 
       const side = sideForTab(sender.tab.id);
-      if (state.awaitingHuman && !isBatchWorkMode()) {
-        sendResponse({ ok: false, awaitingHuman: true });
+      if (!side) {
+        sendResponse({ ok: false, ignored: true, reason: "SIDE_NOT_BOUND" });
         return;
       }
-      const text = String(msg.text || "").trim();
 
-      // If the user manually paused while the current AI was still generating,
-      // capture that completed work and advance the cursor, but do not relay it.
-      const relay = state.running;
-      const completedAt = Number.isFinite(Number(msg.completedAt)) ? Number(msg.completedAt) : null;
-      const diagnostics = msg.artifactDiagnostics && typeof msg.artifactDiagnostics === "object" ? msg.artifactDiagnostics : null;
-      if (diagnostics?.candidateCount || diagnostics?.errors?.length) {
-        appendLog({
-          time: Date.now(),
-          type: diagnostics.errors?.length ? "artifact-capture-warning" : "artifact-capture",
-          side,
-          text: `AI ${side} artifact scan: ${Number(diagnostics.candidateCount) || 0} candidate(s), ${Array.isArray(msg.artifacts) ? msg.artifacts.length : 0} captured`,
-          errors: Array.isArray(diagnostics.errors) ? diagnostics.errors.slice(0, 8) : []
-        });
+      const envelope = {
+        dispatchId: String(msg.dispatchId || ""),
+        side,
+        senderTabId: Number(sender.tab.id),
+        generationEpoch: Number(msg.generationEpoch),
+        conversationIdentity: msg.conversationIdentity,
+        rolloverId: msg.rolloverId || null,
+        text: String(msg.text || "").trim(),
+        artifacts: Array.isArray(msg.artifacts) ? msg.artifacts : [],
+        completedAt: Number.isFinite(Number(msg.completedAt)) ? Number(msg.completedAt) : Date.now()
+      };
+
+      if (!envelope.dispatchId || !envelope.text) {
+        sendResponse({ ok: false, ignored: true, reason: "MALFORMED_RESPONSE_ENVELOPE" });
+        return;
       }
-      const task = () => handleCompletedResponse(side, text, { relay, artifacts: msg.artifacts, completedAt });
+
+      const task = () => reviewProcessIncomingEnvelope(envelope);
       responseCommitQueue = responseCommitQueue.catch(() => {}).then(task);
       const result = await responseCommitQueue;
       sendResponse(result);

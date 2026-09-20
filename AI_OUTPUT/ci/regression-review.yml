@@ -33,6 +33,8 @@ jobs:
         run: node AI_OUTPUT/tests/chrome-extension-smoke.mjs
       - name: Runtime review contract
         run: node AI_OUTPUT/tests/runtime-review-contract.mjs
+      - name: Runtime durable exactly-once
+        run: node AI_OUTPUT/tests/runtime-review-durable-exactly-once.mjs
       - name: Classic runtime contract
         run: node AI_OUTPUT/tests/classic-runtime-contract.mjs
       - name: Chrome pack validation

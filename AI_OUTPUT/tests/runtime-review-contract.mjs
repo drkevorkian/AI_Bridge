@@ -10,7 +10,7 @@ const read=rel=>fs.readFileSync(path.join(runtime,rel),'utf8');
 const exists=rel=>fs.existsSync(path.join(runtime,rel));
 
 for(const rel of [
-  'manifest.json','background.js','content.js',
+  'manifest.json','runtime-core.js','background.js','content.js',
   'popup.html','popup.js','popup.css',
   'dashboard.html','dashboard.js','dashboard.css',
   'dashboard-layouts.js','dashboard-layouts.css',
@@ -24,9 +24,12 @@ assert.equal(manifest.background?.type,undefined);
 assert.deepEqual(manifest.content_scripts?.[0]?.js,['content.js']);
 assert.ok(String(manifest.name).includes('Review'));
 
+const runtimeCore=read('runtime-core.js');
 const background=read('background.js');
 const content=read('content.js');
 const settings=read('settings.js');
+const dashboard=read('dashboard.js');
+const dashboardHtml=read('dashboard.html');
 
 assert.doesNotMatch(background,/^\s*import\s/m);
 assert.doesNotMatch(background,/^\s*export\s/m);
@@ -37,6 +40,10 @@ const listenerIndex=background.indexOf('chrome.runtime.onMessage.addListener');
 const awaitIndex=background.indexOf('await stateReady');
 assert.ok(listenerIndex>=0 && awaitIndex>=0 && listenerIndex<awaitIndex,'MV3 listener must register before async state readiness');
 
+assert.ok(background.startsWith('importScripts("runtime-core.js");'));
+assert.ok(runtimeCore.includes('DispatchLedger'));
+assert.ok(runtimeCore.includes('validateIncomingResponse'));
+assert.ok(runtimeCore.includes('ParkedResponseStore'));
 assert.ok(background.includes('AI_BRIDGE_DOCUMENT_REGISTER'));
 assert.ok(background.includes('{ documentId: authority.documentId }'));
 assert.ok(background.includes('DELIVERY_AMBIGUOUS'));
@@ -44,7 +51,21 @@ assert.ok(content.includes('AI_BRIDGE_ACTION'));
 assert.ok(content.includes('NEW_CHAT_UNSUPPORTED'));
 assert.ok(content.includes('UPLOAD_UNSUPPORTED'));
 assert.ok(content.includes('AI_BRIDGE_THREAD_LIMIT'));
+assert.ok(content.includes('generationEpoch:registration.generationEpoch'));
+assert.ok(content.includes('conversationIdentity:registration.identity'));
 assert.ok(settings.includes('AI_BRIDGE_PROVIDER_HEALTH'));
+assert.ok(background.includes('reviewLedger.create'));
+assert.ok(background.includes('reviewPersistLedger'));
+assert.ok(background.includes('DISPATCH_STATUS.DELIVERY_AMBIGUOUS'));
+assert.ok(background.includes('validateIncomingResponse'));
+assert.ok(background.includes('reviewParkedStore.claim'));
+assert.ok(background.includes('relay: false'));
+assert.ok(background.includes('reviewContinueAfterCommittedResponse'));
+assert.ok(background.includes('reviewRegisterSideAuthority(side)'));
+assert.ok(dashboard.includes('refreshProviderHealth'));
+assert.ok(dashboard.includes('New Chat is LIMITED'));
+assert.ok(dashboardHtml.includes('New chat — Limited'));
+assert.ok(dashboardHtml.includes('Start in fresh AI chats — Limited'));
 
 assert.doesNotMatch(content,/new KeyboardEvent\s*\(/);
 assert.doesNotMatch(content,/visibleNewChatControl/);

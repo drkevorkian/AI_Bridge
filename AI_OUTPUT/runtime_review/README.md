@@ -2,13 +2,18 @@
 
 This directory is a complete unpacked Manifest V3 review build staged under AI_OUTPUT.
 
-Security differences from root v1.18:
-- Chrome listeners register synchronously before async state recovery.
-- Provider actions require a document registration handshake and documentId-targeted command.
-- SEND is single-attempt; ambiguous results are not replayed.
+Security/runtime differences from root v1.18:
+- Chrome event listeners register synchronously before async recovery.
+- The exact reviewed DispatchLedger, IncomingResponseGate, ParkedResponseStore, RolloverCoordinator, and canonical six-field authority logic are bundled into runtime-core.js and loaded synchronously by the classic worker.
+- Every outbound provider dispatch is persisted before provider delivery.
+- Worker restart converts unresolved DISPATCHING/ACCEPTED delivery into DELIVERY_AMBIGUOUS and pauses instead of generating a replacement dispatch.
+- Provider actions require document registration and documentId-targeted commands.
+- Inbound responses carry dispatchId, generationEpoch, and six-field conversation identity and must pass the response gate before transcript/turn mutation.
+- Response envelopes are durably parked/claimed; response state is saved with relay suppressed, then RESPONSE_COMMITTED is persisted before any next-turn provider dispatch.
 - Broad-text New Chat automation is disabled.
 - Synthetic Enter fallback is disabled.
 - Raw Upload is LIMITED until trusted upload authority exists.
-- ChatGPT hard conversation-length UI is detected; the bridge pauses because trusted automatic New Chat authority is still unavailable.
+- Dashboard and Settings expose Connection / Authority / operation-specific readiness.
+- ChatGPT hard conversation-length UI can pause the bridge, but automatic New Chat remains LIMITED until trusted provider authority is available.
 
-This artifact is for human and Chrome E2E review before any root integration.
+This artifact is for human and real-Chrome E2E review before any root integration.
