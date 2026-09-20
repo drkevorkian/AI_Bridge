@@ -156,7 +156,7 @@ async function checkUpdates(){
   else{$("updateStatus").textContent="Up to date: v"+current;$("downloadUpdate").disabled=true;}
 }
 async function init(){
-  const manifest=chrome.runtime.getManifest();$("installedVersion").textContent="Version "+manifest.version;$("installedBuild").textContent=manifest.version_name||manifest.version;$("updateVersion").textContent="Installed v"+manifest.version;
+  const manifest=chrome.runtime.getManifest();$("installedVersion").textContent="Version "+manifest.version;$("installedBuild").textContent="Build "+(manifest.version_name||manifest.version);$("updateVersion").textContent="Installed v"+manifest.version+" · "+(manifest.version_name||manifest.version);
   const local=await chrome.storage.local.get([THEME_KEY,LAYOUT_KEY,PANE_WIDTH_KEY,AUTO_UPDATE_KEY,KEEP_AWAKE_KEY,GOOGLE_CLIENT_KEY]);
   applyTheme(local[THEME_KEY]);await setLayout();
   const paneWidth=Math.min(70,Math.max(24,Number(local[PANE_WIDTH_KEY])||36));$("paneWidth").value=String(paneWidth);$("paneWidthValue").textContent=Math.round(paneWidth)+"%";

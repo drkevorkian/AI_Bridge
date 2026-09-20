@@ -1,4 +1,4 @@
-# AI Bridge — Human Test Build 1.19.1.03-AI-B
+# AI Bridge — Human Test Build 1.19.1.04-AI-A
 
 This folder is a runnable **unpacked Chrome extension** promoted from the reviewed `AI_OUTPUT/runtime_review/` candidate.
 
@@ -50,11 +50,11 @@ For every issue, record:
 
 Do not test against valuable/irreversible provider actions. This is a human-test build, not production integration.
 
-## AI B 1.19.1 fixes
+## AI A 1.19.1.04-AI-A packaging/provenance fixes
 
 - Dashboard → Settings and Settings → Dashboard now reuse the current extension tab instead of spawning another tab.
 - Removed accidental literal `\\n` text from extension-page markup.
-- Classic is the consistent fallback dashboard layout; Studio, Classic, and Focus selections persist through local storage.
+- Classic is the consistent fallback dashboard layout; Classic is the only workspace layout; older Studio/Focus preferences migrate to Classic.
 - Settings confirms the saved dashboard layout before returning to Dashboard.
 
 
@@ -65,7 +65,7 @@ Do not test against valuable/irreversible provider actions. This is a human-test
 
 Chrome extension version: **1.19.1**
 
-AI Bridge build/subversion: **1.19.1.03-AI-B**
+AI Bridge build/subversion: **1.19.1.04-AI-A**
 
 The numeric Chrome version stays standards-compatible. The build/subversion string increments independently so human testing can confirm exactly which AI-produced build is loaded.
 
@@ -73,3 +73,10 @@ The numeric Chrome version stays standards-compatible. The build/subversion stri
 ## Classic-only workspace
 
 Classic is the sole supported workspace composition for this test line. Older stored Studio or Focus selections are automatically migrated to Classic. Color themes remain available independently.
+
+## Build provenance
+
+- Chrome extension version: **1.19.1**
+- AI Bridge build/subversion: **1.19.1.04-AI-A**
+- Manifest is the runtime source of truth for the Popup, Dashboard, and Settings build labels.
+- Classic is the sole workspace composition; color themes remain independent.

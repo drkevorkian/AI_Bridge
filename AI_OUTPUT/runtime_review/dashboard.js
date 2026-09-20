@@ -20,6 +20,13 @@ let renderedSeq = 0;
 let autoScroll = true;
 let selectedSourceFiles = [];
 let activeHumanModalKey = "";
+function renderBuildIdentity() {
+  const manifest = chrome.runtime.getManifest();
+  const build = manifest.version_name || manifest.version;
+  const el = $("buildIdentity");
+  if (el) el.textContent = `v${manifest.version} · ${build}`;
+}
+
 const WORK_MODE_INFO = {
   relay: { label: "Relay" },
   collaborate: { label: "Collaborate" },
@@ -28,6 +35,8 @@ const WORK_MODE_INFO = {
   review: { label: "Peer Review" },
   mesh: { label: "Direct Mesh" }
 };
+
+renderBuildIdentity();
 
 function normalizeAgentCount(raw) {
   const value = Number(raw);

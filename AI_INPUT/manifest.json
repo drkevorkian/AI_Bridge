@@ -2,7 +2,7 @@
   "manifest_version": 3,
   "name": "AI Bridge Human Test",
   "version": "1.19.1",
-  "description": "AI Bridge human-test build 1.19.1.03-AI-B. Classic workspace only.",
+  "description": "AI Bridge human-test build 1.19.1.04-AI-A. Classic workspace only.",
   "permissions": [
     "tabs",
     "storage",
@@ -68,5 +68,5 @@
   "content_security_policy": {
     "extension_pages": "script-src 'self'; object-src 'none'; base-uri 'none'; frame-ancestors 'none'"
   },
-  "version_name": "1.19.1.03-AI-B"
+  "version_name": "1.19.1.04-AI-A"
 }
