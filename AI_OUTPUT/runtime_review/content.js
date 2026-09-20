@@ -247,7 +247,18 @@
     });
     const confirmation=await confirmSend(composer2,text);
     if(!confirmation.confirmed) return attempted;
-    return consumeAuthority(command,Object.freeze({ok:true,outcome:"ACTION_CONFIRMED",reason:null,commandId:command.commandId,authorityId:command.authorityId,evidence:confirmation.evidence}));
+    return consumeAuthority(command,Object.freeze({
+      ok:true,
+      outcome:"ACTION_CONFIRMED",
+      reason:null,
+      commandId:command.commandId,
+      authorityId:command.authorityId,
+      evidence:confirmation.evidence,
+      side:String(command.side||registration?.side||"").toUpperCase(),
+      generationEpoch:Number(command.generationEpoch),
+      conversationIdentity:identityAfterDraft,
+      rolloverId:command.rolloverId==null?null:String(command.rolloverId)
+    }));
   }
 
   async function handleAction(raw){
@@ -447,8 +458,10 @@
       lastLimitSignature="";
       providerEventBaseline=new Set();
       providerEventSignatures.clear();
-      byCommand.clear();
-      byAuthority.clear();
+      // Keep the bounded UUID-keyed action cache across same-document SPA route
+      // changes. Registration is still revoked above, so cached results cannot
+      // authorize a new action; they only prove/deduplicate an action that was
+      // already executed before a worker restart.
       chrome.runtime.sendMessage({type:"AI_BRIDGE_DOCUMENT_ROUTE_CHANGED"}).catch(()=>{});
     }
     scheduleMonitor();
@@ -505,9 +518,9 @@
           action,
           authorityId,
           result:cached?{...cached}:null,
-          side:registration?.side||null,
-          generationEpoch:registration?.generationEpoch??null,
-          conversationIdentity:routeIdentity()
+          side:cached?.side||registration?.side||null,
+          generationEpoch:cached?.generationEpoch??registration?.generationEpoch??null,
+          conversationIdentity:cached?.conversationIdentity||routeIdentity()
         });
       }catch(error){
         sendResponse({ok:false,error:error.message||String(error)});
