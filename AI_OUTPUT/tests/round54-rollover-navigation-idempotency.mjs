@@ -35,3 +35,19 @@ assert.equal(manifest.name,"AI Bridge Review");
 assert.equal(manifest.version,"1.19.1");
 assert.ok(Array.isArray(manifest.permissions)&&manifest.permissions.includes("tabs"),"tabs permission is required to observe pendingUrl during navigation recovery");
 console.log("round54-rollover-navigation-idempotency: PASS");
+
+const waiterStart=bg.indexOf("async function waitForTabReady");
+const waiterEnd=bg.indexOf("function reviewRolloverTitle",waiterStart);
+assert.ok(waiterStart>=0&&waiterEnd>waiterStart,"waitForTabReady block missing");
+const waiter=bg.slice(waiterStart,waiterEnd);
+for(const token of [
+  "expectedUrl = null",
+  "const committedUrl = String(tab?.url || \"\")",
+  "const pendingUrl = String(tab?.pendingUrl || \"\")",
+  "const expectedReady = !expected || committedUrl === expected;",
+  "const redirectSettled = !expected || !pendingUrl;",
+  "const verified = await chrome.tabs.get(id);",
+  "(!expected || verifiedUrl === expected)",
+  "(!expected || !verifiedPendingUrl)"
+]) assert.ok(waiter.includes(token),"canonical waiter missing "+token);
+assert.ok(block.includes("waitForTabReady(tabId, 20000, targetUrl)"),"rollover must wait for committed canonical target, not stale complete document");

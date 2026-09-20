@@ -3200,20 +3200,35 @@ function reviewCanonicalRolloverFreshUrl(provider) {
   }
 }
 
-async function waitForTabReady(tabId, timeoutMs = 20000) {
+async function waitForTabReady(tabId, timeoutMs = 20000, expectedUrl = null) {
   const id = Number(tabId);
+  const expected = expectedUrl == null ? null : String(expectedUrl);
   const started = Date.now();
   while (Date.now() - started < timeoutMs) {
     try {
       const tab = await chrome.tabs.get(id);
-      if (tab?.status === "complete" && tab?.url) {
+      const committedUrl = String(tab?.url || "");
+      const pendingUrl = String(tab?.pendingUrl || "");
+      const committedReady = tab?.status === "complete" && Boolean(committedUrl);
+      const expectedReady = !expected || committedUrl === expected;
+      const redirectSettled = !expected || !pendingUrl;
+      if (committedReady && expectedReady && redirectSettled) {
         await ensureTabListener(id);
-        return tab;
+        const verified = await chrome.tabs.get(id);
+        const verifiedUrl = String(verified?.url || "");
+        const verifiedPendingUrl = String(verified?.pendingUrl || "");
+        if (
+          verified?.status === "complete" &&
+          (!expected || verifiedUrl === expected) &&
+          (!expected || !verifiedPendingUrl)
+        ) return verified;
       }
     } catch (_) {}
     await new Promise(resolve => setTimeout(resolve, 250));
   }
-  throw new Error("Timed out waiting for the AI page to open its new conversation.");
+  throw new Error(expected
+    ? "Timed out waiting for the AI page to commit the canonical fresh-chat destination."
+    : "Timed out waiting for the AI page to open its new conversation.");
 }
 
 function reviewRolloverTitle(rawTitle, side) {
@@ -3766,7 +3781,7 @@ async function reviewResumeThreadRollover(side) {
         if (!atCanonicalTarget) {
           await chrome.tabs.update(tabId, {url:targetUrl,active:true});
         }
-        tab = await waitForTabReady(tabId);
+        tab = await waitForTabReady(tabId, 20000, targetUrl);
         if (String(tab?.url || "") !== targetUrl) throw new Error("ROLLOVER_FRESH_CHAT_CANONICAL_URL_MISMATCH");
         if (reviewProviderFromUrl(tab?.url) !== tx.provider) throw new Error("ROLLOVER_FRESH_CHAT_PROVIDER_MISMATCH");
         const probe = await chrome.tabs.sendMessage(tabId, {type:"AI_BRIDGE_IDENTITY_PROBE"});
@@ -3938,7 +3953,7 @@ async function resetChatTab(tabId) {
   const updated = await chrome.tabs.update(id, { url: targetUrl, active: true });
   if (!updated) throw new Error("Chrome did not return the updated AI tab.");
 
-  const ready = await waitForTabReady(id);
+  const ready = await waitForTabReady(id, 20000, targetUrl);
   const readyProvider = reviewProviderFromUrl(ready?.url);
   if (readyProvider !== provider) {
     throw new Error("Fresh-chat navigation changed to an unexpected provider origin.");

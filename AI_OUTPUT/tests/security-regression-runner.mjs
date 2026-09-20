@@ -32,6 +32,7 @@ const tests=[
   'round53-narrow-header-wrapping.mjs',
   'round54-rollover-navigation-idempotency.mjs',
   'round55-narrow-header-and-manual-chat-wording.mjs',
+  'round56-pending-navigation-commit-barrier.mjs',
   'update-system-atomic.mjs',
   'round42-content-runtime-lifecycle.mjs',
   'round43-next-turn-adoption.mjs',
