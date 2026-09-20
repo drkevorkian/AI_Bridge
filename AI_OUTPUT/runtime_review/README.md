@@ -78,3 +78,10 @@ The CREATED reuse scenario also asserts the rendered success state:
 - Runtime: Awaiting provider response;
 - not Runtime: Paused;
 - same durable target dispatch ID reused.
+
+
+### Fault-scenario page isolation and Dashboard helper
+
+Popup and Settings are closed immediately after their smoke checks so periodic UI polling cannot wake the MV3 worker between stopAllWorkers() and seeded storage injection.
+
+Paused-state recovery assertions now inspect the actual #sessionPill and #status elements instead of broad document.body text. The helper is exported behind a require.main guard and is directly executed by round34-paused-dashboard-helper.cjs, including a negative Running-state case.

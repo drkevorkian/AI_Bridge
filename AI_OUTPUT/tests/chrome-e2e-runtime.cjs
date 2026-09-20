@@ -140,6 +140,31 @@ async function evaluate(cdp, sessionId, expression, awaitPromise = true) {
   return result.result?.value;
 }
 
+async function assertPausedDashboard(cdp, page, reasonPattern, { timeoutMs = 10000, intervalMs = 100 } = {}) {
+  assert.ok(reasonPattern instanceof RegExp, 'reasonPattern must be a RegExp');
+  const state = await poll(
+    async () => evaluate(
+      cdp,
+      page.sessionId,
+      '({pill:document.getElementById("sessionPill")?.textContent||"",status:document.getElementById("status")?.textContent||""})'
+    ),
+    value =>
+      /^Paused$/i.test(String(value?.pill || '').trim()) &&
+      /Runtime:\s*Paused/i.test(String(value?.status || '')) &&
+      reasonPattern.test(String(value?.status || '')),
+    timeoutMs,
+    intervalMs
+  );
+
+  assert.match(String(state.pill || '').trim(), /^Paused$/i);
+  assert.match(String(state.status || ''), /Runtime:\s*Paused/i);
+  assert.match(String(state.status || ''), reasonPattern);
+  assert.doesNotMatch(String(state.status || ''), /Running\s*[—-]\s*Relay/i);
+  assert.doesNotMatch(String(state.status || ''), /Recovering next relay turn/i);
+  assert.doesNotMatch(String(state.status || ''), /Runtime:\s*Awaiting provider response/i);
+  return state;
+}
+
 async function extensionMessage(cdp, sessionId, message) {
   const expression =
     '(async()=>{try{return {transportOk:true,value:await chrome.runtime.sendMessage(' +
@@ -267,6 +292,16 @@ async function main() {
     const settings = await createExtensionPage(cdp, extensionId, 'settings.html');
     pages.push(settings);
     assert.match(await evaluate(cdp, settings.sessionId, 'document.body.innerText'), /Settings/i);
+
+    // Popup polls AI_BRIDGE_GET_STATE every 900 ms. Leaving it open would wake
+    // the MV3 worker during fault injection and race storage seeding. Settings
+    // is also closed after smoke validation so only the scenario Dashboard may
+    // intentionally wake the worker after each stopAllWorkers() call.
+    for (const page of [popup, settings]) {
+      await cdp.send('Target.closeTarget', { targetId: page.targetId });
+      const pageIndex = pages.indexOf(page);
+      if (pageIndex >= 0) pages.splice(pageIndex, 1);
+    }
 
     const dashboard = await createExtensionPage(cdp, extensionId, 'dashboard.html');
     pages.push(dashboard);
@@ -431,19 +466,6 @@ async function main() {
     );
     assert.equal(workers.length, 1, 'MV3 worker did not restart cleanly');
 
-    const assertPausedDashboard = async (page, reasonPattern) => {
-      const text = await poll(
-        () => evaluate(cdp, page.sessionId, 'document.body.innerText'),
-        body => /Runtime:\s*Paused/i.test(body) && /Paused/i.test(body) && reasonPattern.test(body),
-        10000
-      );
-      assert.match(text, /Runtime:\s*Paused/i);
-      assert.doesNotMatch(text, /Running\s*[—-]\s*Relay/i);
-      assert.doesNotMatch(text, /Recovering next relay turn/i);
-      assert.doesNotMatch(text, /Runtime:\s*Awaiting provider response/i);
-      return text;
-    };
-
     // Recovery-snapshot matrix: exercise durable states directly through the
     // DevTools Extensions storage API. These cases validate what a restarted
     // MV3 worker actually sees, without adding test-only hooks to production code.
@@ -514,6 +536,7 @@ async function main() {
     assert.equal(await evaluate(cdp, providerA.sessionId, 'window.__providerActionCount'), baseActionCountA);
     assert.equal(await evaluate(cdp, providerB.sessionId, 'window.__providerActionCount'), baseActionCountB);
     const missingContinuationUi = await assertPausedDashboard(
+      cdp,
       dashboardMissingContinuation,
       /RUNTIME_CONTINUATION_STATE_INCONSISTENT|committed response is missing its durable next-turn record/i
     );
@@ -574,6 +597,7 @@ async function main() {
     assert.equal(await evaluate(cdp, providerA.sessionId, 'window.__providerActionCount'), baseActionCountA);
     assert.equal(await evaluate(cdp, providerB.sessionId, 'window.__providerActionCount'), baseActionCountB);
     const uncommittedSourceUi = await assertPausedDashboard(
+      cdp,
       dashboardUncommittedSource,
       /next-turn|committed source|recovery|Automatic reconnect failed/i
     );
@@ -822,8 +846,12 @@ async function main() {
   }
 }
 
-main().catch(error => {
-  console.error('chrome-e2e-runtime: FAIL');
-  console.error(error?.stack || error);
-  process.exitCode = 1;
-});
+module.exports = Object.freeze({ assertPausedDashboard });
+
+if (require.main === module) {
+  main().catch(error => {
+    console.error('chrome-e2e-runtime: FAIL');
+    console.error(error?.stack || error);
+    process.exitCode = 1;
+  });
+}
