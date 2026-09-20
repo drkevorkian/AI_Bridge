@@ -15,33 +15,37 @@ for(const rel of [
   const end=source.indexOf("async function handleAction",start);
   assert.ok(start>=0&&end>start,rel+": performSend missing");
   const send=source.slice(start,end);
+  const draftIndex=send.indexOf("setComposerText(composer2,text);");
+  assert.ok(draftIndex>=0,rel+": draft insertion missing");
+
+  // Current ChatGPT can omit the Send control entirely until the draft exists.
+  // No Send lookup is allowed before the trusted composer receives the draft.
+  assert.doesNotMatch(
+    send.slice(0,draftIndex),
+    /resolveTrusted\(config\.send/,
+    rel+": Send authority must not be required before draft insertion"
+  );
 
   assert.ok(
-    source.includes('send: resolveTrusted(config.send) ? "PASS" : "FAIL"'),
-    rel+": health authority must be based on unique trusted Send presence, not empty-composer enabled state"
+    source.includes('(resolveTrusted(config.send) || (resolveTrusted(config.composer) && config.send.length)) ? "PASS" : "FAIL"'),
+    rel+": health must support provider-controlled conditional Send rendering"
   );
-  assert.ok(send.includes("const send1=resolveTrusted(config.send);"),
-    rel+": initial Send authority must allow disabled control");
-  assert.ok(send.includes("const send2=resolveTrusted(config.send);"),
-    rel+": stability check must allow disabled control");
-  assert.doesNotMatch(
-    send.slice(0,send.indexOf("setComposerText(composer2,text);")),
-    /resolveTrusted\(config\.send,\{requireEnabled:true\}\)/,
-    rel+": must not require enabled Send before inserting draft"
-  );
-  assert.ok(send.includes("setComposerText(composer2,text);"),
-    rel+": draft insertion missing");
-  assert.ok(send.includes("for(let i=0;i<12;i++)"),
-    rel+": enabled-state transition must be bounded");
-  assert.ok(send.includes('resolveTrusted(config.send,{requireEnabled:true})'),
-    rel+": Send must become enabled before click");
-  assert.ok(send.includes('reject(command,"DOM_AUTHORITY_NOT_ACTIONABLE")'),
-    rel+": non-actionable Send must fail closed");
+  assert.ok(send.includes('reject(command,"DOM_AUTHORITY_UNAVAILABLE","COMPOSER")'),
+    rel+": unavailable authority must identify composer phase");
+  assert.ok(send.includes("for(let i=0;i<20;i++)"),
+    rel+": conditional Send rendering wait must be bounded");
+  assert.ok(send.includes("resolveTrusted(config.send,{requireEnabled:true})"),
+    rel+": post-draft Send must be uniquely visible and enabled");
+  assert.ok(send.includes('reject(command,"DOM_AUTHORITY_NOT_ACTIONABLE","SEND")'),
+    rel+": absent/non-actionable post-draft Send must fail closed");
+  assert.ok(send.includes("const identityAfterDraft=routeIdentity()"),
+    rel+": conversation identity must be re-proven after typing");
+  assert.ok(send.includes("const sendAgain=resolveTrusted(config.send,{requireEnabled:true})"),
+    rel+": Send authority must be re-proven immediately before click");
   assert.ok(
-    send.indexOf("setComposerText(composer2,text);") <
-    send.indexOf("resolveTrusted(config.send,{requireEnabled:true})"),
-    rel+": enabled Send check must occur after draft insertion"
+    send.indexOf("sendAgain.click();") > send.indexOf("const sendAgain=resolveTrusted(config.send,{requireEnabled:true})"),
+    rel+": click must follow final authority proof"
   );
 }
 
-console.log("dom-authority-disabled-send: PASS");
+console.log("dom-authority-conditional-send: PASS");
