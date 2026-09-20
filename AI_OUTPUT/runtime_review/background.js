@@ -1,4 +1,4 @@
-importScripts("runtime-core.js","update-checkpoint.js");
+importScripts("runtime-core.js","provider-limit-signatures.js","update-checkpoint.js");
 const ALL_SIDES = ["A", "B", "C", "D", "E"];
 const DEFAULT_AGENT_COUNT = 3;
 const MIN_AGENT_COUNT = 1;
@@ -116,12 +116,14 @@ let stateReady = loadState();
 const REVIEW_RUNTIME_VERSION = CONTENT_VERSION;
 const { DispatchLedger, DISPATCH_STATUS } = AIBridgeRuntimeCore.ledger;
 const { RolloverCoordinator } = AIBridgeRuntimeCore.rollover;
+const { ThreadRolloverOrchestrator } = AIBridgeRuntimeCore.rolloverOrchestrator;
 const { validateIncomingResponse, DISPOSITION } = AIBridgeRuntimeCore.responseGate;
 const { ParkedResponseStore, RECORD_STATE } = AIBridgeRuntimeCore.parked;
-const { createConversationAuthority, AUTHORITY_STATES } = AIBridgeRuntimeCore.authority;
+const { createConversationAuthority, revokeAuthority, AUTHORITY_STATES } = AIBridgeRuntimeCore.authority;
 const { UPDATE_PHASE, classifyBoundary, createCheckpoint, transitionCheckpoint, reviseCheckpoint, blocksDispatch, buildMatches } = AIBridgeUpdateCheckpoint;
 const REVIEW_DISPATCH_KEY = "aiBridgeRuntimeDispatchLedger";
 const REVIEW_AUTH_EPOCH_KEY = "aiBridgeRuntimeAuthorityEpochs";
+const REVIEW_ROLLOVER_KEY = "aiBridgeRuntimeThreadRollover";
 const PROVIDER_EVENT_POLICY = Object.freeze({
   MESSAGE_DELIVERY_TIMEOUT: Object.freeze({ category:"DELIVERY", severity:"RECOVERABLE" }),
   CONNECTION_INTERRUPTED: Object.freeze({ category:"CONNECTION", severity:"RECOVERABLE" }),
@@ -134,6 +136,7 @@ const PROVIDER_EVENT_POLICY = Object.freeze({
 });
 let reviewLedger = new DispatchLedger();
 let reviewRollover = new RolloverCoordinator();
+let reviewRolloverContexts = Object.create(null);
 let reviewAuthorityEpochs = {};
 let reviewRecoveryPauseReason = "";
 const reviewChromeParkedAdapter = Object.freeze({
@@ -145,6 +148,77 @@ let reviewRuntimeReady = reviewInitializeDurableRuntime();
 const reviewAuthorityBySide = new Map();
 const reviewPendingRegistrations = new Map();
 
+
+function reviewClassifyRolloverIdentityTransition(previousIdentity, currentIdentity) {
+  let previous, current;
+  try {
+    previous = reviewSanitizeIdentity(previousIdentity);
+    current = reviewSanitizeIdentity(currentIdentity);
+  } catch (_) {
+    return "INVALID_IDENTITY_TRANSITION";
+  }
+  if (previous.provider !== current.provider) return "PROVIDER_MISMATCH";
+  if (reviewSameIdentity(previous, current)) return "SAME_IDENTITY";
+  if (current.kind === "surface" && current.provisional === true && current.writable === true) {
+    return "NEW_CHAT_SURFACE";
+  }
+  if (
+    current.kind === "conversation" &&
+    current.provisional === false &&
+    current.writable === true &&
+    current.threadKey
+  ) {
+    return "NEW_CONVERSATION_CONFIRMED";
+  }
+  return "INVALID_IDENTITY_TRANSITION";
+}
+
+function reviewCreateRolloverOrchestrator() {
+  return new ThreadRolloverOrchestrator({
+    coordinator: reviewRollover,
+    classifyLimit: AIBridgeProviderLimitSignatures.classifyThreadLimit,
+    classifyIdentityTransition: reviewClassifyRolloverIdentityTransition
+  });
+}
+
+let reviewRolloverOrchestrator = reviewCreateRolloverOrchestrator();
+
+function reviewCloneRolloverContexts(raw) {
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) return Object.create(null);
+  const out = Object.create(null);
+  for (const side of ALL_SIDES) {
+    const value = raw[side];
+    if (!value || typeof value !== "object" || Array.isArray(value)) continue;
+    out[side] = JSON.parse(JSON.stringify(value));
+  }
+  return out;
+}
+
+function reviewActiveRolloverSummary() {
+  const tx = reviewRollover.snapshot().find(item => !["COMPLETE", "FAILED"].includes(item.phase));
+  if (!tx) return null;
+  return Object.freeze({
+    active: true,
+    rolloverId: tx.rolloverId,
+    side: tx.side,
+    provider: tx.provider,
+    phase: tx.phase,
+    previousTitle: tx.continuityPayload?.previousTitle || null,
+    nextTitle: tx.continuityPayload?.nextTitle || null,
+    startedAt: tx.startedAt,
+    updatedAt: tx.updatedAt
+  });
+}
+
+async function reviewPersistRollover() {
+  const payload = {
+    schema: 1,
+    transactions: reviewRollover.snapshot(),
+    contexts: reviewCloneRolloverContexts(reviewRolloverContexts)
+  };
+  await chrome.storage.local.set({ [REVIEW_ROLLOVER_KEY]: payload });
+  return payload;
+}
 
 async function reviewPersistLedger() {
   await chrome.storage.local.set({ [REVIEW_DISPATCH_KEY]: { records: reviewLedger.snapshot() } });
@@ -158,10 +232,13 @@ async function reviewResetSessionDurability() {
   // so stale unresolved dispatches/parked responses must not cross this boundary.
   await chrome.storage.local.set({
     [REVIEW_DISPATCH_KEY]: { records: [] },
+    [REVIEW_ROLLOVER_KEY]: { schema: 1, transactions: [], contexts: {} },
     aiBridgeRuntimeParkedResponses: { records: [] }
   });
   reviewLedger = new DispatchLedger();
   reviewRollover = new RolloverCoordinator();
+  reviewRolloverContexts = Object.create(null);
+  reviewRolloverOrchestrator = reviewCreateRolloverOrchestrator();
   reviewParkedStore = new ParkedResponseStore({
     store: reviewChromeParkedAdapter,
     key: "aiBridgeRuntimeParkedResponses"
@@ -170,12 +247,25 @@ async function reviewResetSessionDurability() {
   reviewRecoveryPauseReason = "";
 }
 async function reviewInitializeDurableRuntime() {
-  const stored = await chrome.storage.local.get([REVIEW_DISPATCH_KEY, REVIEW_AUTH_EPOCH_KEY]);
+  const stored = await chrome.storage.local.get([REVIEW_DISPATCH_KEY, REVIEW_AUTH_EPOCH_KEY, REVIEW_ROLLOVER_KEY]);
   const records = Array.isArray(stored?.[REVIEW_DISPATCH_KEY]?.records) ? stored[REVIEW_DISPATCH_KEY].records : [];
   reviewLedger = new DispatchLedger(records);
   reviewAuthorityEpochs = stored?.[REVIEW_AUTH_EPOCH_KEY] && typeof stored[REVIEW_AUTH_EPOCH_KEY] === "object"
     ? stored[REVIEW_AUTH_EPOCH_KEY] : {};
-  reviewRollover = new RolloverCoordinator();
+
+  const persistedRollover = stored?.[REVIEW_ROLLOVER_KEY];
+  try {
+    const transactions = Array.isArray(persistedRollover?.transactions) ? persistedRollover.transactions : [];
+    reviewRollover = new RolloverCoordinator(transactions);
+    reviewRolloverContexts = reviewCloneRolloverContexts(persistedRollover?.contexts);
+  } catch (error) {
+    reviewRollover = new RolloverCoordinator();
+    reviewRolloverContexts = Object.create(null);
+    reviewRecoveryPauseReason =
+      "Persisted thread-rollover state is malformed. Automatic rollover is disabled until the session is safely restarted: " +
+      (error?.message || error);
+  }
+  reviewRolloverOrchestrator = reviewCreateRolloverOrchestrator();
   reviewParkedStore = new ParkedResponseStore({ store: reviewChromeParkedAdapter, key: "aiBridgeRuntimeParkedResponses" });
   await reviewParkedStore.init();
 
@@ -416,7 +506,7 @@ function reviewUpdateBoundary(){
     ledgerRecords:reviewLedger.snapshot(),
     parkedRecords:reviewParkedStore.snapshot().records,
     providerRecovery:state.providerRecovery,
-    threadRollover:state.threadRollover,
+    threadRollover:reviewActiveRolloverSummary(),
     nextTurnPending:state.nextTurnPending,
     sessionActive:state.sessionActive,
     running:state.running
@@ -1786,6 +1876,7 @@ function appendLog(entry) {
 function clientStateSnapshot({ includeSources = false, afterSeq = null, omitTranscript = false } = {}) {
   const snapshot = {
     ...state,
+    threadRollover: reviewActiveRolloverSummary(),
     history: {
       jobs: history.jobs.map(item => ({ ...item })),
       commands: history.commands.map(item => ({ ...item }))
