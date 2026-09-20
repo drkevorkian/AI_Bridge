@@ -550,7 +550,7 @@ function clearTranscript() {
 
 function transcriptCard(entry) {
   const card = document.createElement("article");
-  const sideClass = entry.type === "human" ? "human" : String(entry.side || "").toLowerCase();
+  const sideClass = entry.type === "human" ? "human" : (entry.type === "provider-event" ? "provider-event" : String(entry.side || "").toLowerCase());
   card.className = `transcript-card side-${sideClass}`;
   card.dataset.seq = String(entry.seq);
 
@@ -561,6 +561,8 @@ function transcriptCard(entry) {
   title.className = "transcript-title";
   if (entry.type === "human") {
     title.textContent = entry.interjection ? "Human controller · interjection" : "Human controller";
+  } else if (entry.type === "provider-event") {
+    title.textContent = `Provider event · AI ${entry.side || "?"} · ${String(entry.provider || "provider").toUpperCase()}`;
   } else {
     title.textContent = `AI ${entry.side || "?"} · ${entry.label || "AI"}`;
   }
@@ -571,7 +573,8 @@ function transcriptCard(entry) {
   const phase = entry.workPhase && !["relay", "collaborate"].includes(entry.workPhase) ? ` · ${String(entry.workPhase).toUpperCase()}` : "";
   const elapsed = Number.isFinite(Number(entry.roundDurationMs)) ? ` · ${formatRoundDuration(Number(entry.roundDurationMs))}` : "";
   const round = Number.isFinite(Number(entry.roundNumber)) && Number(entry.roundNumber) > 0 ? ` · R${Number(entry.roundNumber)}` : "";
-  meta.textContent = `#${entry.seq}${phase}${round}${elapsed}${when ? ` · ${when}` : ""}`;
+  const providerCode = entry.type === "provider-event" && entry.eventCode ? ` · ${entry.eventCode}` : "";
+  meta.textContent = `#${entry.seq}${providerCode}${phase}${round}${elapsed}${when ? ` · ${when}` : ""}`;
 
   const body = document.createElement("div");
   body.className = "transcript-body";
@@ -603,7 +606,7 @@ function renderTranscript(s) {
     clearTranscript();
   }
 
-  const fresh = entries.filter(e => Number(e.seq) > renderedSeq && (e.type === "response" || e.type === "human"));
+  const fresh = entries.filter(e => Number(e.seq) > renderedSeq && (e.type === "response" || e.type === "human" || e.type === "provider-event"));
   if (!fresh.length) return;
 
   $("emptyTranscript").classList.add("hidden");

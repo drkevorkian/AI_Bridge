@@ -25,6 +25,15 @@ const MAX_ARTIFACT_PREVIEW_CHARS = 220000;
 const MAX_ARTIFACT_CONTEXT_CHARS = 260000;
 const MAX_ZIP_TEXT_ENTRIES = 80;
 const MAX_ZIP_ENTRY_UNCOMPRESSED_BYTES = 2 * 1024 * 1024;
+const MAX_PROVIDER_EVENTS = 100;
+const PROVIDER_EVENT_POLICY = Object.freeze({
+  MESSAGE_DELIVERY_TIMEOUT: Object.freeze({ severity: "ERROR", ambiguous: true }),
+  MESSAGE_SEND_FAILED: Object.freeze({ severity: "ERROR", ambiguous: true }),
+  RESPONSE_GENERATION_ERROR: Object.freeze({ severity: "ERROR", ambiguous: true }),
+  NETWORK_ERROR: Object.freeze({ severity: "ERROR", ambiguous: true }),
+  RATE_LIMIT: Object.freeze({ severity: "WARN", ambiguous: false }),
+  SERVICE_ERROR: Object.freeze({ severity: "ERROR", ambiguous: false })
+});
 
 const DEFAULT_HISTORY = {
   version: HISTORY_VERSION,
@@ -96,6 +105,7 @@ const DEFAULT_STATE = {
 
   transcript: [],
   nextSeq: 1,
+  providerEvents: [],
   log: []
 };
 
@@ -689,6 +699,7 @@ function cloneDefaultState() {
     runtimePhase: "IDLE",
     nextTurnPending: null,
     transcript: [],
+    providerEvents: [],
     log: []
   };
 }
@@ -1451,6 +1462,7 @@ async function loadState() {
       pendingMainInterjections: Array.isArray(bridgeState.pendingMainInterjections) ? bridgeState.pendingMainInterjections : [],
       suppressedHumanRequests: migrateSuppressedHumanRequests(bridgeState),
       transcript: Array.isArray(bridgeState.transcript) ? bridgeState.transcript : [],
+      providerEvents: Array.isArray(bridgeState.providerEvents) ? bridgeState.providerEvents.slice(-MAX_PROVIDER_EVENTS) : [],
       log: Array.isArray(bridgeState.log) ? bridgeState.log : []
     };
     state.agentCount = setActiveAgentCount(state.agentCount);
@@ -2477,6 +2489,77 @@ async function resetSelectedChats(msg, sides = SIDES, { allowActive = false } = 
   return chosen;
 }
 
+function normalizeProviderEventText(value){
+  return String(value||"").replace(/\s+/g," ").trim().slice(0,500);
+}
+
+async function recordProviderEvent(msg,sender){
+  await stateReady;
+  await reviewRuntimeReady;
+  if(!sender?.tab?.id) return {ok:false,ignored:true,reason:"PROVIDER_EVENT_REQUIRES_TAB"};
+  const side=sideForTab(sender.tab.id);
+  if(!side) return {ok:false,ignored:true,reason:"SIDE_NOT_BOUND"};
+  const provider=reviewProviderFromUrl(sender.url||sender.tab?.url);
+  if(!provider || provider!==String(msg.provider||"").toLowerCase()) return {ok:false,ignored:true,reason:"PROVIDER_MISMATCH"};
+  const code=String(msg.code||"").trim().toUpperCase();
+  const policy=PROVIDER_EVENT_POLICY[code];
+  if(!policy) return {ok:false,ignored:true,reason:"UNKNOWN_PROVIDER_EVENT"};
+  const text=normalizeProviderEventText(msg.text);
+  if(!text) return {ok:false,ignored:true,reason:"EMPTY_PROVIDER_EVENT"};
+
+  const dispatchId=String(msg.dispatchId||"").trim();
+  const event={
+    id:"provider-event-"+Date.now()+"-"+side+"-"+state.nextSeq,
+    time:Number.isFinite(Number(msg.observedAt))?Number(msg.observedAt):Date.now(),
+    side,
+    provider,
+    code,
+    severity:policy.severity,
+    text,
+    dispatchId:dispatchId||null
+  };
+  state.providerEvents=Array.isArray(state.providerEvents)?state.providerEvents:[];
+  state.providerEvents.push(event);
+  if(state.providerEvents.length>MAX_PROVIDER_EVENTS) state.providerEvents.splice(0,state.providerEvents.length-MAX_PROVIDER_EVENTS);
+
+  if(state.sessionActive){
+    recordTranscript("provider-event",{
+      side,
+      text,
+      provider,
+      eventCode:code,
+      severity:policy.severity,
+      dispatchId:dispatchId||null
+    });
+  }
+  appendLog({time:event.time,type:"provider-event",side,text:"AI "+side+" "+provider+" event "+code+": "+text,dispatchId:dispatchId||null});
+
+  let ambiguous=false;
+  if(dispatchId){
+    const dispatch=reviewLedger.get(dispatchId);
+    if(
+      dispatch &&
+      dispatch.side===side &&
+      Number(dispatch.tabId)===Number(sender.tab.id) &&
+      [DISPATCH_STATUS.DISPATCHING,DISPATCH_STATUS.ACCEPTED,DISPATCH_STATUS.AWAITING_RESPONSE].includes(dispatch.status)
+    ){
+      await reviewTransitionDispatch(dispatchId,DISPATCH_STATUS.DELIVERY_AMBIGUOUS,{failureReason:"PROVIDER_EVENT_"+code});
+      ambiguous=true;
+    }else if(dispatch?.status===DISPATCH_STATUS.DELIVERY_AMBIGUOUS){
+      ambiguous=true;
+    }
+  }
+
+  if(state.sessionActive && ambiguous){
+    const reason="AI "+side+" provider reported "+code+": "+text+" Automatic replay is blocked because the provider-side outcome is ambiguous.";
+    await pauseBridge(reason);
+    return {ok:true,recorded:true,paused:true,ambiguous:true,event};
+  }
+
+  await saveState();
+  return {ok:true,recorded:true,paused:false,ambiguous:false,event};
+}
+
 async function pauseBridge(reason = "Paused by user") {
   if (!state.sessionActive) return;
   state.running = false;
@@ -2765,6 +2848,12 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
     if (msg.type === "AI_BRIDGE_DOCUMENT_ROUTE_CHANGED") {
       if (sender?.tab?.id) reviewInvalidateAuthorityForTab(sender.tab.id);
       sendResponse({ ok: true });
+      return;
+    }
+
+    if (msg.type === "AI_BRIDGE_PROVIDER_EVENT") {
+      const result = await recordProviderEvent(msg, sender);
+      sendResponse(result);
       return;
     }
 
