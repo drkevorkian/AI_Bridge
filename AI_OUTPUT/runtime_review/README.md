@@ -1,4 +1,4 @@
-# AI Bridge runtime_review
+# AI Bridge — Runtime Review Build 1.19.1.04-AI-A
 
 This directory is a complete unpacked Manifest V3 review build staged under AI_OUTPUT.
 
@@ -147,11 +147,33 @@ Operational-event DOM probes are restricted to visible alert/ARIA-live system su
 
 AI_OUTPUT is the development/playground surface. The corresponding human-test package is mirrored into AI_INPUT after playground validation.
 
-Current playground version: **v1.19.0**.
+Current playground version: **v1.19.1**.
 
 Layout behavior:
 - Classic: Runtime + Team left, transcript center, Human Interjection first on the right followed by remaining controls.
-- Studio: standard two-pane workspace with all controls on the left.
-- Focus: transcript-first layout with only brand/Settings and Runtime in the compact left rail.
 
 Classic is the default when no layout preference is stored. Extension-page navigation between Dashboard and Settings is same-tab navigation. Packaged HTML must not contain literal `\n` text nodes.
+
+
+
+
+
+## Build identification
+
+Chrome extension version: **1.19.1**
+
+AI Bridge build/subversion: **1.19.1.04-AI-A**
+
+The numeric Chrome version stays standards-compatible. The build/subversion string increments independently so human testing can confirm exactly which AI-produced build is loaded.
+
+
+## Classic-only workspace
+
+Classic is the sole supported workspace composition for this test line. Older stored Studio or Focus selections are automatically migrated to Classic. Color themes remain available independently.
+
+## Build provenance
+
+- Chrome extension version: **1.19.1**
+- AI Bridge build/subversion: **1.19.1.04-AI-A**
+- Manifest is the runtime source of truth for the Popup, Dashboard, and Settings build labels.
+- Classic is the sole workspace composition; color themes remain independent.
