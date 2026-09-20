@@ -10,7 +10,7 @@ const GOOGLE_TOKEN_KEY = "aiBridgeGoogleAccess";
 const SYNC_KEY = "aiBridgePortableSettings";
 const DRIVE_NAME = "AI Bridge Settings.json";
 const THEMES = new Set(["blizzard","ghostwhite","midnight","slate","light","solarized","ocean","terminal"]);
-const LAYOUTS = new Set(["studio","classic","focus"]);
+const LAYOUTS = new Set(["classic"]);
 const PROVIDERS = [
   { name:"ChatGPT", re:/^https:\/\/(chatgpt\.com|chat\.openai\.com)\// },
   { name:"Grok", re:/^https:\/\/grok\.com\// },
@@ -26,7 +26,7 @@ function newer(a,b){const A=versionParts(a),B=versionParts(b);for(let i=0;i<Math
 function timeout(promise,ms=2500){return Promise.race([promise,new Promise((_,reject)=>setTimeout(()=>reject(new Error("Timed out")),ms))])}
 function applyTheme(theme){const chosen=THEMES.has(theme)?theme:"blizzard";document.documentElement.dataset.theme=chosen;$("settingsTheme").value=chosen;return chosen}
 async function setTheme(theme){const chosen=applyTheme(theme);await chrome.storage.local.set({[THEME_KEY]:chosen})}
-async function setLayout(layout){const chosen=LAYOUTS.has(layout)?layout:"studio";$("settingsLayout").value=chosen;await chrome.storage.local.set({[LAYOUT_KEY]:chosen})}
+async function setLayout(){await chrome.storage.local.set({[LAYOUT_KEY]:"classic"})}
 
 async function portableSettings(){
   const local=await chrome.storage.local.get([THEME_KEY,LAYOUT_KEY,AGENT_COUNT_KEY,PANE_WIDTH_KEY,"bridgeState"]);
@@ -35,7 +35,7 @@ async function portableSettings(){
   return {
     schema:1, savedAt:Date.now(),
     theme:THEMES.has(local[THEME_KEY])?local[THEME_KEY]:"blizzard",
-    layout:LAYOUTS.has(local[LAYOUT_KEY])?local[LAYOUT_KEY]:"studio",
+    layout:"classic",
     paneWidth:Math.min(70,Math.max(24,Number(local[PANE_WIDTH_KEY])||36)),
     agentCount:Number(local[AGENT_COUNT_KEY]||s.agentCount||3),
     teamRules:String(s.teamRules||"").slice(0,12000),
@@ -49,7 +49,7 @@ async function applyPortableSettings(p){
   if(!p||p.schema!==1) throw new Error("Unsupported settings payload.");
   const writes={};
   if(THEMES.has(p.theme)) writes[THEME_KEY]=p.theme;
-  if(LAYOUTS.has(p.layout)) writes[LAYOUT_KEY]=p.layout;
+  writes[LAYOUT_KEY]="classic";
   if(Number.isFinite(Number(p.paneWidth))) writes[PANE_WIDTH_KEY]=Math.min(70,Math.max(24,Number(p.paneWidth)));
   if(Number.isInteger(Number(p.agentCount))&&Number(p.agentCount)>=1&&Number(p.agentCount)<=5) writes[AGENT_COUNT_KEY]=Number(p.agentCount);
   await chrome.storage.local.set(writes);
@@ -65,7 +65,7 @@ async function applyPortableSettings(p){
     await chrome.storage.local.set({bridgeState:next});
   }
   applyTheme(p.theme);
-  $("settingsLayout").value=LAYOUTS.has(p.layout)?p.layout:"studio";
+  await setLayout();
   if(Number.isFinite(Number(p.paneWidth))){
     const width=Math.min(70,Math.max(24,Number(p.paneWidth)));
     $("paneWidth").value=String(width); $("paneWidthValue").textContent=Math.round(width)+"%";
@@ -123,19 +123,30 @@ async function drivePull(){
 }
 
 async function health(){
-  const tabs=await chrome.tabs.query({});const supported=tabs.filter(t=>PROVIDERS.some(p=>p.re.test(t.url||"")));
-  $("healthList").textContent="";let ok=0;
+  const tabs=await chrome.tabs.query({});
+  const supported=tabs.filter(t=>PROVIDERS.some(p=>p.re.test(t.url||"")));
+  $("healthList").textContent="";
+  let verified=0;
   for(const tab of supported){
     const provider=PROVIDERS.find(p=>p.re.test(tab.url||""))?.name||"AI";
     const row=document.createElement("div");row.className="health-row";
     const p=document.createElement("strong");p.textContent=provider;
     const title=document.createElement("span");title.textContent=tab.title||tab.url||("Tab "+tab.id);
     const state=document.createElement("span");state.className="health-state";
-    try{const res=await timeout(chrome.tabs.sendMessage(tab.id,{type:"AI_BRIDGE_PING"}),1800);if(res?.ok){state.textContent="Ready";state.classList.add("ok");ok++;}else throw new Error()}catch(_){state.textContent="No bridge";state.classList.add("bad")}
+    try{
+      const res=await timeout(chrome.runtime.sendMessage({type:"AI_BRIDGE_PROVIDER_HEALTH",tabId:tab.id}),1800);
+      if(!res?.ok) throw new Error(res?.error||"Health check failed");
+      const connected=res.connectionStatus==="CONNECTED";
+      const authority=res.actionAuthorityStatus==="DOCUMENT_AUTHORITY_VERIFIED";
+      state.textContent=connected ? ("Connected · "+(authority?"Verified":"Not verified")) : "Disconnected";
+      state.classList.add(authority?"ok":"bad");
+      if(authority) verified++;
+    }catch(_){state.textContent="Disconnected";state.classList.add("bad");}
     row.append(p,title,state);$("healthList").append(row);
   }
-  $("healthSummary").textContent=supported.length?ok+"/"+supported.length+" ready":"No supported AI tabs open";
+  $("healthSummary").textContent=supported.length?verified+"/"+supported.length+" verified":"No supported AI tabs open";
 }
+
 async function checkUpdates(){
   $("updateStatus").textContent="Checking GitHub…";
   const res=await fetch("https://raw.githubusercontent.com/drkevorkian/AI_Bridge/main/manifest.json",{cache:"no-store"});if(!res.ok)throw new Error("GitHub manifest check failed.");
@@ -145,9 +156,9 @@ async function checkUpdates(){
   else{$("updateStatus").textContent="Up to date: v"+current;$("downloadUpdate").disabled=true;}
 }
 async function init(){
-  const manifest=chrome.runtime.getManifest();$("installedVersion").textContent="v"+manifest.version;$("updateVersion").textContent="Installed v"+manifest.version;
+  const manifest=chrome.runtime.getManifest();$("installedVersion").textContent="Version "+manifest.version;$("installedBuild").textContent="Build "+(manifest.version_name||manifest.version);$("updateVersion").textContent="Installed v"+manifest.version+" · "+(manifest.version_name||manifest.version);
   const local=await chrome.storage.local.get([THEME_KEY,LAYOUT_KEY,PANE_WIDTH_KEY,AUTO_UPDATE_KEY,KEEP_AWAKE_KEY,GOOGLE_CLIENT_KEY]);
-  applyTheme(local[THEME_KEY]);$("settingsLayout").value=LAYOUTS.has(local[LAYOUT_KEY])?local[LAYOUT_KEY]:"studio";
+  applyTheme(local[THEME_KEY]);await setLayout();
   const paneWidth=Math.min(70,Math.max(24,Number(local[PANE_WIDTH_KEY])||36));$("paneWidth").value=String(paneWidth);$("paneWidthValue").textContent=Math.round(paneWidth)+"%";
   $("autoCheckUpdates").checked=local[AUTO_UPDATE_KEY]===true;$("keepAwake").checked=local[KEEP_AWAKE_KEY]===true;$("powerStatus").textContent=local[KEEP_AWAKE_KEY]===true?"System awake":"Released";$("googleClientId").value=local[GOOGLE_CLIENT_KEY]||"";
   $("extensionId").textContent=chrome.runtime.id;$("redirectUri").textContent=chrome.identity.getRedirectURL("google");
@@ -156,10 +167,10 @@ async function init(){
 function guarded(fn,notice){return async()=>{try{await fn()}catch(e){show(notice,e.message||String(e),true)}}}
 
 $("settingsTheme").addEventListener("change",e=>setTheme(e.target.value));
-$("settingsLayout").addEventListener("change",e=>setLayout(e.target.value));
 $("paneWidth").addEventListener("input",e=>{$("paneWidthValue").textContent=e.target.value+"%";});
 $("paneWidth").addEventListener("change",async e=>{const width=Math.min(70,Math.max(24,Number(e.target.value)||36));await chrome.storage.local.set({[PANE_WIDTH_KEY]:width});});
-$("openDashboard").addEventListener("click",()=>chrome.tabs.create({url:chrome.runtime.getURL("dashboard.html")}));
+function navigateToExtensionPage(page){const url=chrome.runtime.getURL(page);if(window.location.href!==url)window.location.assign(url)}
+$("openDashboard").addEventListener("click",()=>navigateToExtensionPage("dashboard.html"));
 $("syncPush").addEventListener("click",guarded(syncPush,"syncNotice"));$("syncPull").addEventListener("click",guarded(syncPull,"syncNotice"));
 $("saveGoogleClientId").addEventListener("click",guarded(async()=>{const v=$("googleClientId").value.trim();if(v&&!/^[A-Za-z0-9._-]+\.apps\.googleusercontent\.com$/.test(v))throw new Error("That does not look like a Google OAuth client ID.");await chrome.storage.local.set({[GOOGLE_CLIENT_KEY]:v});show("googleNotice","OAuth client ID saved locally.");},"googleNotice"));
 $("googleLink").addEventListener("click",guarded(linkGoogle,"googleNotice"));$("googleUnlink").addEventListener("click",guarded(unlinkGoogle,"googleNotice"));$("drivePush").addEventListener("click",guarded(drivePush,"googleNotice"));$("drivePull").addEventListener("click",guarded(drivePull,"googleNotice"));
