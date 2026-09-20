@@ -23,6 +23,7 @@ const tests=[
   'round41-thread-limit-continuity.mjs',
   'rollover-final-response-ordering.mjs',
   'round46-radius-normalization.mjs',
+  'round47-automatic-thread-rollover-runtime.mjs',
   'update-system-atomic.mjs',
   'round42-content-runtime-lifecycle.mjs',
   'round43-next-turn-adoption.mjs',
