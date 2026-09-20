@@ -23,5 +23,7 @@ assert.ok(block.includes("const pendingAtCanonicalTarget = String(tab?.pendingUr
 assert.ok(block.includes("waitForTabReady(tabId, 20000, targetUrl)"));
 assert.ok(block.indexOf("pendingAtCanonicalTarget")<block.indexOf("waitForTabReady(tabId, 20000, targetUrl)"));
 assert.ok(block.includes('if (String(tab?.url || "") !== targetUrl) throw new Error("ROLLOVER_FRESH_CHAT_CANONICAL_URL_MISMATCH");'));
-assert.equal(manifest.version_name,"1.19.1.19-AI-B");
+assert.equal(manifest.name,"AI Bridge Review");
+assert.equal(manifest.version,"1.19.1");
+assert.ok(Array.isArray(manifest.permissions)&&manifest.permissions.includes("tabs"),"tabs permission is required for pendingUrl commit-barrier verification");
 console.log("round56-pending-navigation-commit-barrier: PASS");
