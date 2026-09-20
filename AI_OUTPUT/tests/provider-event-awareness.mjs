@@ -18,10 +18,13 @@ for(const token of [
   'closest("[data-message-author-role]")'
 ]) assert.ok(content.includes(token),'content missing '+token);
 
-assert.ok(/MESSAGE_DELIVERY_TIMEOUT[\s\S]{0,180}ambiguous:\s*true/.test(background),'timeout must be fail-closed/ambiguous');
-assert.ok(background.includes('PROVIDER_EVENT_MESSAGE_DELIVERY_TIMEOUT') || background.includes('"PROVIDER_EVENT_"+code'),'ledger failure reason missing');
-assert.ok(background.includes('DISPATCH_STATUS.DELIVERY_AMBIGUOUS'),'provider event must be able to mark dispatch ambiguous');
+assert.ok(/MESSAGE_DELIVERY_TIMEOUT[\s\S]{0,180}ambiguous:\s*true/.test(background),'timeout policy must be fail-closed');
+assert.ok(background.includes('runtimePhase="PROVIDER_RECOVERY_REQUIRED"'),'provider event must enter recovery-required state');
+assert.ok(background.includes('WAITING_SAME_DISPATCH'),'Resume must wait on the original dispatch instead of resending');
+assert.ok(background.includes('PROVIDER_RESPONSE_RECOVERED'),'late provider response must be committed without auto-advancing');
+assert.doesNotMatch(background,/PROVIDER_EVENT_"?\+?code[\s\S]{0,240}DELIVERY_AMBIGUOUS/,'provider event must not destroy response-capable dispatch state');
 assert.ok(background.includes('recordTranscript("provider-event"'),'provider event must be visible without becoming an AI response');
+assert.ok(background.includes('providerRecovery'),'provider recovery state missing');
 assert.ok(background.includes('MAX_PROVIDER_EVENTS'),'provider event history must be bounded');
 assert.ok(dashboard.includes('entry.type === "provider-event"'),'dashboard provider-event rendering missing');
 assert.ok(dashboard.includes('Provider event · AI'),'provider event title missing');

@@ -50,6 +50,7 @@ const DEFAULT_STATE = {
   pauseReason: "",
   runtimePhase: "IDLE",
   nextTurnPending: null,
+  providerRecovery: null,
 
   tabA: null,
   tabB: null,
@@ -459,7 +460,12 @@ async function reviewProcessIncomingEnvelope(envelope, { fromParked = false } = 
   }
 
   try {
-    const shouldRelay = state.running;
+    const providerRecoveryMatch=Boolean(
+      state.providerRecovery?.active &&
+      String(state.providerRecovery.dispatchId||"")===String(envelope.dispatchId) &&
+      state.providerRecovery.side===envelope.side
+    );
+    const shouldRelay = state.running || providerRecoveryMatch;
     const stateResult = await handleCompletedResponse(envelope.side, envelope.text, {
       relay: false,
       artifacts: envelope.artifacts,
@@ -500,6 +506,15 @@ async function reviewProcessIncomingEnvelope(envelope, { fromParked = false } = 
 
     await reviewParkedStore.finalize(envelope.dispatchId);
 
+    if (pending && providerRecoveryMatch) {
+      state.providerRecovery={...state.providerRecovery,active:false,resolvedAt:Date.now(),responseCommitted:true};
+      state.running=false;
+      state.paused=true;
+      state.runtimePhase="PROVIDER_RESPONSE_RECOVERED";
+      state.pauseReason="Provider response recovered for AI "+envelope.side+". The response is committed and the next relay turn is durable. Press Resume to continue.";
+      await saveState();
+      return {ok:true,providerRecovered:true,paused:true,pending:true};
+    }
     if (pending) return reviewContinueAfterCommittedResponse(envelope.side);
     state.runtimePhase = state.sessionActive ? (state.awaitingHuman ? "PAUSED" : "AWAITING_PROVIDER_RESPONSE") : "IDLE";
     await saveState();
@@ -698,6 +713,7 @@ function cloneDefaultState() {
     suppressedHumanRequests: [],
     runtimePhase: "IDLE",
     nextTurnPending: null,
+    providerRecovery: null,
     transcript: [],
     providerEvents: [],
     log: []
@@ -1471,6 +1487,7 @@ async function loadState() {
     if (state.currentSide && !SIDES.includes(state.currentSide)) state.currentSide = state.startSide;
     state.runtimePhase = String(state.runtimePhase || "IDLE");
     state.nextTurnPending = state.nextTurnPending && typeof state.nextTurnPending === "object" ? state.nextTurnPending : null;
+    state.providerRecovery = state.providerRecovery && typeof state.providerRecovery === "object" ? state.providerRecovery : null;
     state.workMode = normalizeWorkMode(state.workMode);
     if (!isBatchWorkMode(state.workMode)) {
       state.workPhase = state.workMode === "collaborate" ? "collaborate" : (state.workMode === "mesh" ? "mesh" : "relay");
@@ -2534,30 +2551,39 @@ async function recordProviderEvent(msg,sender){
   }
   appendLog({time:event.time,type:"provider-event",side,text:"AI "+side+" "+provider+" event "+code+": "+text,dispatchId:dispatchId||null});
 
-  let ambiguous=false;
+  let recoveryRequired=false;
   if(dispatchId){
     const dispatch=reviewLedger.get(dispatchId);
-    if(
+    recoveryRequired=Boolean(
       dispatch &&
       dispatch.side===side &&
       Number(dispatch.tabId)===Number(sender.tab.id) &&
       [DISPATCH_STATUS.DISPATCHING,DISPATCH_STATUS.ACCEPTED,DISPATCH_STATUS.AWAITING_RESPONSE].includes(dispatch.status)
-    ){
-      await reviewTransitionDispatch(dispatchId,DISPATCH_STATUS.DELIVERY_AMBIGUOUS,{failureReason:"PROVIDER_EVENT_"+code});
-      ambiguous=true;
-    }else if(dispatch?.status===DISPATCH_STATUS.DELIVERY_AMBIGUOUS){
-      ambiguous=true;
-    }
+    );
   }
 
-  if(state.sessionActive && ambiguous){
-    const reason="AI "+side+" provider reported "+code+": "+text+" Automatic replay is blocked because the provider-side outcome is ambiguous.";
-    await pauseBridge(reason);
-    return {ok:true,recorded:true,paused:true,ambiguous:true,event};
+  if(state.sessionActive && recoveryRequired){
+    state.providerRecovery={
+      active:true,
+      side,
+      provider,
+      code,
+      severity:policy.severity,
+      text,
+      dispatchId,
+      observedAt:event.time
+    };
+    state.running=false;
+    state.paused=true;
+    state.runtimePhase="PROVIDER_RECOVERY_REQUIRED";
+    state.pauseReason="AI "+side+" provider reported "+code+": "+text+" AI Bridge did not resend the prompt automatically; provider recovery is required.";
+    appendLog({time:Date.now(),type:"provider-recovery",side,text:state.pauseReason,dispatchId});
+    await saveState();
+    return {ok:true,recorded:true,paused:true,recoveryRequired:true,event};
   }
 
   await saveState();
-  return {ok:true,recorded:true,paused:false,ambiguous:false,event};
+  return {ok:true,recorded:true,paused:false,recoveryRequired:false,event};
 }
 
 async function pauseBridge(reason = "Paused by user") {
@@ -2578,6 +2604,7 @@ async function endBridge(reason = "Stopped") {
   state.currentSide = null;
   state.runtimePhase = "IDLE";
   state.nextTurnPending = null;
+  state.providerRecovery = null;
   state.awaitingHuman = false;
   state.pendingHuman = null;
   state.pendingHumanQueue = [];
@@ -3136,11 +3163,34 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
       }
 
       await bindTabsFromMessage(msg);
+
+      if (state.providerRecovery?.active) {
+        const recoveryDispatch=reviewLedger.get(String(state.providerRecovery.dispatchId||""));
+        if (recoveryDispatch?.status===DISPATCH_STATUS.AWAITING_RESPONSE) {
+          state.providerRecovery={...state.providerRecovery,active:false,resumedAt:Date.now()};
+          state.running=true;
+          state.paused=false;
+          state.pauseReason="";
+          state.runtimePhase="AWAITING_PROVIDER_RESPONSE";
+          await clearAttention();
+          await saveState();
+          sendResponse({ok:true,providerRecovery:"WAITING_SAME_DISPATCH",dispatchId:recoveryDispatch.dispatchId});
+          return;
+        }
+        throw new Error("Provider recovery cannot resume because the original dispatch is no longer awaiting a response.");
+      }
+
       state.running = true;
       state.paused = false;
       state.pauseReason = "";
       await clearAttention();
       await saveState();
+
+      if (state.nextTurnPending) {
+        const recovered=await reviewRecoverNextTurnPending();
+        sendResponse({ok:true,recoveredNextTurn:true,...recovered});
+        return;
+      }
 
       try {
         if (isBatchWorkMode()) {
