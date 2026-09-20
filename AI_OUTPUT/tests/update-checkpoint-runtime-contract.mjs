@@ -16,7 +16,7 @@ assert.equal(manifest.version_name,'1.19.1.05-AI-B');
 assert.ok(bg.indexOf('await reviewParkedStore.finalize(envelope.dispatchId);')<bg.indexOf('if(state.updateCheckpoint?.phase===UPDATE_PHASE.DRAINING)'));
 assert.doesNotMatch(bg,/chrome\.tabs\.reload\(tabId\)/);
 assert.ok(bg.includes('const drainBoundary=reviewUpdateBoundary()'),'DRAINING crash recovery must re-evaluate durable boundary');
-assert.ok(bg.includes('if(drainBoundary.safe){\n      return reviewCheckpointAtSafeBoundary();'),'safe DRAINING startup must advance to CHECKPOINTED');
+assert.match(bg,/if\s*\(drainBoundary\.safe\)\s*\{\s*return reviewCheckpointAtSafeBoundary\(\);/m,'safe DRAINING startup must advance to CHECKPOINTED');
 assert.ok(bg.includes('UPDATE_DRAIN_RECOVERY_'),'unsafe non-draining startup boundary must fail closed');
 console.log('update-checkpoint-runtime-contract: PASS');
 

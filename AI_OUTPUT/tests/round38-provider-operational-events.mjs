@@ -16,7 +16,7 @@ for(const token of [
   'await inspectProviderEvent()',
   'providerEventBaseline',
   'authorityRegistrationId:registration.authorityRegistrationId',
-  'provider-events: "PASS"',
+  'provider_events: "PASS"',
   'PROVIDER_EVENT_ACTIVE'
 ]) assert.ok(content.includes(token),'content missing '+token);
 
