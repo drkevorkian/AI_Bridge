@@ -3257,6 +3257,60 @@ function reviewBuildContinuityText(tx, context) {
   return text;
 }
 
+async function reviewVerifyDurableRolloverContext(tx, context, { requireContinuity = false } = {}) {
+  if (!tx || !context || String(context.rolloverId || "") !== String(tx.rolloverId || "")) {
+    throw new Error("ROLLOVER_CONTEXT_MISSING");
+  }
+
+  const trigger = reviewLedger.get(tx.triggeringDispatchId);
+  if (!trigger) throw new Error("ROLLOVER_TRIGGER_DISPATCH_MISSING");
+  const pendingPrompt = String(context.pendingPrompt || "");
+  if (!pendingPrompt.trim()) throw new Error("ROLLOVER_PENDING_PROMPT_MISSING");
+  const pendingHash = await reviewPayloadHash(tx.side, pendingPrompt);
+  if (
+    pendingHash !== String(trigger.payloadHash || "") ||
+    pendingHash !== String(context.pendingPromptHash || "")
+  ) {
+    throw new Error("ROLLOVER_PENDING_PROMPT_INTEGRITY_MISMATCH");
+  }
+
+  const anchor = tx.finalResponseAnchor;
+  if (anchor?.kind === "PROVIDER_SNAPSHOT") {
+    if (context.finalResponseAnchorKind !== "PROVIDER_SNAPSHOT") {
+      throw new Error("ROLLOVER_PROVIDER_SNAPSHOT_CONTEXT_KIND_MISMATCH");
+    }
+    const snapshotHash = await reviewPayloadHash(tx.side, context.lastAssistantMessage);
+    if (snapshotHash !== String(anchor.contentHash || "")) {
+      throw new Error("ROLLOVER_PROVIDER_SNAPSHOT_DURABLE_HASH_MISMATCH");
+    }
+    if (Number(context.providerSnapshotObservedAt) !== Number(anchor.observedAt)) {
+      throw new Error("ROLLOVER_PROVIDER_SNAPSHOT_DURABLE_TIMESTAMP_MISMATCH");
+    }
+    let contextIdentity;
+    try { contextIdentity = reviewSanitizeIdentity(context.providerSnapshotIdentity); }
+    catch (_) { throw new Error("ROLLOVER_PROVIDER_SNAPSHOT_DURABLE_IDENTITY_MALFORMED"); }
+    if (
+      !reviewSameIdentity(contextIdentity, anchor.conversationIdentity) ||
+      !reviewSameIdentity(contextIdentity, tx.oldAuthority?.identity)
+    ) {
+      throw new Error("ROLLOVER_PROVIDER_SNAPSHOT_DURABLE_IDENTITY_MISMATCH");
+    }
+  }
+
+  if (!requireContinuity) return null;
+  if (!tx.continuityPayload) throw new Error("ROLLOVER_CONTINUITY_PAYLOAD_MISSING");
+  const canonicalText = reviewBuildContinuityText(tx, context);
+  if (
+    context.continuityText != null &&
+    String(context.continuityText) !== canonicalText
+  ) {
+    throw new Error("ROLLOVER_CONTINUITY_TEXT_INTEGRITY_MISMATCH");
+  }
+  context.continuityText = canonicalText;
+  reviewRolloverContexts[tx.side] = context;
+  return canonicalText;
+}
+
 async function reviewPublishRolloverPhase(tx, note = "") {
   await reviewPersistRollover();
   state.running = true;
@@ -3406,7 +3460,7 @@ async function reviewCreateOrReuseContinuityDispatch(side) {
   if (!tx || tx.phase !== ROLLOVER_PHASE.NEW_IDENTITY_VERIFIED || !tx.candidateAuthority) {
     throw new Error("ROLLOVER_NOT_READY_FOR_CONTINUITY_DISPATCH");
   }
-  if (!context?.continuityText) throw new Error("ROLLOVER_CONTINUITY_TEXT_MISSING");
+  const continuityText = await reviewVerifyDurableRolloverContext(tx, context, { requireContinuity:true });
 
   let dispatch = null;
   const candidates = reviewLedger.snapshot().filter(record =>
@@ -3419,7 +3473,7 @@ async function reviewCreateOrReuseContinuityDispatch(side) {
   if (candidates.length === 1) dispatch = reviewLedger.get(candidates[0].dispatchId);
 
   if (!dispatch) {
-    const payloadHash = await reviewPayloadHash(side, context.continuityText);
+    const payloadHash = await reviewPayloadHash(side, continuityText);
     dispatch = reviewLedger.create({
       dispatchId: crypto.randomUUID(),
       side,
@@ -3444,9 +3498,10 @@ async function reviewCreateOrReuseContinuityDispatch(side) {
 async function reviewSendContinuityDispatch(side) {
   let tx = reviewRollover.get(side);
   const context = reviewRolloverContexts[side];
-  if (!tx || tx.phase !== ROLLOVER_PHASE.CONTINUITY_PENDING || !context?.continuityText) {
+  if (!tx || tx.phase !== ROLLOVER_PHASE.CONTINUITY_PENDING) {
     throw new Error("ROLLOVER_CONTINUITY_SEND_NOT_READY");
   }
+  const continuityText = await reviewVerifyDurableRolloverContext(tx, context, { requireContinuity:true });
   let dispatch = reviewLedger.get(tx.continuityDispatchId);
   if (!dispatch) throw new Error("ROLLOVER_CONTINUITY_DISPATCH_MISSING");
 
@@ -3512,7 +3567,7 @@ async function reviewSendContinuityDispatch(side) {
     authorityRegistrationId:live.authorityRegistrationId,
     generationEpoch:live.generationEpoch,
     expectedIdentity:live.identity,
-    payload:{text:context.continuityText,artifacts:[]}
+    payload:{text:continuityText,artifacts:[]}
   };
 
   let result;
@@ -3555,7 +3610,7 @@ async function reviewSendContinuityDispatch(side) {
   }
 
   delete state.lastResponseBySide[side];
-  state.lastSentBySide[side] = context.continuityText;
+  state.lastSentBySide[side] = continuityText;
 
   tx = reviewRollover.get(side);
   if (tx.phase === ROLLOVER_PHASE.CONTINUITY_PENDING) {
@@ -3605,6 +3660,7 @@ async function reviewResumeThreadRollover(side) {
     }
 
     if (tx.phase === ROLLOVER_PHASE.FINAL_RESPONSE_COMMITTED) {
+      await reviewVerifyDurableRolloverContext(tx, context);
       reviewRolloverOrchestrator.prepareContinuity({
         side,
         title:context.previousTitle,

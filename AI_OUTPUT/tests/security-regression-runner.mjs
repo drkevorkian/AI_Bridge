@@ -25,6 +25,7 @@ const tests=[
   'round46-radius-normalization.mjs',
   'round47-automatic-thread-rollover-runtime.mjs',
   'round48-first-turn-rollover-anchor.mjs',
+  'round49-rollover-restart-integrity.mjs',
   'update-system-atomic.mjs',
   'round42-content-runtime-lifecycle.mjs',
   'round43-next-turn-adoption.mjs',
