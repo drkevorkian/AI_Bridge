@@ -27,7 +27,7 @@ for(const base of bases){
   const popup=read(base+'/popup.html');
   const popupJs=read(base+'/popup.js');
   const layouts=read(base+'/dashboard-layouts.js');
-  const layoutCss=read(base+'/dashboard-layouts.css');
+  const css=read(base+'/dashboard-layouts.css');
   const settings=read(base+'/settings.js');
   const settingsHtml=read(base+'/settings.html');
 
