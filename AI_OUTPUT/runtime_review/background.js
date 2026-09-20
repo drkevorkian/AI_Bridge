@@ -3193,6 +3193,17 @@ function freshChatUrlFor(rawUrl) {
   throw new Error(`Unsupported AI tab: ${host || rawUrl}`);
 }
 
+function reviewCanonicalRolloverFreshUrl(provider) {
+  switch (String(provider || "").toLowerCase()) {
+    case "chatgpt": return "https://chatgpt.com/";
+    case "grok": return "https://grok.com/";
+    case "claude": return "https://claude.ai/new";
+    case "gemini": return "https://gemini.google.com/app";
+    case "copilot": return "https://copilot.microsoft.com/";
+    default: throw new Error("ROLLOVER_PROVIDER_FRESH_URL_UNSUPPORTED");
+  }
+}
+
 async function waitForTabReady(tabId, timeoutMs = 20000) {
   const id = Number(tabId);
   const started = Date.now();
@@ -3320,7 +3331,7 @@ async function reviewVerifyDurableRolloverContext(tx, context, { requireContinui
     }
   }
 
-  if (!tx.continuityPayload) {
+  if ([ROLLOVER_PHASE.LIMIT_DETECTED, ROLLOVER_PHASE.FINAL_RESPONSE_COMMITTED, ROLLOVER_PHASE.CONTINUITY_PREPARED].includes(tx.phase)) {
     const oldTab = await chrome.tabs.get(Number(tx.oldAuthority?.tabId));
     if (reviewProviderFromUrl(oldTab?.url) !== tx.provider) {
       throw new Error("ROLLOVER_PREVIOUS_TITLE_PROVIDER_MISMATCH");
@@ -3328,6 +3339,10 @@ async function reviewVerifyDurableRolloverContext(tx, context, { requireContinui
     const durablePreviousTitle = reviewRolloverTitle(oldTab?.title, tx.side);
     if (durablePreviousTitle !== String(context.previousTitle || "").trim()) {
       throw new Error("ROLLOVER_PREVIOUS_TITLE_CONTEXT_MISMATCH");
+    }
+    const canonicalFreshUrl = reviewCanonicalRolloverFreshUrl(tx.provider);
+    if (String(context.freshChatUrl || "") !== canonicalFreshUrl) {
+      throw new Error("ROLLOVER_FRESH_CHAT_URL_CONTEXT_MISMATCH");
     }
   }
 
@@ -3710,6 +3725,7 @@ async function reviewResumeThreadRollover(side) {
     }
 
     if (tx.phase === ROLLOVER_PHASE.CONTINUITY_PREPARED) {
+      await reviewVerifyDurableRolloverContext(tx, context, { requireContinuity:true });
       const trigger = reviewLedger.get(tx.triggeringDispatchId);
       if (!trigger) throw new Error("ROLLOVER_TRIGGER_DISPATCH_MISSING");
       if (trigger.status !== DISPATCH_STATUS.FAILED) {
@@ -3747,7 +3763,8 @@ async function reviewResumeThreadRollover(side) {
 
       if (!currentIdentity || reviewSameIdentity(currentIdentity, tx.oldAuthority.identity)) {
         reviewInvalidateAuthorityForTab(tabId);
-        await chrome.tabs.update(tabId, {url:context.freshChatUrl,active:true});
+        const targetUrl = reviewCanonicalRolloverFreshUrl(tx.provider);
+        await chrome.tabs.update(tabId, {url:targetUrl,active:true});
         tab = await waitForTabReady(tabId);
         if (reviewProviderFromUrl(tab?.url) !== tx.provider) throw new Error("ROLLOVER_FRESH_CHAT_PROVIDER_MISMATCH");
         const probe = await chrome.tabs.sendMessage(tabId, {type:"AI_BRIDGE_IDENTITY_PROBE"});
