@@ -798,8 +798,34 @@ function runtimePhaseLabel(raw) {
     RECOVERING_NEXT_TURN: "Recovering next relay turn",
     PROVIDER_RECOVERY_REQUIRED: "Provider recovery required",
     PROVIDER_RESPONSE_RECOVERED: "Provider response recovered",
+    THREAD_ROLLOVER_CONTINUITY_DISPATCHING: "Sending continuation context",
+    THREAD_ROLLOVER_AWAITING_CONTINUITY_RESPONSE: "Awaiting continuation response",
     PAUSED: "Paused"
   })[String(raw || "IDLE")] || String(raw || "Unknown").replaceAll("_", " ");
+}
+
+function rolloverStatusText(s) {
+  const rollover = s?.threadRollover;
+  if (!rollover?.active) return "";
+  const from = String(rollover.previousTitle || "").trim();
+  const to = String(rollover.nextTitle || "").trim();
+  const titleLine = from && to
+    ? from + " → " + to
+    : (to || from || ("AI " + (rollover.side || "?") + " continuation"));
+  const phase = String(rollover.phase || "");
+  const detail = ({
+    LIMIT_DETECTED: "Conversation limit detected. Freezing relay progression…",
+    FINAL_RESPONSE_COMMITTED: "Final response saved.",
+    CONTINUITY_PREPARED: "Continuity context prepared.",
+    OLD_AUTHORITY_REVOKED: "Previous conversation closed to new relay actions.",
+    OPENING_NEW_CHAT: "Opening continuation chat…",
+    AWAITING_NEW_IDENTITY: "Verifying the new conversation…",
+    NEW_IDENTITY_VERIFIED: "New conversation verified.",
+    CONTINUITY_PENDING: "Restoring context…",
+    CONTINUITY_SENT: "Continuation context sent.",
+    AWAITING_CONTINUITY_RESPONSE: "Context restored. Waiting for the AI to continue…"
+  })[phase] || ("Continuing rollover: " + phase.replaceAll("_", " "));
+  return "Continuing conversation…\n" + titleLine + "\n" + detail;
 }
 
 function updateStatus(s) {
@@ -810,6 +836,8 @@ function updateStatus(s) {
 
   if (s.sessionActive && s.awaitingHuman && s.pendingHuman) {
     $("status").textContent = `PAUSED — HUMAN INPUT NEEDED\nRuntime: ${phase}\nWaiting on controller for ${s.pendingHuman.requestingLabel || `AI ${s.pendingHuman.requestingSide}`}.`;
+  } else if (s.sessionActive && s.threadRollover?.active) {
+    $("status").textContent = rolloverStatusText(s) + `\nRuntime: ${phase}\nAI turns: ${s.turn || 0}/${limit}`;
   } else if (s.sessionActive && s.providerRecovery) {
     const event = s.providerRecovery;
     $("status").textContent = `PAUSED — provider action needed
