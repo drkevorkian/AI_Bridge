@@ -12,10 +12,17 @@ assert.equal(classifyIdentityTransition(oldId, fresh), "NEW_CONVERSATION_CONFIRM
 const share = deriveConversationIdentity("https://grok.com/share/share123");
 assert.equal(share.writable, false);
 assert.equal(share.kind, "share");
+const chatgptShare = deriveConversationIdentity("https://chatgpt.com/share/share123");
+assert.equal(chatgptShare.writable, false);
+assert.equal(chatgptShare.kind, "share");
+const unknownRoute = deriveConversationIdentity("https://chatgpt.com/g/gpt123");
+assert.equal(unknownRoute.writable, false);
+assert.equal(unknownRoute.kind, "unknown");
 
 const cache = createDispatchCache({ maxEntries: 2 });
 assert.equal(cache.accept({ dispatchId:"d1", identityAtAcceptance:surface, generation:1, result:{ok:true} }).duplicate, false);
 assert.equal(cache.accept({ dispatchId:"d1", identityAtAcceptance:surface, generation:1, result:{ok:true} }).duplicate, true);
 assert.equal(cache.accept({ dispatchId:"d1", identityAtAcceptance:fresh, generation:1, result:{ok:true} }).reason, "dispatch-context-mismatch");
 assert.equal(cache.accept({ dispatchId:"d1", identityAtAcceptance:fresh, generation:1, result:{ok:true}, expectedTransition:true }).ok, true);
+assert.equal(cache.accept({ dispatchId:"d1", identityAtAcceptance:surface, generation:2, result:{ok:true}, expectedTransition:true }).reason, "dispatch-generation-mismatch");
 console.log("conversation-identity: PASS");

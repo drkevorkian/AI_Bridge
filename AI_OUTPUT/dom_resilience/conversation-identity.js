@@ -23,6 +23,10 @@ function cleanKey(value) {
   return /^[A-Za-z0-9_-]{1,256}$/.test(text) ? text : null;
 }
 
+function identity(provider, kind, routeClass, threadKey, provisional, writable) {
+  return Object.freeze({ provider, kind, routeClass, threadKey, provisional, writable });
+}
+
 export function deriveConversationIdentity(rawUrl) {
   let url;
   try { url = new URL(String(rawUrl || "")); }
@@ -30,27 +34,25 @@ export function deriveConversationIdentity(rawUrl) {
 
   const provider = providerFromHost(url.hostname);
   if (!provider || !SUPPORTED.has(provider)) return null;
-  const path = url.pathname || "/";
-  const parts = path.split("/").filter(Boolean);
+  const parts = (url.pathname || "/").split("/").filter(Boolean);
 
   if (provider === "chatgpt") {
-    if (parts[0] === "c" && cleanKey(parts[1])) {
-      return Object.freeze({ provider, kind: "conversation", routeClass: "conversation", threadKey: cleanKey(parts[1]), provisional: false, writable: true });
-    }
-    return Object.freeze({ provider, kind: "surface", routeClass: "home", threadKey: null, provisional: true, writable: true });
+    if (parts[0] === "share" && cleanKey(parts[1])) return identity(provider, "share", "share", cleanKey(parts[1]), false, false);
+    if (parts[0] === "c" && cleanKey(parts[1])) return identity(provider, "conversation", "conversation", cleanKey(parts[1]), false, true);
+    if (parts.length === 0) return identity(provider, "surface", "home", null, true, true);
+    return identity(provider, "unknown", "unsupported", null, true, false);
   }
 
   if (provider === "grok") {
-    if (parts[0] === "share" && cleanKey(parts[1])) {
-      return Object.freeze({ provider, kind: "share", routeClass: "share", threadKey: cleanKey(parts[1]), provisional: false, writable: false });
-    }
-    if (parts[0] === "c" && cleanKey(parts[1])) {
-      return Object.freeze({ provider, kind: "conversation", routeClass: "conversation", threadKey: cleanKey(parts[1]), provisional: false, writable: true });
-    }
-    return Object.freeze({ provider, kind: "surface", routeClass: "home", threadKey: null, provisional: true, writable: true });
+    if (parts[0] === "share" && cleanKey(parts[1])) return identity(provider, "share", "share", cleanKey(parts[1]), false, false);
+    if (parts[0] === "c" && cleanKey(parts[1])) return identity(provider, "conversation", "conversation", cleanKey(parts[1]), false, true);
+    if (parts.length === 0) return identity(provider, "surface", "home", null, true, true);
+    return identity(provider, "unknown", "unsupported", null, true, false);
   }
 
-  return Object.freeze({ provider, kind: "surface", routeClass: "app", threadKey: null, provisional: true, writable: true });
+  // No reviewed stable writable thread-key route is packaged yet for these
+  // providers. Unknown routes therefore stay non-authoritative/fail-closed.
+  return identity(provider, "unknown", "unverified", null, true, false);
 }
 
 export function sameConversationIdentity(a, b) {
@@ -109,6 +111,14 @@ export function createDispatchCache({ maxEntries = 32 } = {}) {
         const sameGeneration = Number(existing.generation) === Number(generation);
         if (sameIdentity && sameGeneration) return { ok: true, duplicate: true, result: existing.result };
         if (!expectedTransition) return { ok: false, reason: "dispatch-context-mismatch" };
+        if (!sameGeneration) return { ok: false, reason: "dispatch-generation-mismatch" };
+        if (!existing.identityAtAcceptance || !identityAtAcceptance || existing.identityAtAcceptance.provider !== identityAtAcceptance.provider) {
+          return { ok: false, reason: "dispatch-provider-mismatch" };
+        }
+        const transition = classifyIdentityTransition(existing.identityAtAcceptance, identityAtAcceptance);
+        if (!["NEW_CHAT_SURFACE", "NEW_CONVERSATION_CONFIRMED"].includes(transition)) {
+          return { ok: false, reason: "dispatch-transition-not-authorized" };
+        }
       }
       const record = Object.freeze({ dispatchId: id, identityAtAcceptance: identityAtAcceptance ? { ...identityAtAcceptance } : null, generation: Number(generation), result });
       records.delete(id);
