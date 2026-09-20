@@ -29,6 +29,7 @@ const tests=[
   'round50-responsive-classic-layout.mjs',
   'round51-thread-limit-control-plane-isolation.mjs',
   'round52-rollover-pre-navigation-integrity.mjs',
+  'round53-narrow-header-wrapping.mjs',
   'update-system-atomic.mjs',
   'round42-content-runtime-lifecycle.mjs',
   'round43-next-turn-adoption.mjs',
