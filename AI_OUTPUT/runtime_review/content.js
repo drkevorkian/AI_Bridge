@@ -1,8 +1,54 @@
 (() => {
-  if (globalThis.__AI_BRIDGE_REVIEW_CONTENT__) return;
-  globalThis.__AI_BRIDGE_REVIEW_CONTENT__ = true;
+  "use strict";
 
-  const VERSION = "1.18.0-review.4";
+  const manifest = chrome.runtime.getManifest();
+  const CONTENT_BUILD = String(manifest.version_name || manifest.version || "unknown");
+  const CONTENT_RUNTIME_SCHEMA = 1;
+  const resident = globalThis.__AI_BRIDGE_CONTENT_RUNTIME__;
+
+  if (resident) {
+    if (
+      resident.schema === CONTENT_RUNTIME_SCHEMA &&
+      resident.build === CONTENT_BUILD &&
+      resident.active === true
+    ) return;
+
+    if (
+      resident.schema !== CONTENT_RUNTIME_SCHEMA ||
+      typeof resident.dispose !== "function"
+    ) {
+      chrome.runtime.sendMessage({
+        type: "AI_BRIDGE_CONTENT_RUNTIME_INCOMPATIBLE",
+        residentBuild: String(resident.build || "unknown"),
+        requestedBuild: CONTENT_BUILD
+      }).catch(() => {});
+      return;
+    }
+
+    try {
+      resident.dispose("superseded");
+    } catch (_) {
+      chrome.runtime.sendMessage({
+        type: "AI_BRIDGE_CONTENT_RUNTIME_INCOMPATIBLE",
+        residentBuild: String(resident.build || "unknown"),
+        requestedBuild: CONTENT_BUILD,
+        reason: "DISPOSE_FAILED"
+      }).catch(() => {});
+      return;
+    }
+  } else if (globalThis.__AI_BRIDGE_REVIEW_CONTENT__ === true) {
+    // The legacy boolean-only runtime did not retain observer/timer/listener
+    // handles, so it cannot be safely replaced without reloading the host page.
+    chrome.runtime.sendMessage({
+      type: "AI_BRIDGE_CONTENT_RUNTIME_INCOMPATIBLE",
+      residentBuild: "legacy-boolean-runtime",
+      requestedBuild: CONTENT_BUILD,
+      reason: "LEGACY_RUNTIME_NOT_DISPOSABLE"
+    }).catch(() => {});
+    return;
+  }
+
+  const VERSION = CONTENT_BUILD;
   const host = location.hostname.toLowerCase();
   const provider = host === "chatgpt.com" || host === "chat.openai.com" ? "chatgpt"
     : host === "grok.com" ? "grok"
@@ -43,6 +89,10 @@
   let lastChangedAt = 0;
   let monitorTimer = null;
   let lastLimitSignature = "";
+  let providerEventBaseline = new Set();
+  const providerEventSignatures = new Map();
+  let routeTimer = null;
+  let disposed = false;
 
   function trim(map){ while(map.size > MAX_CACHE) map.delete(map.keys().next().value); }
   function rememberCommand(command,result){ byCommand.set(command.commandId,result); trim(byCommand); return result; }
@@ -285,7 +335,14 @@
       });
     }catch(_){}
   }
-  function scheduleMonitor(ms=250){ if(monitorTimer) return; monitorTimer=setTimeout(()=>monitor().catch(()=>{}),ms); }
+  function scheduleMonitor(ms=250){
+    if(disposed || monitorTimer) return;
+    monitorTimer=setTimeout(()=>{
+      monitorTimer=null;
+      if(disposed) return;
+      monitor().catch(()=>{});
+    },ms);
+  }
 
 
   function inspectThreadLimit(){
@@ -304,10 +361,15 @@
     }
   }
 
-  const observer=new MutationObserver(()=>{scheduleMonitor();inspectThreadLimit();inspectProviderEvent().catch(()=>{});});
+  const observer=new MutationObserver(()=>{
+    if(disposed) return;
+    scheduleMonitor();
+    inspectThreadLimit();
+    inspectProviderEvent().catch(()=>{});
+  });
   observer.observe(document.documentElement,{childList:true,subtree:true,characterData:true,attributes:true,attributeFilter:["disabled","aria-disabled","data-state","aria-label","data-testid"]});
 
-  setInterval(()=>{
+  routeTimer=setInterval(()=>{
     if(location.href!==lastHref){
       lastHref=location.href;
       registration=null;
@@ -323,7 +385,7 @@
     inspectProviderEvent().catch(()=>{});
   },750);
 
-  chrome.runtime.onMessage.addListener((msg,_sender,sendResponse)=>{
+  const onRuntimeMessage=(msg,_sender,sendResponse)=>{
     if(msg.type==="AI_BRIDGE_PING"){
       sendResponse({ok:true,host,provider,ready:true,version:VERSION,capabilities:capabilities(),identity:routeIdentity()});
       return false;
@@ -379,5 +441,36 @@
       sendResponse({ok:Boolean(text),text,active:generationActive(),host});
       return false;
     }
-  });
+  };
+
+  chrome.runtime.onMessage.addListener(onRuntimeMessage);
+
+  function disposeContentRuntime(reason="disposed"){
+    if(disposed) return;
+    disposed=true;
+    try{ observer.disconnect(); }catch(_){}
+    if(routeTimer!==null){ clearInterval(routeTimer); routeTimer=null; }
+    if(monitorTimer!==null){ clearTimeout(monitorTimer); monitorTimer=null; }
+    try{ chrome.runtime.onMessage.removeListener(onRuntimeMessage); }catch(_){}
+    registration=null;
+    awaitingDispatchId=null;
+    providerEventBaseline.clear();
+    providerEventSignatures.clear();
+    byCommand.clear();
+    byAuthority.clear();
+    const current=globalThis.__AI_BRIDGE_CONTENT_RUNTIME__;
+    if(current && current.dispose===disposeContentRuntime){
+      current.active=false;
+      current.disposedReason=String(reason||"disposed").slice(0,80);
+    }
+  }
+
+  globalThis.__AI_BRIDGE_CONTENT_RUNTIME__={
+    schema:CONTENT_RUNTIME_SCHEMA,
+    build:CONTENT_BUILD,
+    active:true,
+    installedAt:Date.now(),
+    dispose:disposeContentRuntime
+  };
+  globalThis.__AI_BRIDGE_REVIEW_CONTENT__=true;
 })();
