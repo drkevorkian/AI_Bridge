@@ -50,7 +50,7 @@ async function applyPortableSettings(p){
   const writes={};
   if(THEMES.has(p.theme)) writes[THEME_KEY]=p.theme;
   if(LAYOUTS.has(p.layout)) writes[LAYOUT_KEY]=p.layout;
-  if(Number.isFinite(Number(p.paneWidth))) writes[PANE_WIDTH_KEY]=Math.min(70,Math.max(24,Number(p.paneWidth)));
+  if(Number.isFinite(Number(p.paneWidth))) writes[PANE_WIDTH_KEY]=Math.min(42,Math.max(20,Number(p.paneWidth)));
   if(Number.isInteger(Number(p.agentCount))&&Number(p.agentCount)>=1&&Number(p.agentCount)<=5) writes[AGENT_COUNT_KEY]=Number(p.agentCount);
   await chrome.storage.local.set(writes);
   const {bridgeState}=await chrome.storage.local.get("bridgeState");
@@ -67,7 +67,7 @@ async function applyPortableSettings(p){
   applyTheme(p.theme);
   $("settingsLayout").value=LAYOUTS.has(p.layout)?p.layout:"classic";
   if(Number.isFinite(Number(p.paneWidth))){
-    const width=Math.min(70,Math.max(24,Number(p.paneWidth)));
+    const width=Math.min(42,Math.max(20,Number(p.paneWidth)));
     $("paneWidth").value=String(width); $("paneWidthValue").textContent=Math.round(width)+"%";
   }
 }
@@ -156,7 +156,7 @@ async function checkUpdates(){
   else{$("updateStatus").textContent="Up to date: v"+current;$("downloadUpdate").disabled=true;}
 }
 async function init(){
-  const manifest=chrome.runtime.getManifest();$("installedVersion").textContent="v"+manifest.version;$("updateVersion").textContent="Installed v"+manifest.version;
+  const manifest=chrome.runtime.getManifest();const shownVersion=manifest.version_name||manifest.version;$("installedVersion").textContent=shownVersion;$("updateVersion").textContent="Installed "+shownVersion;
   const local=await chrome.storage.local.get([THEME_KEY,LAYOUT_KEY,PANE_WIDTH_KEY,AUTO_UPDATE_KEY,KEEP_AWAKE_KEY,GOOGLE_CLIENT_KEY]);
   applyTheme(local[THEME_KEY]);$("settingsLayout").value=LAYOUTS.has(local[LAYOUT_KEY])?local[LAYOUT_KEY]:"classic";
   const paneWidth=Math.min(70,Math.max(24,Number(local[PANE_WIDTH_KEY])||36));$("paneWidth").value=String(paneWidth);$("paneWidthValue").textContent=Math.round(paneWidth)+"%";
@@ -180,5 +180,5 @@ $("refreshHealth").addEventListener("click",guarded(health,"syncNotice"));
 $("keepAwake").addEventListener("change",guarded(async()=>{const enabled=$("keepAwake").checked;const r=await chrome.runtime.sendMessage({type:"AI_BRIDGE_POWER_SET",enabled});if(!r?.ok)throw new Error(r?.error||"Power setting failed.");$("powerStatus").textContent=enabled?"System awake":"Released";},"syncNotice"));
 $("checkUpdates").addEventListener("click",guarded(checkUpdates,"syncNotice"));$("downloadUpdate").addEventListener("click",guarded(async()=>{if(!latestZipUrl)await checkUpdates();await chrome.downloads.download({url:latestZipUrl,filename:"AI_Bridge-main.zip",saveAs:true});},"syncNotice"));
 $("autoCheckUpdates").addEventListener("change",guarded(async()=>{const enabled=$("autoCheckUpdates").checked;await chrome.storage.local.set({[AUTO_UPDATE_KEY]:enabled});await chrome.runtime.sendMessage({type:"AI_BRIDGE_AUTO_UPDATE_SET",enabled});},"syncNotice"));
-chrome.storage.onChanged.addListener((changes,area)=>{if(area==="local"&&changes[THEME_KEY])applyTheme(changes[THEME_KEY].newValue)});
+chrome.storage.onChanged.addListener((changes,area)=>{if(area!=="local")return;if(changes[THEME_KEY])applyTheme(changes[THEME_KEY].newValue);if(changes[LAYOUT_KEY]&&$("settingsLayout"))$("settingsLayout").value=LAYOUTS.has(changes[LAYOUT_KEY].newValue)?changes[LAYOUT_KEY].newValue:"classic";});
 init().then(health).catch(e=>show("syncNotice",e.message,true));

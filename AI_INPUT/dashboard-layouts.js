@@ -17,28 +17,19 @@
       classicMovables.push({node,marker});
     }
   }
-  function syncClassicPanels(layout){
+  function syncClassicPanels(value){
     if(!classicRightPanel||!controlPanel) return;
-    if(layout==="classic"){
+    if(value==="classic"){
       classicRightPanel.hidden=false;
       const human=classicMovables.find(item=>item.node.classList?.contains("interject-panel"));
       if(human) classicRightPanel.appendChild(human.node);
-      for(const item of classicMovables){
-        if(item!==human) classicRightPanel.appendChild(item.node);
-      }
+      for(const item of classicMovables) if(item!==human) classicRightPanel.appendChild(item.node);
       return;
     }
-    for(const item of classicMovables){
-      item.marker.parentNode?.insertBefore(item.node,item.marker.nextSibling);
-    }
+    for(const item of classicMovables) item.marker.parentNode?.insertBefore(item.node,item.marker.nextSibling);
     classicRightPanel.hidden=true;
   }
-  function applyLayout(raw){
-    const value=ALLOWED.has(raw)?raw:"classic";
-    document.documentElement.dataset.layout=value;
-    syncClassicPanels(value);
-    return value;
-  }
+  function applyLayout(raw){const value=ALLOWED.has(raw)?raw:"classic";document.documentElement.dataset.layout=value;syncClassicPanels(value);return value}
   function applyWidth(raw){
     const value=clamp(raw);
     document.documentElement.style.setProperty("--bridge-control-width",value+"vw");
