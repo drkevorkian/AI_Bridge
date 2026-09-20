@@ -3184,13 +3184,9 @@ function freshChatUrlFor(rawUrl) {
   try { url = new URL(String(rawUrl || "")); }
   catch (_) { throw new Error("The selected tab does not have a supported AI URL."); }
 
-  const host = url.hostname;
-  if (host === "chatgpt.com" || host === "chat.openai.com") return "https://chatgpt.com/";
-  if (host === "grok.com") return "https://grok.com/";
-  if (host === "claude.ai") return "https://claude.ai/new";
-  if (host === "gemini.google.com") return "https://gemini.google.com/app";
-  if (host === "copilot.microsoft.com") return "https://copilot.microsoft.com/";
-  throw new Error(`Unsupported AI tab: ${host || rawUrl}`);
+  const provider = reviewProviderFromUrl(url.href);
+  if (provider) return reviewCanonicalRolloverFreshUrl(provider);
+  throw new Error(`Unsupported AI tab: ${url.hostname || rawUrl}`);
 }
 
 function reviewCanonicalRolloverFreshUrl(provider) {
