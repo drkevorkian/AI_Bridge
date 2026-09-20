@@ -3275,6 +3275,29 @@ async function reviewVerifyDurableRolloverContext(tx, context, { requireContinui
   }
 
   const anchor = tx.finalResponseAnchor;
+  if (anchor?.kind === "DISPATCH") {
+    if (
+      context.finalResponseAnchorKind !== "DISPATCH" ||
+      String(context.finalResponseDispatchId || "") !== String(anchor.dispatchId || "")
+    ) {
+      throw new Error("ROLLOVER_DISPATCH_ANCHOR_CONTEXT_MISMATCH");
+    }
+    const finalDispatch = reviewLedger.get(anchor.dispatchId);
+    if (!finalDispatch || finalDispatch.status !== DISPATCH_STATUS.RESPONSE_COMMITTED) {
+      throw new Error("ROLLOVER_DISPATCH_ANCHOR_NOT_COMMITTED");
+    }
+    if (Number(finalDispatch.completedAt) !== Number(anchor.observedAt)) {
+      throw new Error("ROLLOVER_DISPATCH_ANCHOR_TIMESTAMP_MISMATCH");
+    }
+    const durableAssistantMessage = reviewLastAssistantResponseForSide(tx.side);
+    if (
+      !durableAssistantMessage ||
+      durableAssistantMessage !== String(context.lastAssistantMessage || "").trim()
+    ) {
+      throw new Error("ROLLOVER_DISPATCH_RESPONSE_CONTEXT_MISMATCH");
+    }
+  }
+
   if (anchor?.kind === "PROVIDER_SNAPSHOT") {
     if (context.finalResponseAnchorKind !== "PROVIDER_SNAPSHOT") {
       throw new Error("ROLLOVER_PROVIDER_SNAPSHOT_CONTEXT_KIND_MISMATCH");
@@ -3294,6 +3317,17 @@ async function reviewVerifyDurableRolloverContext(tx, context, { requireContinui
       !reviewSameIdentity(contextIdentity, tx.oldAuthority?.identity)
     ) {
       throw new Error("ROLLOVER_PROVIDER_SNAPSHOT_DURABLE_IDENTITY_MISMATCH");
+    }
+  }
+
+  if (!tx.continuityPayload) {
+    const oldTab = await chrome.tabs.get(Number(tx.oldAuthority?.tabId));
+    if (reviewProviderFromUrl(oldTab?.url) !== tx.provider) {
+      throw new Error("ROLLOVER_PREVIOUS_TITLE_PROVIDER_MISMATCH");
+    }
+    const durablePreviousTitle = reviewRolloverTitle(oldTab?.title, tx.side);
+    if (durablePreviousTitle !== String(context.previousTitle || "").trim()) {
+      throw new Error("ROLLOVER_PREVIOUS_TITLE_CONTEXT_MISMATCH");
     }
   }
 
