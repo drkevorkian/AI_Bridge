@@ -31,6 +31,7 @@ const tests=[
   'round52-rollover-pre-navigation-integrity.mjs',
   'round53-narrow-header-wrapping.mjs',
   'round54-rollover-navigation-idempotency.mjs',
+  'round55-narrow-header-and-manual-chat-wording.mjs',
   'update-system-atomic.mjs',
   'round42-content-runtime-lifecycle.mjs',
   'round43-next-turn-adoption.mjs',
