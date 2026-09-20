@@ -85,6 +85,8 @@
   let lastHref = location.href;
   let awaitingDispatchId = null;
   let awaitingResponseContext = null;
+  let awaitingResponseBaselineNode = null;
+  let awaitingResponseBaselineText = "";
   let lastResponseSignature = "";
   let lastObserved = "";
   let lastChangedAt = 0;
@@ -235,6 +237,9 @@
     const attempted=Object.freeze({ok:false,outcome:"ACTION_ATTEMPTED",reason:"ACTION_CONFIRMATION_NOT_PROVEN",commandId:command.commandId,authorityId:command.authorityId});
     consumeAuthority(command,attempted);
     captureProviderEventBaseline();
+    const responseBaseline=responseObservation();
+    awaitingResponseBaselineNode=responseBaseline.node;
+    awaitingResponseBaselineText=responseBaseline.text;
     sendAgain.click();
     awaitingDispatchId=command.authorityId;
     awaitingResponseContext=Object.freeze({
@@ -344,14 +349,16 @@
     return null;
   }
 
-  function responseText(){
+  function responseObservation(){
     const nodes=[];
     for(const selector of config.response||[]){
       try{ for(const node of document.querySelectorAll(selector)) if(visible(node)&&!nodes.includes(node)) nodes.push(node); }catch(_){}
     }
-    const node=nodes[nodes.length-1]; if(!node) return "";
-    return String(node.innerText||node.textContent||"").replace(/\u00a0/g," ").trim();
+    const node=nodes[nodes.length-1]||null;
+    const text=node?String(node.innerText||node.textContent||"").replace(/\u00a0/g," ").trim():"";
+    return {node,text};
   }
+  function responseText(){ return responseObservation().text; }
   function generationActive(){
     const stopSelectors=provider==="chatgpt"?["button[data-testid='stop-button']","button[aria-label='Stop generating']"]
       :provider==="grok"?["button[aria-label='Stop']"]
@@ -362,9 +369,27 @@
     monitorTimer=null;
     if(!awaitingDispatchId) return;
     if(await inspectProviderEvent()){scheduleMonitor(750);return;}
-    const text=responseText();
+    const observation=responseObservation();
+    const text=observation.text;
     if(!text) return;
-    if(text!==lastObserved){lastObserved=text;lastChangedAt=Date.now();scheduleMonitor(350);return;}
+    if(
+      observation.node===awaitingResponseBaselineNode &&
+      text===awaitingResponseBaselineText
+    ){
+      scheduleMonitor(350);
+      return;
+    }
+    if(text!==lastObserved || observation.node!==awaitingResponseBaselineNode){
+      lastObserved=text;
+      lastChangedAt=Date.now();
+      // Once a different response node/text exists, the old-response baseline
+      // has served its purpose. Do not suppress a legitimate identical reply
+      // rendered as a new assistant message.
+      awaitingResponseBaselineNode=null;
+      awaitingResponseBaselineText="";
+      scheduleMonitor(350);
+      return;
+    }
     if(generationActive() || Date.now()-lastChangedAt<1600){scheduleMonitor(350);return;}
     const signature=awaitingDispatchId+"::"+text;
     if(signature===lastResponseSignature) return;
@@ -382,6 +407,8 @@
         }) : null);
     awaitingDispatchId=null;
     awaitingResponseContext=null;
+    awaitingResponseBaselineNode=null;
+    awaitingResponseBaselineText="";
     try{
       if(!responseContext) return;
       const liveIdentity=routeIdentity();
@@ -563,6 +590,8 @@
     registration=null;
     awaitingDispatchId=null;
     awaitingResponseContext=null;
+    awaitingResponseBaselineNode=null;
+    awaitingResponseBaselineText="";
     providerEventBaseline.clear();
     providerEventSignatures.clear();
     byCommand.clear();
