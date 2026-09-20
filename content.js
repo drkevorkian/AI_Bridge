@@ -82,7 +82,11 @@
   function capabilities(){
     return Object.freeze({
       composer: resolveTrusted(config.composer) ? "PASS" : "FAIL",
-      send: resolveTrusted(config.send,{requireEnabled:true}) ? "PASS" : "FAIL",
+      // Some provider UIs (including ChatGPT) render Send only after draft input.
+      // Composer authority + a pinned trusted Send selector contract is enough
+      // to declare the send path probeable; performSend proves the actual
+      // actionable Send element after inserting the draft.
+      send: (resolveTrusted(config.send) || (resolveTrusted(config.composer) && config.send.length)) ? "PASS" : "FAIL",
       response: config.response.length ? "PASS" : "UNSUPPORTED",
       provider_events: "PASS",
       upload: "UNSUPPORTED",
@@ -135,26 +139,52 @@
     const artifacts=Array.isArray(command.payload?.artifacts)?command.payload.artifacts:[];
     if(artifacts.length) return rememberCommand(command,reject(command,"UPLOAD_UNSUPPORTED"));
 
+    // Security boundary, phase 1: prove only the stable composer before typing.
+    // ChatGPT may not render its Send control at all while the composer is empty.
     const composer1=resolveTrusted(config.composer);
-    const send1=resolveTrusted(config.send,{requireEnabled:true});
-    if(!composer1 || !send1) return rememberCommand(command,reject(command,"DOM_AUTHORITY_UNAVAILABLE"));
+    if(!composer1) return rememberCommand(command,reject(command,"DOM_AUTHORITY_UNAVAILABLE","COMPOSER"));
     const composer2=resolveTrusted(config.composer);
-    const send2=resolveTrusted(config.send,{requireEnabled:true});
-    if(composer1!==composer2 || send1!==send2 || !composer2?.isConnected || !send2?.isConnected) {
-      return rememberCommand(command,reject(command,"DOM_AUTHORITY_CHANGED"));
+    if(composer1!==composer2 || !composer2?.isConnected) {
+      return rememberCommand(command,reject(command,"DOM_AUTHORITY_CHANGED","COMPOSER"));
     }
 
     const text=String(command.payload?.text||"");
     if(!text.trim()) return rememberCommand(command,reject(command,"EMPTY_PROMPT"));
     setComposerText(composer2,text);
-    await sleep(120);
-    const send3=resolveTrusted(config.send,{requireEnabled:true});
-    if(send3!==send2) return rememberCommand(command,reject(command,"DOM_AUTHORITY_CHANGED"));
+
+    // Security boundary, phase 2: after draft insertion, require one unique,
+    // visible, enabled Send element matching only the pinned trusted selectors.
+    // This covers providers that create/enable Send asynchronously.
+    let send=null;
+    for(let i=0;i<20;i++){
+      await sleep(i===0?120:50);
+      const composerNow=resolveTrusted(config.composer);
+      if(composerNow!==composer2 || !composer2?.isConnected) {
+        return rememberCommand(command,reject(command,"DOM_AUTHORITY_CHANGED","COMPOSER"));
+      }
+      const candidate=resolveTrusted(config.send,{requireEnabled:true});
+      if(candidate){
+        send=candidate;
+        break;
+      }
+    }
+    if(!send) return rememberCommand(command,reject(command,"DOM_AUTHORITY_NOT_ACTIONABLE","SEND"));
+
+    // Re-prove identity after provider React/SPA DOM updates caused by typing.
+    const identityAfterDraft=routeIdentity();
+    if(!sameIdentity(identityAfterDraft,command.expectedIdentity) || !sameIdentity(identityAfterDraft,registration.identity)) {
+      return rememberCommand(command,reject(command,"STALE_CONVERSATION_AUTHORITY"));
+    }
+
+    const sendAgain=resolveTrusted(config.send,{requireEnabled:true});
+    if(sendAgain!==send || !sendAgain?.isConnected) {
+      return rememberCommand(command,reject(command,"DOM_AUTHORITY_CHANGED","SEND"));
+    }
 
     const attempted=Object.freeze({ok:false,outcome:"ACTION_ATTEMPTED",reason:"ACTION_CONFIRMATION_NOT_PROVEN",commandId:command.commandId,authorityId:command.authorityId});
     consumeAuthority(command,attempted);
     captureProviderEventBaseline();
-    send3.click();
+    sendAgain.click();
     awaitingDispatchId=command.authorityId;
     const confirmation=await confirmSend(composer2,text);
     if(!confirmation.confirmed) return attempted;
