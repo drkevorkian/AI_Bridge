@@ -2,9 +2,43 @@
   const LAYOUT_KEY="aiBridgeLayout";
   const WIDTH_KEY="aiBridgeControlPaneWidth";
   const ALLOWED=new Set(["studio","classic","focus"]);
-  const MIN=24, MAX=70, DEFAULT=36;
+  const MIN=20, MAX=42, DEFAULT=26;
   const clamp=value=>Math.min(MAX,Math.max(MIN,Number.isFinite(Number(value))?Number(value):DEFAULT));
-  function applyLayout(raw){const value=ALLOWED.has(raw)?raw:"studio";document.documentElement.dataset.layout=value;return value}
+  const controlPanel=document.querySelector(".control-panel");
+  const classicRightPanel=document.getElementById("classicRightPanel");
+  const runtimePanel=controlPanel?.querySelector(".runtime-card")||null;
+  const teamPanel=runtimePanel?.nextElementSibling||null;
+  const classicMovables=[];
+  if(controlPanel&&classicRightPanel&&runtimePanel&&teamPanel){
+    for(const node of [...controlPanel.children]){
+      if(node===controlPanel.querySelector(".brand-block")||node===runtimePanel||node===teamPanel) continue;
+      const marker=document.createComment("classic-home");
+      controlPanel.insertBefore(marker,node);
+      classicMovables.push({node,marker});
+    }
+  }
+  function syncClassicPanels(layout){
+    if(!classicRightPanel||!controlPanel) return;
+    if(layout==="classic"){
+      classicRightPanel.hidden=false;
+      const human=classicMovables.find(item=>item.node.classList?.contains("interject-panel"));
+      if(human) classicRightPanel.appendChild(human.node);
+      for(const item of classicMovables){
+        if(item!==human) classicRightPanel.appendChild(item.node);
+      }
+      return;
+    }
+    for(const item of classicMovables){
+      item.marker.parentNode?.insertBefore(item.node,item.marker.nextSibling);
+    }
+    classicRightPanel.hidden=true;
+  }
+  function applyLayout(raw){
+    const value=ALLOWED.has(raw)?raw:"classic";
+    document.documentElement.dataset.layout=value;
+    syncClassicPanels(value);
+    return value;
+  }
   function applyWidth(raw){
     const value=clamp(raw);
     document.documentElement.style.setProperty("--bridge-control-width",value+"vw");
@@ -16,7 +50,7 @@
     return value;
   }
   async function persistWidth(value){const width=applyWidth(value);await chrome.storage.local.set({[WIDTH_KEY]:width})}
-  chrome.storage.local.get([LAYOUT_KEY,WIDTH_KEY]).then(v=>{applyLayout(v[LAYOUT_KEY]);applyWidth(v[WIDTH_KEY])}).catch(()=>{applyLayout("studio");applyWidth(DEFAULT)});
+  chrome.storage.local.get([LAYOUT_KEY,WIDTH_KEY]).then(v=>{applyLayout(v[LAYOUT_KEY]);applyWidth(v[WIDTH_KEY])}).catch(()=>{applyLayout("classic");applyWidth(DEFAULT)});
   chrome.storage.onChanged.addListener((changes,area)=>{
     if(area!=="local")return;
     if(changes[LAYOUT_KEY])applyLayout(changes[LAYOUT_KEY].newValue);

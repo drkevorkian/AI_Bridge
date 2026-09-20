@@ -22,7 +22,7 @@ Classic defaults to a three-pane desktop layout:
 - **Center:** Shared transcript.
 - **Right:** Human Interjection at the top, followed by the remaining controls, Vault, work strategy, sources, limits, and suppressed requests.
 
-Studio and Focus restore the original two-pane arrangement.
+Studio is a full two-pane workspace with all controls on the left. Focus is transcript-first: it keeps only the brand/Settings and Runtime controls in a narrow left rail so the transcript gets most of the screen.
 
 ## Human-test priorities
 
