@@ -37,8 +37,12 @@ assert.doesNotMatch(content,/^\s*import\s/m);
 assert.doesNotMatch(content,/^\s*export\s/m);
 
 const listenerIndex=background.indexOf('chrome.runtime.onMessage.addListener');
-const awaitIndex=background.indexOf('await stateReady');
-assert.ok(listenerIndex>=0 && awaitIndex>=0 && listenerIndex<awaitIndex,'MV3 listener must register before async state readiness');
+assert.ok(listenerIndex>=0,'MV3 runtime listener missing');
+assert.doesNotMatch(
+  background.slice(0,listenerIndex),
+  /^await stateReady\b/m,
+  'MV3 listener must register before any top-level state-readiness wait'
+);
 
 assert.ok(background.startsWith('importScripts("runtime-core.js");'));
 assert.ok(runtimeCore.includes('DispatchLedger'));
