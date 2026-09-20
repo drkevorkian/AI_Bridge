@@ -215,6 +215,37 @@ async function reviewPayloadHash(side, text) {
   const digest = new Uint8Array(await crypto.subtle.digest("SHA-256", bytes));
   return [...digest].map(b => b.toString(16).padStart(2, "0")).join("");
 }
+async function reviewRetireStaleCreatedDispatches(side, {
+  keepDispatchId = null,
+  continuationSourceDispatchId = null
+} = {}) {
+  const targetSide = String(side || "").toUpperCase();
+  const keepId = keepDispatchId == null ? null : String(keepDispatchId);
+  const sourceId = continuationSourceDispatchId == null ? null : String(continuationSourceDispatchId);
+  let changed = false;
+
+  for (const record of reviewLedger.snapshot()) {
+    if (record.side !== targetSide || record.status !== DISPATCH_STATUS.CREATED) continue;
+    if (keepId && String(record.dispatchId) === keepId) continue;
+
+    // CREATED is the only lifecycle state that proves no provider action was
+    // attempted. It is therefore safe to retire an orphaned CREATED record.
+    // Never auto-retire DISPATCHING/ACCEPTED/AWAITING_RESPONSE/AMBIGUOUS.
+    if (
+      sourceId !== null &&
+      record.continuationSourceDispatchId != null &&
+      String(record.continuationSourceDispatchId) === sourceId
+    ) continue;
+
+    reviewLedger.transition(record.dispatchId, DISPATCH_STATUS.FAILED, {
+      failureReason: "STALE_CREATED_RETIRED_BEFORE_RECOVERY"
+    });
+    changed = true;
+  }
+  if (changed) await reviewPersistLedger();
+  return changed;
+}
+
 function reviewFindUnresolvedDispatch(side, payloadHash, {
   continuationSourceDispatchId = null,
   continuationCreatedAt = 0
@@ -753,6 +784,14 @@ async function reviewContinueAfterCommittedResponse(sourceSide) {
     // accepted and persisted as AWAITING_RESPONSE but before nextTurnPending
     // was cleared. Adopt that exact dispatch instead of attempting a replay.
     const adopted = await reviewAdoptAwaitingRecoveredContinuation(pending);
+    if (!adopted) {
+      // Old interrupted attempts can leave CREATED records behind. Since
+      // CREATED is pre-action by definition, retire only those harmless
+      // orphans before evaluating whether a new continuation SEND is allowed.
+      await reviewRetireStaleCreatedDispatches(pending.targetSide, {
+        continuationSourceDispatchId: pending.sourceDispatchId
+      });
+    }
     if (adopted?.blocked) {
       await reviewPauseForAmbiguity(
         "Recovered next turn for AI " + pending.targetSide + " remains blocked: " + adopted.reason + ". No duplicate prompt was sent."
