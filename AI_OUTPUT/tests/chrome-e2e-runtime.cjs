@@ -201,6 +201,10 @@ async function extensionStorage(cdp, extensionId, keys) {
   return result.data || {};
 }
 
+async function setExtensionStorage(cdp, extensionId, values) {
+  await cdp.send('Extensions.setStorageItems', { id: extensionId, storageArea: 'local', values });
+}
+
 async function workerTarget(cdp, extensionId) {
   const targets = (await cdp.send('Target.getTargets')).targetInfos || [];
   return targets.find(target =>
@@ -425,6 +429,122 @@ async function main() {
       target.url === 'chrome-extension://' + extensionId + '/background.js'
     );
     assert.equal(workers.length, 1, 'MV3 worker did not restart cleanly');
+
+    // Recovery-snapshot matrix: exercise durable states directly through the
+    // DevTools Extensions storage API. These cases validate what a restarted
+    // MV3 worker actually sees, without adding test-only hooks to production code.
+    const baseActionCountA = await evaluate(cdp, providerA.sessionId, 'window.__providerActionCount');
+    const baseActionCountB = await evaluate(cdp, providerB.sessionId, 'window.__providerActionCount');
+    const baseState = {
+      ...afterResume.bridgeState,
+      stateVersion: 3,
+      agentCount: 2,
+      sessionActive: true,
+      running: true,
+      paused: false,
+      pauseReason: '',
+      runtimePhase: 'AWAITING_PROVIDER_RESPONSE',
+      nextTurnPending: null,
+      tabA: providerTabs.a,
+      tabB: providerTabs.b,
+      currentSide: 'B',
+      startSide: 'A',
+      mainSide: 'A',
+      workMode: 'relay',
+      workPhase: 'relay',
+      turn: 1,
+      maxTurns: 4,
+      transcript: [{
+        seq: 1,
+        time: Date.now(),
+        type: 'response',
+        side: 'A',
+        label: 'Fixture ChatGPT A',
+        text: 'Seeded committed response for MV3 recovery matrix.'
+      }],
+      nextSeq: 2,
+      log: []
+    };
+    const baseDispatch = {
+      ...recordsAfterResume[0],
+      dispatchId: 'e2e-seeded-source-d1',
+      side: 'A',
+      tabId: providerTabs.a,
+      purpose: 'RELAY',
+      payloadHash: 'e2e-seeded-hash',
+      failureReason: null
+    };
+
+    // Case 1: a committed response with no continuation and no other live work
+    // is impossible for a running session. Recovery must pause rather than guess.
+    await cdp.send('Target.closeTarget', { targetId: dashboardAfter.targetId });
+    const dashboardAfterIndex = pages.indexOf(dashboardAfter);
+    if (dashboardAfterIndex >= 0) pages.splice(dashboardAfterIndex, 1);
+    await cdp.send('ServiceWorker.stopAllWorkers');
+    await poll(() => workerTarget(cdp, extensionId), value => value === null, 10000);
+    await setExtensionStorage(cdp, extensionId, {
+      bridgeState: { ...baseState },
+      aiBridgeRuntimeDispatchLedger: { records: [{ ...baseDispatch, status: 'RESPONSE_COMMITTED' }] },
+      aiBridgeRuntimeParkedResponses: { records: [] }
+    });
+
+    const dashboardMissingContinuation = await createExtensionPage(cdp, extensionId, 'dashboard.html');
+    pages.push(dashboardMissingContinuation);
+    const missingContinuationState = await poll(async () => {
+      const response = await extensionMessage(cdp, dashboardMissingContinuation.sessionId, { type: 'AI_BRIDGE_GET_STATE', omitTranscript: false });
+      return response.transportOk ? response.value?.state : null;
+    }, state => state?.paused === true && /RUNTIME_CONTINUATION_STATE_INCONSISTENT/.test(state?.pauseReason || ''), 15000);
+    assert.equal(missingContinuationState.running, false);
+    assert.equal(missingContinuationState.runtimePhase, 'PAUSED');
+    assert.equal((missingContinuationState.transcript || []).filter(entry => entry?.type === 'response').length, 1);
+    assert.equal(await evaluate(cdp, providerA.sessionId, 'window.__providerActionCount'), baseActionCountA);
+    assert.equal(await evaluate(cdp, providerB.sessionId, 'window.__providerActionCount'), baseActionCountB);
+
+    // Case 2: continuation marker durable but source not committed. This is the
+    // "marker save succeeded / ledger commit failed" snapshot and must pause.
+    await cdp.send('Target.closeTarget', { targetId: dashboardMissingContinuation.targetId });
+    const missingIndex = pages.indexOf(dashboardMissingContinuation);
+    if (missingIndex >= 0) pages.splice(missingIndex, 1);
+    await cdp.send('ServiceWorker.stopAllWorkers');
+    await poll(() => workerTarget(cdp, extensionId), value => value === null, 10000);
+
+    const pendingMarker = {
+      kind: 'SEQUENTIAL_SEND',
+      sourceDispatchId: baseDispatch.dispatchId,
+      sourceSide: 'A',
+      targetSide: 'B',
+      direct: false,
+      outgoing: {
+        text: 'Seeded next-turn payload that must not be sent until the source is committed.',
+        deliveredSeq: 1,
+        deliveredSources: false,
+        artifactIds: [],
+        mainInterjectionIds: []
+      },
+      createdAt: Date.now()
+    };
+    await setExtensionStorage(cdp, extensionId, {
+      bridgeState: { ...baseState, nextTurnPending: pendingMarker, runtimePhase: 'NEXT_TURN_PENDING' },
+      aiBridgeRuntimeDispatchLedger: { records: [{ ...baseDispatch, status: 'AWAITING_RESPONSE' }] },
+      aiBridgeRuntimeParkedResponses: { records: [] }
+    });
+
+    const dashboardUncommittedSource = await createExtensionPage(cdp, extensionId, 'dashboard.html');
+    pages.push(dashboardUncommittedSource);
+    const uncommittedSourceState = await poll(async () => {
+      const response = await extensionMessage(cdp, dashboardUncommittedSource.sessionId, { type: 'AI_BRIDGE_GET_STATE', omitTranscript: false });
+      return response.transportOk ? response.value?.state : null;
+    }, state => state?.paused === true && state?.running === false, 15000);
+    assert.match(uncommittedSourceState.pauseReason || '', /next-turn|committed source|recovery|Automatic reconnect failed/i);
+    assert.equal((uncommittedSourceState.transcript || []).filter(entry => entry?.type === 'response').length, 1);
+    assert.equal(await evaluate(cdp, providerA.sessionId, 'window.__providerActionCount'), baseActionCountA);
+    assert.equal(await evaluate(cdp, providerB.sessionId, 'window.__providerActionCount'), baseActionCountB);
+
+    const matrixStorage = await extensionStorage(cdp, extensionId, ['aiBridgeRuntimeDispatchLedger', 'bridgeState']);
+    assert.equal(matrixStorage.aiBridgeRuntimeDispatchLedger?.records?.[0]?.dispatchId, baseDispatch.dispatchId);
+    assert.equal(matrixStorage.aiBridgeRuntimeDispatchLedger?.records?.[0]?.status, 'AWAITING_RESPONSE');
+    assert.equal(matrixStorage.bridgeState?.paused, true);
+    assert.equal(matrixStorage.bridgeState?.running, false);
 
     console.log('chrome-e2e-runtime: PASS');
     console.log(JSON.stringify({
