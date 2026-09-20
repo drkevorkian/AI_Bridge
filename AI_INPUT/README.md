@@ -1,4 +1,4 @@
-# AI Bridge — AI A 1.19.0 Human Test 1
+# AI Bridge — AI A 1.19.0 Human Test 2
 
 This folder is a runnable **unpacked Chrome extension** copied from the reviewed `AI_OUTPUT/runtime_review/` candidate at commit `0e86d9b4130053cb4b9247fa92bc3275fb9b2d8a`.
 
@@ -60,4 +60,11 @@ Do not test against valuable/irreversible provider actions. This is a human-test
 - The stray literal `\n` text has been removed from extension HTML.
 - Classic pane width settings now match the actual 20–42% runtime range with a 26% default.
 
-Build label: **AI A 1.19.0 Human Test 1**.
+Build label: **AI A 1.19.0 Human Test 2**.
+
+
+### Workspace-tab navigation fix
+
+Dashboard and Settings now navigate within the same AI Bridge workspace tab. The popup also reuses an existing Dashboard/Settings workspace tab when possible, and background "Open Dashboard" requests convert an existing Settings workspace tab instead of opening a duplicate.
+
+This snapshot is **AI A 1.19.0 Human Test 2**.
