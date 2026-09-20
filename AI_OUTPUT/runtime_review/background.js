@@ -1793,17 +1793,18 @@ function formatEntry(entry) {
 }
 
 function boundedTranscript(entries, maxChars = 48000) {
+  const relayEntries = (Array.isArray(entries) ? entries : []).filter(entry => entry?.type !== "provider-event");
   const parts = [];
   let used = 0;
 
-  for (let i = entries.length - 1; i >= 0; i--) {
-    const part = formatEntry(entries[i]);
+  for (let i = relayEntries.length - 1; i >= 0; i--) {
+    const part = formatEntry(relayEntries[i]);
     if (parts.length && used + part.length > maxChars) break;
     parts.unshift(part);
     used += part.length;
   }
 
-  const omitted = parts.length < entries.length;
+  const omitted = parts.length < relayEntries.length;
   return `${omitted ? "[Earlier transcript entries omitted to keep the recovery message bounded.]\n\n" : ""}${parts.join("\n\n")}`.trim();
 }
 

@@ -25,9 +25,12 @@ assert.ok(background.includes('PROVIDER_RESPONSE_RECOVERED'),'late provider resp
 assert.doesNotMatch(background,/PROVIDER_EVENT_"?\+?code[\s\S]{0,240}DELIVERY_AMBIGUOUS/,'provider event must not destroy response-capable dispatch state');
 assert.ok(background.includes('recordTranscript("provider-event"'),'provider event must be visible without becoming an AI response');
 assert.ok(background.includes('providerRecovery'),'provider recovery state missing');
+assert.ok(background.includes('entry?.type !== "provider-event"'),'provider events must stay out of AI-to-AI relay context');
 assert.ok(background.includes('MAX_PROVIDER_EVENTS'),'provider event history must be bounded');
 assert.ok(dashboard.includes('entry.type === "provider-event"'),'dashboard provider-event rendering missing');
 assert.ok(dashboard.includes('Provider event · AI'),'provider event title missing');
 assert.ok(dashboard.includes('e.type === "provider-event"'),'provider events must be included in transcript rendering');
+assert.ok(dashboard.includes('PROVIDER_RECOVERY_REQUIRED: "Provider recovery required"'),'provider recovery phase label missing');
+assert.ok(dashboard.includes('PROVIDER_RESPONSE_RECOVERED: "Provider response recovered"'),'provider recovered phase label missing');
 
 console.log('provider-event-awareness: PASS');

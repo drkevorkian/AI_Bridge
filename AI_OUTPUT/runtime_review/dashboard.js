@@ -787,6 +787,8 @@ function runtimePhaseLabel(raw) {
     AWAITING_PROVIDER_RESPONSE: "Awaiting provider response",
     NEXT_TURN_PENDING: "Next relay turn pending",
     RECOVERING_NEXT_TURN: "Recovering next relay turn",
+    PROVIDER_RECOVERY_REQUIRED: "Provider recovery required",
+    PROVIDER_RESPONSE_RECOVERED: "Provider response recovered",
     PAUSED: "Paused"
   })[String(raw || "IDLE")] || String(raw || "Unknown").replaceAll("_", " ");
 }
