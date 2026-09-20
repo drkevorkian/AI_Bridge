@@ -424,6 +424,13 @@ h2 { margin: 4px 0 0; font-size: 20px; }
   .header-tools { flex-direction: column; align-items: flex-end; }
 }
 
+/* Classic switches to a single-column stack at 900px in dashboard-layouts.css.
+ * Remove the older desktop minimum at the same breakpoint so narrow windows do
+ * not retain a 760px document width and force horizontal scrolling. */
+@media (max-width: 900px) {
+  body { min-width: 0; }
+}
+
 
 /* v1.9 human interaction + interjection */
 .interject-panel { margin-top: 12px; }
