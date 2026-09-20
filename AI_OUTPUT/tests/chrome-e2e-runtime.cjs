@@ -901,9 +901,32 @@ async function main() {
       try { await cdp.send('Target.closeTarget', { targetId: page.targetId }, undefined, 1000); } catch {}
     }
     try { await cdp.send('Browser.close', {}, undefined, 1000); } catch {}
-    if (!proc.killed) proc.kill('SIGTERM');
-    await Promise.race([new Promise(resolve => proc.once('exit', resolve)), sleep(2000)]);
-    fs.rmSync(profile, { recursive: true, force: true });
+
+    if (proc.exitCode === null && !proc.killed) {
+      try { proc.kill('SIGTERM'); } catch {}
+    }
+    if (proc.exitCode === null) {
+      await Promise.race([
+        new Promise(resolve => proc.once('exit', resolve)),
+        sleep(3000)
+      ]);
+    }
+    if (proc.exitCode === null && !proc.killed) {
+      try { proc.kill('SIGKILL'); } catch {}
+    }
+    if (proc.exitCode === null) {
+      await Promise.race([
+        new Promise(resolve => proc.once('exit', resolve)),
+        sleep(1000)
+      ]);
+    }
+
+    // Cleanup must never hide the actual E2E assertion/runtime failure.
+    try {
+      fs.rmSync(profile, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 });
+    } catch (cleanupError) {
+      console.warn('Chrome E2E profile cleanup warning:', cleanupError?.message || cleanupError);
+    }
   }
 }
 
