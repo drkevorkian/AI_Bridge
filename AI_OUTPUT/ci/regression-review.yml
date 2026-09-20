@@ -22,10 +22,16 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
         with: {node-version: "22", check-latest: true}
-      - run: |
+      - name: Root syntax and integrity
+        run: |
           node --check background.js
           node --check content.js
           node tests/repository-integrity.mjs
-      - run: node AI_OUTPUT/tests/chrome-extension-smoke.mjs
-      - run: node AI_OUTPUT/tests/classic-runtime-contract.mjs
-      - run: node AI_OUTPUT/tests/chrome-pack-smoke.mjs
+      - name: Security and authority regressions
+        run: node AI_OUTPUT/tests/security-regression-runner.mjs
+      - name: Chrome extension structure
+        run: node AI_OUTPUT/tests/chrome-extension-smoke.mjs
+      - name: Classic runtime contract
+        run: node AI_OUTPUT/tests/classic-runtime-contract.mjs
+      - name: Chrome pack validation
+        run: node AI_OUTPUT/tests/chrome-pack-smoke.mjs
