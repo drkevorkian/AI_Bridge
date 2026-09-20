@@ -5,7 +5,7 @@ const MIN_AGENT_COUNT = 1;
 const MAX_AGENT_COUNT = ALL_SIDES.length;
 const SIDES = ALL_SIDES.slice(0, DEFAULT_AGENT_COUNT);
 const STATE_VERSION = 3;
-const CONTENT_VERSION = "1.18.0-review.1";
+const CONTENT_VERSION = "1.18.0-review.3";
 const WORK_MODES = new Set(["relay", "collaborate", "compete", "parallel", "review", "mesh"]);
 const INFINITE_TURNS = -1;
 const MIN_FINITE_TURNS = 1;
@@ -2514,11 +2514,33 @@ function normalizeProviderEventText(value){
 async function recordProviderEvent(msg,sender){
   await stateReady;
   await reviewRuntimeReady;
+  if(sender?.id!==chrome.runtime.id) return {ok:false,ignored:true,reason:"PROVIDER_EVENT_EXTENSION_ID_MISMATCH"};
   if(!sender?.tab?.id) return {ok:false,ignored:true,reason:"PROVIDER_EVENT_REQUIRES_TAB"};
+  if(sender.frameId!==0) return {ok:false,ignored:true,reason:"PROVIDER_EVENT_FRAME_MISMATCH"};
+  if(String(sender.documentLifecycle||"").toLowerCase()!=="active") return {ok:false,ignored:true,reason:"PROVIDER_EVENT_DOCUMENT_NOT_ACTIVE"};
+  if(!sender.documentId) return {ok:false,ignored:true,reason:"PROVIDER_EVENT_DOCUMENT_ID_MISSING"};
   const side=sideForTab(sender.tab.id);
   if(!side) return {ok:false,ignored:true,reason:"SIDE_NOT_BOUND"};
   const provider=reviewProviderFromUrl(sender.url||sender.tab?.url);
   if(!provider || provider!==String(msg.provider||"").toLowerCase()) return {ok:false,ignored:true,reason:"PROVIDER_MISMATCH"};
+
+  const authority=reviewAuthorityBySide.get(side);
+  if(!authority) return {ok:false,ignored:true,reason:"PROVIDER_EVENT_AUTHORITY_MISSING"};
+  if(
+    Number(authority.tabId)!==Number(sender.tab.id) ||
+    String(authority.documentId||"")!==String(sender.documentId||"") ||
+    String(authority.provider||"")!==provider
+  ) return {ok:false,ignored:true,reason:"PROVIDER_EVENT_AUTHORITY_DOCUMENT_MISMATCH"};
+  if(String(msg.authorityRegistrationId||"")!==String(authority.authorityRegistrationId||"")) {
+    return {ok:false,ignored:true,reason:"PROVIDER_EVENT_AUTHORITY_TOKEN_MISMATCH"};
+  }
+  if(Number(msg.generationEpoch)!==Number(authority.generationEpoch)) {
+    return {ok:false,ignored:true,reason:"PROVIDER_EVENT_GENERATION_MISMATCH"};
+  }
+  if(!reviewSameIdentity(msg.conversationIdentity,authority.identity)) {
+    return {ok:false,ignored:true,reason:"PROVIDER_EVENT_IDENTITY_MISMATCH"};
+  }
+
   const code=String(msg.code||"").trim().toUpperCase();
   const policy=PROVIDER_EVENT_POLICY[code];
   if(!policy) return {ok:false,ignored:true,reason:"UNKNOWN_PROVIDER_EVENT"};
@@ -2559,6 +2581,8 @@ async function recordProviderEvent(msg,sender){
       dispatch &&
       dispatch.side===side &&
       Number(dispatch.tabId)===Number(sender.tab.id) &&
+      Number(dispatch.generationEpoch)===Number(authority.generationEpoch) &&
+      reviewSameIdentity(dispatch.conversationIdentity,authority.identity) &&
       [DISPATCH_STATUS.DISPATCHING,DISPATCH_STATUS.ACCEPTED,DISPATCH_STATUS.AWAITING_RESPONSE].includes(dispatch.status)
     );
   }

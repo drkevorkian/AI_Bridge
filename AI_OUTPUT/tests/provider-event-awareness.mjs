@@ -15,7 +15,8 @@ for(const token of [
   'AI_BRIDGE_PROVIDER_EVENT',
   'providerEventCandidateElements',
   'inspectProviderEvents(mutations)',
-  'closest("[data-message-author-role]")'
+  'closest("[data-message-author-role]")',
+  'authorityRegistrationId:registration?.authorityRegistrationId'
 ]) assert.ok(content.includes(token),'content missing '+token);
 
 assert.ok(/MESSAGE_DELIVERY_TIMEOUT[\s\S]{0,180}ambiguous:\s*true/.test(background),'timeout policy must be fail-closed');
@@ -27,6 +28,19 @@ assert.ok(background.includes('recordTranscript("provider-event"'),'provider eve
 assert.ok(background.includes('providerRecovery'),'provider recovery state missing');
 assert.ok(background.includes('entry?.type !== "provider-event"'),'provider events must stay out of AI-to-AI relay context');
 assert.ok(background.includes('MAX_PROVIDER_EVENTS'),'provider event history must be bounded');
+for(const token of [
+  'PROVIDER_EVENT_EXTENSION_ID_MISMATCH',
+  'PROVIDER_EVENT_FRAME_MISMATCH',
+  'PROVIDER_EVENT_DOCUMENT_NOT_ACTIVE',
+  'PROVIDER_EVENT_DOCUMENT_ID_MISSING',
+  'PROVIDER_EVENT_AUTHORITY_MISSING',
+  'PROVIDER_EVENT_AUTHORITY_DOCUMENT_MISMATCH',
+  'PROVIDER_EVENT_AUTHORITY_TOKEN_MISMATCH',
+  'PROVIDER_EVENT_GENERATION_MISMATCH',
+  'PROVIDER_EVENT_IDENTITY_MISMATCH',
+  'Number(dispatch.generationEpoch)===Number(authority.generationEpoch)',
+  'reviewSameIdentity(dispatch.conversationIdentity,authority.identity)'
+]) assert.ok(background.includes(token),'provider event authority gate missing '+token);
 assert.ok(dashboard.includes('entry.type === "provider-event"'),'dashboard provider-event rendering missing');
 assert.ok(dashboard.includes('Provider event · AI'),'provider event title missing');
 assert.ok(dashboard.includes('e.type === "provider-event"'),'provider events must be included in transcript rendering');

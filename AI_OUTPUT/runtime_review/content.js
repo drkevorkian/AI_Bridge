@@ -2,7 +2,7 @@
   if (globalThis.__AI_BRIDGE_REVIEW_CONTENT__) return;
   globalThis.__AI_BRIDGE_REVIEW_CONTENT__ = true;
 
-  const VERSION = "1.18.0-review.2";
+  const VERSION = "1.18.0-review.3";
   const host = location.hostname.toLowerCase();
   const provider = host === "chatgpt.com" || host === "chat.openai.com" ? "chatgpt"
     : host === "grok.com" ? "grok"
@@ -282,6 +282,7 @@
         text:event.text,
         dispatchId,
         observedAt:Date.now(),
+        authorityRegistrationId:registration?.authorityRegistrationId??"",
         generationEpoch:registration?.generationEpoch??null,
         conversationIdentity:registration?.identity??routeIdentity()
       }).catch(()=>{});
