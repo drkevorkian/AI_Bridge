@@ -1039,8 +1039,6 @@ async function reviewProcessIncomingEnvelope(envelope, { fromParked = false } = 
       );
     }
 
-    await reviewParkedStore.finalize(envelope.dispatchId);
-
     if (dispatch.purpose === "CONTINUITY") {
       const tx = reviewRollover.get(envelope.side);
       if (!tx) return reviewPauseForAmbiguity("Continuity response arrived without an active rollover transaction.");
@@ -1053,17 +1051,35 @@ async function reviewProcessIncomingEnvelope(envelope, { fromParked = false } = 
       if (!acceptance.ok) {
         return reviewPauseForAmbiguity("Continuity response could not complete rollover: " + acceptance.reason);
       }
-      reviewRollover.transition(envelope.side, ROLLOVER_PHASE.COMPLETE, {}, Date.now());
-      delete reviewRolloverContexts[envelope.side];
+
+      // COMPLETE is part of the durable response-commit barrier. Persist it
+      // before deleting the parked envelope: if storage fails here, the claimed
+      // response remains recoverable and startup reconciliation can retry.
+      const completedRollover = reviewRollover.transition(
+        envelope.side,
+        ROLLOVER_PHASE.COMPLETE,
+        {},
+        Date.now()
+      );
       await reviewPersistRollover();
       appendLog({
         time:Date.now(),
         type:"thread-rollover",
         side:envelope.side,
-        rolloverId:tx.rolloverId,
+        rolloverId:completedRollover.rolloverId,
         phase:ROLLOVER_PHASE.COMPLETE,
         text:"Automatic thread rollover completed; normal relay resumed."
       });
+    }
+
+    await reviewParkedStore.finalize(envelope.dispatchId);
+
+    if (dispatch.purpose === "CONTINUITY") {
+      // The durable transaction is already COMPLETE. Context cleanup is only
+      // housekeeping; a failed cleanup write must never undo a proven response.
+      delete reviewRolloverContexts[envelope.side];
+      try { await reviewPersistRollover(); }
+      catch (error) { console.warn("AI Bridge rollover context cleanup deferred", error); }
     }
 
     if(state.updateCheckpoint?.phase===UPDATE_PHASE.DRAINING){
