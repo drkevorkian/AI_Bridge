@@ -51,7 +51,8 @@ assert.doesNotMatch(
   'MV3 listener must register before any top-level state-readiness wait'
 );
 
-assert.ok(background.startsWith('importScripts("runtime-core.js");'));
+assert.ok(background.startsWith('importScripts("runtime-core.js","update-checkpoint.js");'),'review background must load runtime core and durable update checkpoint before startup');
+assert.equal(background.split('importScripts("runtime-core.js","update-checkpoint.js");').length-1,1,'review startup imports must be declared exactly once');
 assert.ok(runtimeCore.includes('DispatchLedger'));
 assert.ok(runtimeCore.includes('validateIncomingResponse'));
 assert.ok(runtimeCore.includes('ParkedResponseStore'));
