@@ -448,7 +448,17 @@ async function reviewRestoreUpdateCheckpoint(){
 
   if(cp.phase===UPDATE_PHASE.DRAINING){
     try{await reviewVerifyReboundBindings(cp);}catch(error){return reviewFailUpdate(cp,"UPDATE_DRAIN_REBIND_FAILED: "+(error?.message||error));}
-    return {active:true,draining:true};
+    // A worker may die after the final provider response was committed but
+    // before DRAINING was advanced to CHECKPOINTED. Re-evaluate the durable
+    // boundary on startup so that crash point cannot strand the updater.
+    const drainBoundary=reviewUpdateBoundary();
+    if(drainBoundary.safe){
+      return reviewCheckpointAtSafeBoundary();
+    }
+    if(!drainBoundary.draining){
+      return reviewFailUpdate(cp,"UPDATE_DRAIN_RECOVERY_"+drainBoundary.code);
+    }
+    return {active:true,draining:true,boundary:drainBoundary};
   }
 
   if(cp.phase===UPDATE_PHASE.CHECKPOINTED){
