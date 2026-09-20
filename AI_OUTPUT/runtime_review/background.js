@@ -5,7 +5,7 @@ const MIN_AGENT_COUNT = 1;
 const MAX_AGENT_COUNT = ALL_SIDES.length;
 const SIDES = ALL_SIDES.slice(0, DEFAULT_AGENT_COUNT);
 const STATE_VERSION = 3;
-const CONTENT_VERSION = "1.18.0-review.1";
+const CONTENT_VERSION = "1.18.0-review.4";
 const WORK_MODES = new Set(["relay", "collaborate", "compete", "parallel", "review", "mesh"]);
 const INFINITE_TURNS = -1;
 const MIN_FINITE_TURNS = 1;
@@ -128,6 +128,16 @@ const { ParkedResponseStore, RECORD_STATE } = AIBridgeRuntimeCore.parked;
 const { createConversationAuthority, AUTHORITY_STATES } = AIBridgeRuntimeCore.authority;
 const REVIEW_DISPATCH_KEY = "aiBridgeRuntimeDispatchLedger";
 const REVIEW_AUTH_EPOCH_KEY = "aiBridgeRuntimeAuthorityEpochs";
+const PROVIDER_EVENT_POLICY = Object.freeze({
+  MESSAGE_DELIVERY_TIMEOUT: Object.freeze({ category:"DELIVERY", severity:"RECOVERABLE" }),
+  CONNECTION_INTERRUPTED: Object.freeze({ category:"CONNECTION", severity:"RECOVERABLE" }),
+  NETWORK_ERROR: Object.freeze({ category:"CONNECTION", severity:"RECOVERABLE" }),
+  GENERATION_ERROR: Object.freeze({ category:"GENERATION", severity:"RECOVERABLE" }),
+  RATE_LIMIT: Object.freeze({ category:"CAPACITY", severity:"RECOVERABLE" }),
+  USAGE_LIMIT: Object.freeze({ category:"CAPACITY", severity:"RECOVERABLE" }),
+  AUTH_REQUIRED: Object.freeze({ category:"AUTH", severity:"BLOCKING" }),
+  CONTENT_BLOCKED: Object.freeze({ category:"POLICY", severity:"BLOCKING" })
+});
 let reviewLedger = new DispatchLedger();
 let reviewRollover = new RolloverCoordinator();
 let reviewAuthorityEpochs = {};
@@ -516,7 +526,9 @@ async function reviewProcessIncomingEnvelope(envelope, { fromParked = false } = 
       return {ok:true,providerRecovered:true,paused:true,pending:true};
     }
     if (pending) return reviewContinueAfterCommittedResponse(envelope.side);
-    state.runtimePhase = state.sessionActive ? (state.awaitingHuman ? "PAUSED" : "AWAITING_PROVIDER_RESPONSE") : "IDLE";
+    state.runtimePhase = state.sessionActive
+      ? (state.awaitingHuman || state.paused ? "PAUSED" : "AWAITING_PROVIDER_RESPONSE")
+      : "IDLE";
     await saveState();
     return stateResult;
   } catch (error) {
@@ -1933,6 +1945,7 @@ function normalTurnMessage(side) {
   const delivered = Number(state.lastDeliveredSeqBySide[side] || 0);
   const unseen = state.transcript.filter(entry =>
     entry.seq > delivered &&
+    entry.type !== "provider_event" &&
     !(entry.type === "response" && entry.side === side) &&
     !(side === state.mainSide && entry.type === "human" && entry.interjection)
   );
@@ -2126,6 +2139,7 @@ async function advanceBatchIfReady() {
 
 function recoveryMessage(side) {
   const recent = boundedTranscript(state.transcript.filter(entry =>
+    entry.type !== "provider_event" &&
     !(side === state.mainSide && entry.type === "human" && entry.interjection)
   ));
   const sourceContext = sourceSectionForSide(side, { force: true });
@@ -2371,7 +2385,13 @@ async function sendToSide(side, text, { record = true, deliveredSeq = null, deli
     await reviewClearNextTurnPending(continuationSourceDispatchId);
   }
   await reviewTransitionDispatch(dispatch.dispatchId, DISPATCH_STATUS.AWAITING_RESPONSE);
-  state.runtimePhase = "AWAITING_PROVIDER_RESPONSE";
+  if (state.providerRecovery?.dispatchId === dispatch.dispatchId) {
+    state.running = false;
+    state.paused = true;
+    state.runtimePhase = "PROVIDER_RECOVERY_REQUIRED";
+  } else {
+    state.runtimePhase = "AWAITING_PROVIDER_RESPONSE";
+  }
   await saveState();
 
 const round = beginRoundTimer(side);
@@ -2843,6 +2863,66 @@ async function handleCompletedResponse(side, text, { relay = true, artifacts = [
   }
 }
 
+function reviewAuthorizeProviderEvent(msg, sender) {
+  if (!state.sessionActive) return { ok:false, reason:"NO_ACTIVE_SESSION" };
+  if (sender?.id !== chrome.runtime.id) return { ok:false, reason:"PROVIDER_EVENT_EXTENSION_ID_MISMATCH" };
+  if (!sender?.tab?.id || sender.frameId !== 0) return { ok:false, reason:"PROVIDER_EVENT_TAB_MISMATCH" };
+  if (String(sender.documentLifecycle || "").toLowerCase() !== "active") return { ok:false, reason:"PROVIDER_EVENT_DOCUMENT_NOT_ACTIVE" };
+  if (!sender.documentId) return { ok:false, reason:"PROVIDER_EVENT_DOCUMENT_ID_MISSING" };
+
+  const side = sideForTab(sender.tab.id);
+  const dispatchId = String(msg?.dispatchId || "");
+  const code = String(msg?.code || "").toUpperCase();
+  const policy = PROVIDER_EVENT_POLICY[code] || null;
+  const dispatch = dispatchId ? reviewLedger.get(dispatchId) : null;
+  const authority = side ? reviewAuthorityBySide.get(side) : null;
+  const allowedStatuses = new Set([
+    DISPATCH_STATUS.DISPATCHING,
+    DISPATCH_STATUS.ACCEPTED,
+    DISPATCH_STATUS.AWAITING_RESPONSE,
+    DISPATCH_STATUS.DELIVERY_AMBIGUOUS
+  ]);
+
+  if (!side || !policy || !dispatch || !authority || !allowedStatuses.has(dispatch.status)) {
+    return { ok:false, reason:"PROVIDER_EVENT_AUTHORITY_REJECTED" };
+  }
+  if (
+    dispatch.side !== side ||
+    authority.side !== side ||
+    Number(dispatch.tabId) !== Number(sender.tab.id) ||
+    Number(authority.tabId) !== Number(sender.tab.id)
+  ) {
+    return { ok:false, reason:"PROVIDER_EVENT_TAB_SIDE_MISMATCH" };
+  }
+
+  const provider = String(msg?.provider || "").toLowerCase();
+  const senderProvider = reviewProviderFromUrl(sender.url || sender.tab?.url);
+  if (!provider || provider !== authority.provider || senderProvider !== authority.provider) {
+    return { ok:false, reason:"PROVIDER_EVENT_PROVIDER_MISMATCH" };
+  }
+  if (String(sender.documentId) !== String(authority.documentId)) {
+    return { ok:false, reason:"PROVIDER_EVENT_DOCUMENT_MISMATCH" };
+  }
+  if (String(msg?.authorityRegistrationId || "") !== String(authority.authorityRegistrationId || "")) {
+    return { ok:false, reason:"PROVIDER_EVENT_REGISTRATION_MISMATCH" };
+  }
+  if (
+    Number(msg?.generationEpoch) !== Number(authority.generationEpoch) ||
+    Number(msg?.generationEpoch) !== Number(dispatch.generationEpoch)
+  ) {
+    return { ok:false, reason:"PROVIDER_EVENT_GENERATION_MISMATCH" };
+  }
+
+  let identity;
+  try { identity = reviewSanitizeIdentity(msg?.conversationIdentity); }
+  catch (_) { return { ok:false, reason:"PROVIDER_EVENT_IDENTITY_INVALID" }; }
+  if (!reviewSameIdentity(identity, authority.identity) || !reviewSameIdentity(identity, dispatch.conversationIdentity)) {
+    return { ok:false, reason:"PROVIDER_EVENT_IDENTITY_MISMATCH" };
+  }
+
+  return Object.freeze({ ok:true, side, dispatchId, code, policy, dispatch, authority, identity, provider });
+}
+
 chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   (async () => {
     if (msg.type === "AI_BRIDGE_POWER_SET") {
@@ -2924,17 +3004,19 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
         pong?.capabilities?.composer === "PASS" &&
         pong?.capabilities?.send === "PASS"
       );
+      const providerBlocked = Boolean(side && state.providerRecovery?.side === side);
       sendResponse({
         ok: true,
         connectionStatus: connected ? "CONNECTED" : "DISCONNECTED",
         actionAuthorityStatus: authority ? "DOCUMENT_AUTHORITY_VERIFIED" : (connected ? "LISTENER_CONNECTED" : "DISCONNECTED"),
         side: side || null,
         capabilities: {
-          relay: relayReady ? "READY" : "WAITING",
+          relay: providerBlocked ? "BLOCKED" : (relayReady ? "READY" : "WAITING"),
           rollover: "LIMITED",
           artifacts: "LIMITED",
           cancel: pong?.capabilities?.stop === "PASS" ? "READY" : "LIMITED"
-        }
+        },
+        operationalEvent: providerBlocked ? { ...state.providerRecovery } : null
       });
       return;
     }
@@ -3149,6 +3231,9 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
     if (msg.type === "AI_BRIDGE_RESUME") {
       if (!state.sessionActive) throw new Error("There is no saved session to resume.");
       if (state.awaitingHuman) throw new Error("Answer or suppress the pending human-input request before resuming.");
+      if (state.providerRecovery) {
+        throw new Error("PROVIDER_RECOVERY_REQUIRED: resolve the provider error in AI " + state.providerRecovery.side + " first. AI Bridge will not resend the original prompt automatically.");
+      }
 
       if (Array.isArray(state.pendingHumanQueue) && state.pendingHumanQueue.length) {
         const nextRequest = state.pendingHumanQueue.shift();
