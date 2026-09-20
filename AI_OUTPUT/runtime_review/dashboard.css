@@ -509,3 +509,39 @@ input, select, textarea { border-radius: var(--radius-md); transition: border-co
   font-size: 10px; font-weight: 850; letter-spacing: .04em;
 }
 .direct-route-badge.route-error { border-color: var(--danger-line); background: var(--danger-bg); color: var(--danger); }
+
+/* Very narrow Classic windows: allow header/action rows to wrap instead of
+ * forcing local horizontal overflow after the 900px single-column transition. */
+@media (max-width: 600px) {
+  .agent-topline,
+  .transcript-head,
+  .workspace-header {
+    flex-wrap: wrap;
+    align-items: flex-start;
+  }
+
+  .agent-identity,
+  .transcript-title {
+    min-width: 0;
+    max-width: 100%;
+  }
+
+  .transcript-title {
+    overflow-wrap: anywhere;
+  }
+
+  .transcript-meta {
+    white-space: normal;
+  }
+
+  .agent-actions,
+  .workspace-actions {
+    flex-wrap: wrap;
+  }
+}
+
+@media (max-width: 480px) {
+  .human-modal-actions {
+    grid-template-columns: 1fr;
+  }
+}
