@@ -3270,9 +3270,12 @@ async function reviewWaitForLimitDispatch(dispatchId, timeoutMs = 6000) {
   while (Date.now() - started < timeoutMs) {
     const record = reviewLedger.get(dispatchId);
     if (!record) throw new Error("THREAD_LIMIT_DISPATCH_UNKNOWN");
-    if (record.status === DISPATCH_STATUS.AWAITING_RESPONSE) return record;
+    if (
+      record.status === DISPATCH_STATUS.AWAITING_RESPONSE ||
+      record.status === DISPATCH_STATUS.DELIVERY_AMBIGUOUS
+    ) return record;
     if (![DISPATCH_STATUS.DISPATCHING, DISPATCH_STATUS.ACCEPTED].includes(record.status)) {
-      throw new Error("THREAD_LIMIT_DISPATCH_NOT_AWAITING_RESPONSE:" + record.status);
+      throw new Error("THREAD_LIMIT_DISPATCH_NOT_RECOVERABLE:" + record.status);
     }
     await new Promise(resolve => setTimeout(resolve, 75));
   }
