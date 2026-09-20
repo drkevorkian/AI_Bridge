@@ -161,11 +161,32 @@ async function reviewInitializeDurableRuntime() {
 
   let changed = false;
   for (const record of reviewLedger.snapshot()) {
-    if (record.status === DISPATCH_STATUS.DISPATCHING || record.status === DISPATCH_STATUS.ACCEPTED) {
+    if (record.status === DISPATCH_STATUS.ACCEPTED) {
+      // ACCEPTED means the isolated content runtime already returned
+      // ACTION_CONFIRMED. A service-worker restart cannot make that proven
+      // provider action ambiguous; resume waiting for its response.
+      reviewLedger.recoverAcceptedAfterRestart(record.dispatchId);
+      changed = true;
+      continue;
+    }
+    if (record.status === DISPATCH_STATUS.DELIVERY_AMBIGUOUS &&
+        record.failureReason === "MV3_WORKER_RESTART_DURING_DELIVERY" &&
+        record.acceptedAt != null) {
+      // Repair state written by older review builds that incorrectly
+      // downgraded a proven ACCEPTED dispatch during worker startup.
+      reviewLedger.recoverAcceptedAfterRestart(record.dispatchId);
+      changed = true;
+      continue;
+    }
+    if (record.status === DISPATCH_STATUS.DISPATCHING) {
+      // No background acceptance was persisted. Preserve exactly-once safety
+      // and require content-side action proof before this can be reopened.
       reviewLedger.transition(record.dispatchId, DISPATCH_STATUS.DELIVERY_AMBIGUOUS, {
         failureReason: "MV3_WORKER_RESTART_DURING_DELIVERY"
       });
-      reviewRecoveryPauseReason = "A provider delivery was interrupted by a service-worker restart and may already have been sent. Automatic replay is blocked.";
+      // Do not pause here. If a durable nextTurnPending exists, loadState()
+      // must first give that exact continuation a chance to recover from the
+      // surviving isolated content runtime's action cache.
       changed = true;
     }
   }
@@ -179,21 +200,50 @@ async function reviewInitializeDurableRuntime() {
     }
   }
 }
+function reviewRestartAmbiguities() {
+  return reviewLedger.snapshot().filter(record =>
+    record.status === DISPATCH_STATUS.DELIVERY_AMBIGUOUS &&
+    record.failureReason === "MV3_WORKER_RESTART_DURING_DELIVERY"
+  );
+}
+
 async function reviewPayloadHash(side, text) {
   const bytes = new TextEncoder().encode(JSON.stringify({ side: String(side), text: String(text || "") }));
   const digest = new Uint8Array(await crypto.subtle.digest("SHA-256", bytes));
   return [...digest].map(b => b.toString(16).padStart(2, "0")).join("");
 }
-function reviewFindUnresolvedDispatch(side, payloadHash) {
+function reviewFindUnresolvedDispatch(side, payloadHash, {
+  continuationSourceDispatchId = null,
+  continuationCreatedAt = 0
+} = {}) {
   const active = new Set([
     DISPATCH_STATUS.CREATED, DISPATCH_STATUS.DISPATCHING, DISPATCH_STATUS.ACCEPTED,
     DISPATCH_STATUS.AWAITING_RESPONSE, DISPATCH_STATUS.DELIVERY_AMBIGUOUS
   ]);
+  const targetSide = String(side).toUpperCase();
+  const sourceId = continuationSourceDispatchId == null ? null : String(continuationSourceDispatchId);
+  const createdFloor = Number(continuationCreatedAt) || 0;
   const candidates = reviewLedger.snapshot().filter(r =>
-    r.side === String(side).toUpperCase() && active.has(r.status)
+    r.side === targetSide && active.has(r.status)
   );
-  const exact = candidates.find(r => r.payloadHash === payloadHash) || null;
-  const blocking = candidates.find(r => r.status !== DISPATCH_STATUS.CREATED || r.payloadHash !== payloadHash) || null;
+  const belongsToContinuation = record => {
+    if (sourceId === null) return record.continuationSourceDispatchId == null;
+    if (record.continuationSourceDispatchId != null) {
+      return String(record.continuationSourceDispatchId) === sourceId;
+    }
+    // Backward-compatible fallback for records persisted before provenance was
+    // added. Never accept an older same-text record from before this pending turn.
+    return Number(record.createdAt) >= createdFloor;
+  };
+  const reusable = candidates.filter(r =>
+    r.status === DISPATCH_STATUS.CREATED &&
+    r.payloadHash === payloadHash &&
+    belongsToContinuation(r)
+  );
+  const exact = reusable.length === 1 ? reusable[0] : null;
+  const blocking = reusable.length > 1
+    ? reusable[1]
+    : candidates.find(r => r !== exact) || null;
   return { exact, blocking };
 }
 async function reviewTransitionDispatch(dispatchId, status, patch = {}) {
@@ -308,6 +358,128 @@ async function reviewEnforceContinuationConsistency() {
   return true;
 }
 
+async function reviewReadContentActionProof(dispatch) {
+  if (!dispatch || !Number.isInteger(Number(dispatch.tabId))) return null;
+  let response;
+  try {
+    response = await chrome.tabs.sendMessage(Number(dispatch.tabId), {
+      type: "AI_BRIDGE_ACTION_STATUS",
+      action: "SEND",
+      authorityId: String(dispatch.dispatchId)
+    });
+  } catch (_) {
+    return null;
+  }
+  if (
+    response?.ok !== true ||
+    response.found !== true ||
+    String(response.action || "").toUpperCase() !== "SEND" ||
+    String(response.authorityId || "") !== String(dispatch.dispatchId) ||
+    String(response.result?.outcome || "") !== "ACTION_CONFIRMED" ||
+    String(response.side || "").toUpperCase() !== String(dispatch.side || "").toUpperCase() ||
+    Number(response.generationEpoch) !== Number(dispatch.generationEpoch) ||
+    !reviewSameIdentity(response.conversationIdentity, dispatch.conversationIdentity)
+  ) return null;
+
+  return {
+    authorityId: String(dispatch.dispatchId),
+    action: "SEND",
+    outcome: "ACTION_CONFIRMED",
+    side: String(dispatch.side),
+    generationEpoch: Number(dispatch.generationEpoch),
+    conversationIdentity: { ...response.conversationIdentity }
+  };
+}
+
+async function reviewAdoptAwaitingRecoveredContinuation(pending) {
+  if (
+    !pending ||
+    pending.kind !== "SEQUENTIAL_SEND" ||
+    !SIDES.includes(pending.targetSide) ||
+    !pending.outgoing?.text
+  ) return null;
+
+  const payloadHash = await reviewPayloadHash(pending.targetSide, pending.outgoing.text);
+  const createdFloor = Number(pending.createdAt) || 0;
+  const candidateStatuses = new Set([
+    DISPATCH_STATUS.ACCEPTED,
+    DISPATCH_STATUS.AWAITING_RESPONSE,
+    DISPATCH_STATUS.DELIVERY_AMBIGUOUS
+  ]);
+  const sourceId = String(pending.sourceDispatchId);
+  let candidates = reviewLedger.snapshot().filter(record => {
+    if (
+      record.side !== pending.targetSide ||
+      record.payloadHash !== payloadHash ||
+      !candidateStatuses.has(record.status)
+    ) return false;
+    if (record.continuationSourceDispatchId != null) {
+      return String(record.continuationSourceDispatchId) === sourceId;
+    }
+    return Number(record.createdAt) >= createdFloor;
+  });
+  if (!candidates.length) return null;
+  if (candidates.length !== 1) {
+    return {
+      blocked: true,
+      reason: "RECOVERED_CONTINUATION_MULTIPLE_TARGET_DISPATCHES"
+    };
+  }
+
+  let dispatch = candidates[0];
+  if (dispatch.status === DISPATCH_STATUS.ACCEPTED) {
+    dispatch = reviewLedger.recoverAcceptedAfterRestart(dispatch.dispatchId);
+    await reviewPersistLedger();
+  } else if (
+    dispatch.status === DISPATCH_STATUS.DELIVERY_AMBIGUOUS &&
+    dispatch.failureReason === "MV3_WORKER_RESTART_DURING_DELIVERY"
+  ) {
+    let proof = null;
+    if (dispatch.acceptedAt == null) {
+      proof = await reviewReadContentActionProof(dispatch);
+      if (!proof) {
+        return {
+          blocked: true,
+          reason: "RESTART_DELIVERY_AMBIGUOUS_NO_CONTENT_PROOF"
+        };
+      }
+    }
+    dispatch = reviewLedger.recoverAcceptedAfterRestart(dispatch.dispatchId, {
+      contentProof: proof,
+      recoveredAt: Date.now()
+    });
+    await reviewPersistLedger();
+  }
+
+  if (dispatch.status !== DISPATCH_STATUS.AWAITING_RESPONSE) {
+    return { blocked: true, reason: "RECOVERED_CONTINUATION_NOT_AWAITING_RESPONSE" };
+  }
+
+  const authority = await reviewRegisterSideAuthority(pending.targetSide);
+  if (
+    Number(dispatch.tabId) !== Number(authority.tabId) ||
+    Number(dispatch.generationEpoch) !== Number(authority.generationEpoch) ||
+    !reviewSameIdentity(dispatch.conversationIdentity, authority.identity)
+  ) {
+    return { blocked: true, reason: "RECOVERED_CONTINUATION_AUTHORITY_MISMATCH" };
+  }
+
+  await reviewClearNextTurnPending(pending.sourceDispatchId);
+  state.running = true;
+  state.paused = false;
+  state.pauseReason = "";
+  state.runtimePhase = "AWAITING_PROVIDER_RESPONSE";
+  await saveState();
+  appendLog({
+    time: Date.now(),
+    type: "recovery",
+    side: pending.targetSide,
+    dispatchId: dispatch.dispatchId,
+    text: "Recovered durable continuation without replay; target dispatch is already awaiting its provider response."
+  });
+  return { ok: true, recovered: true, alreadySent: true, targetSide: pending.targetSide, dispatchId: dispatch.dispatchId };
+}
+
 async function reviewRecoverNextTurnPending() {
   const pending = state.nextTurnPending;
   if (!pending || !state.sessionActive) return { recovered: false };
@@ -384,6 +556,18 @@ async function reviewContinueAfterCommittedResponse(sourceSide) {
   if (!state.sessionActive || !state.running || state.awaitingHuman) return { ok: false, stopped: true };
 
   try {
+    // A worker/session recovery can occur after the target prompt was already
+    // accepted and persisted as AWAITING_RESPONSE but before nextTurnPending
+    // was cleared. Adopt that exact dispatch instead of attempting a replay.
+    const adopted = await reviewAdoptAwaitingRecoveredContinuation(pending);
+    if (adopted?.blocked) {
+      await reviewPauseForAmbiguity(
+        "Recovered next turn for AI " + pending.targetSide + " remains blocked: " + adopted.reason + ". No duplicate prompt was sent."
+      );
+      return { ok: false, paused: true, error: adopted.reason };
+    }
+    if (adopted) return adopted;
+
     const outgoing = pending.outgoing;
     await sendToSide(pending.targetSide, outgoing.text, {
       deliveredSeq: outgoing.deliveredSeq,
@@ -1532,6 +1716,11 @@ async function loadState() {
   await validateSavedBindings();
   await reviewRuntimeReady;
 
+  const startupRestartAmbiguities = reviewRestartAmbiguities();
+  if (startupRestartAmbiguities.length && !state.nextTurnPending) {
+    reviewRecoveryPauseReason = "A provider delivery was interrupted by a service-worker restart, but there is no durable next-turn record tying it to a safely recoverable continuation. Automatic replay remains blocked.";
+  }
+
   if (await reviewEnforceContinuationConsistency()) {
     reviewRecoveryPauseReason = state.pauseReason;
   }
@@ -1554,12 +1743,24 @@ async function loadState() {
       await Promise.all(SIDES.map(side => reviewRegisterSideAuthority(side)));
       if (state.nextTurnPending) {
         const recovered = await reviewRecoverNextTurnPending();
-        if (recovered?.paused) throw new Error("Next-turn recovery paused.");
+        if (recovered?.paused) {
+          state.running = false;
+          state.paused = true;
+          if (!state.pauseReason) state.pauseReason = recovered.reason || recovered.error || "Next-turn recovery paused.";
+          await saveState();
+        }
+      }
+      const remainingRestartAmbiguities = reviewRestartAmbiguities();
+      if (state.running && remainingRestartAmbiguities.length) {
+        await reviewPauseForAmbiguity("Restart recovery left unresolved provider-delivery ambiguity. Automatic replay remains blocked.");
       }
     } catch (err) {
+      const intentionalPause = state.paused && Boolean(String(state.pauseReason || "").trim());
       state.running = false;
       state.paused = true;
-      state.pauseReason = `Automatic reconnect failed: ${err.message}. Rebind all active AI tabs and press Resume.`;
+      if (!intentionalPause) {
+        state.pauseReason = `Automatic reconnect failed: ${err.message}. Rebind all active AI tabs and press Resume.`;
+      }
       await saveState();
     }
   }
@@ -2296,7 +2497,14 @@ async function sendToSide(side, text, { record = true, deliveredSeq = null, deli
   }
 
   const payloadHash = await reviewPayloadHash(side, text);
-  const unresolved = reviewFindUnresolvedDispatch(side, payloadHash);
+  const continuationPending = continuationSourceDispatchId != null &&
+    String(state.nextTurnPending?.sourceDispatchId || "") === String(continuationSourceDispatchId)
+      ? state.nextTurnPending
+      : null;
+  const unresolved = reviewFindUnresolvedDispatch(side, payloadHash, {
+    continuationSourceDispatchId,
+    continuationCreatedAt: continuationPending?.createdAt || 0
+  });
   let dispatch;
   if (unresolved.blocking) {
     await reviewPauseForAmbiguity("A prior dispatch for AI " + side + " is unresolved (" + unresolved.blocking.status + "). Automatic resend is blocked.");
@@ -2313,6 +2521,7 @@ async function sendToSide(side, text, { record = true, deliveredSeq = null, deli
       conversationIdentity: authority.identity,
       purpose: "RELAY",
       payloadHash,
+      continuationSourceDispatchId: continuationSourceDispatchId == null ? null : String(continuationSourceDispatchId),
       createdAt: Date.now()
     });
     await reviewPersistLedger();
