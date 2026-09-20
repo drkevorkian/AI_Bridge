@@ -18,7 +18,7 @@
     </header>
 
     <section class="settings-card">
-      <div class="section-heading"><span>Appearance</span><span id="installedVersion" class="muted"></span></div>
+      <div class="section-heading"><span>Appearance</span><span class="muted"><span id="installedVersion"></span> · Build <span id="installedBuild"></span></span></div>
       <div class="grid two">
         <label>Theme
           <select id="settingsTheme">
@@ -32,18 +32,14 @@
             <option value="terminal">Terminal</option>
           </select>
         </label>
-        <label>Dashboard layout
-          <select id="settingsLayout">
-            <option value="classic">Classic — three-pane workspace</option>
-            <option value="studio">Studio — transcript first</option>
-            <option value="focus">Focus — maximum transcript space</option>
-          </select>
+        <label>Workspace
+          <input type="text" value="Classic" readonly aria-label="Workspace theme">
         </label>
       </div>
-      <label>Control pane width — <span id="paneWidthValue">26%</span>
-        <input id="paneWidth" type="range" min="20" max="42" step="1" value="26">
+      <label>Control pane width — <span id="paneWidthValue">36%</span>
+        <input id="paneWidth" type="range" min="24" max="70" step="1" value="36">
       </label>
-      <p class="help">Theme changes apply immediately. Dashboard layout is saved immediately and is applied when you return to the Dashboard. You can also drag the splitter there.</p>
+      <p class="help">Color theme and pane width apply immediately to every AI Bridge page on this Chrome profile. Classic is the only workspace layout. You can also drag the splitter on the dashboard.</p>
     </section>
 
     <section class="settings-card">
