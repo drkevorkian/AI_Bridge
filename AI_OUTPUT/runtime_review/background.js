@@ -4008,6 +4008,30 @@ async function resetChatTab(tabId) {
   });
 }
 
+function reviewValidateManualFreshBindings(msg, activeSides = SIDES) {
+  const roster=[...new Set((Array.isArray(activeSides)?activeSides:SIDES)
+    .map(side=>String(side||"").toUpperCase()))]
+    .filter(side=>ALL_SIDES.includes(side));
+  if(!roster.length) throw new Error("Choose at least one active AI role.");
+
+  const bindings=roster.map(side=>({side,tabId:Number(msg?.[`tab${side}`])}));
+  if(bindings.some(binding=>!Number.isInteger(binding.tabId)||binding.tabId<=0)){
+    throw new Error("Choose an open supported AI tab for every active role.");
+  }
+  const byTab=new Map();
+  for(const binding of bindings){
+    const owners=byTab.get(binding.tabId)||[];
+    owners.push(binding.side);
+    byTab.set(binding.tabId,owners);
+  }
+  const duplicate=[...byTab.entries()].find(([,owners])=>owners.length>1);
+  if(duplicate){
+    const [tabId,owners]=duplicate;
+    throw new Error(`Each logical AI must use a different browser tab. Tab ${tabId} is selected for AI ${owners.join(" and AI ")}.`);
+  }
+  return bindings;
+}
+
 async function resetSelectedChats(msg, sides = SIDES, { allowActive = false } = {}) {
   if (state.sessionActive && !allowActive) throw new Error("Stop the current bridge session before opening fresh AI chats.");
   const allowedSides = state.sessionActive ? SIDES : ALL_SIDES;
@@ -4015,9 +4039,13 @@ async function resetSelectedChats(msg, sides = SIDES, { allowActive = false } = 
     .filter(side => allowedSides.includes(side));
   if (!chosen.length) throw new Error("Choose at least one AI role to reset.");
 
-  const ids = chosen.map(side => Number(msg?.[`tab${side}`]));
-  if (ids.some(id => !Number.isInteger(id) || id <= 0)) throw new Error("Choose an open supported AI tab for every requested role.");
-  if (new Set(ids).size !== ids.length) throw new Error("Each requested AI role must use a different tab.");
+  // Manual fresh-chat navigation mutates a real provider tab. Validate the
+  // entire active logical roster, not merely the requested subset, so a stale
+  // or custom extension page cannot navigate a tab another logical AI shares.
+  const rosterBindings=reviewValidateManualFreshBindings(msg,SIDES);
+  const bindingBySide=new Map(rosterBindings.map(binding=>[binding.side,binding.tabId]));
+  const ids=chosen.map(side=>bindingBySide.get(side));
+  if(ids.some(id=>!Number.isInteger(id)||id<=0)) throw new Error("Choose an open supported AI tab for every requested role.");
 
   const tabs = await Promise.all(ids.map(id => chrome.tabs.get(id)));
   for (const tab of tabs) freshChatUrlFor(tab?.url);
