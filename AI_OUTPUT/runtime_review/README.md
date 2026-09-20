@@ -102,3 +102,14 @@ The canonical provider-click/lost-ACK recovery case now uses the same element-sp
 - #newChatA and #freshOnStart must remain disabled.
 
 The harness no longer accepts whole-page document.body text as evidence for this recovery state. Helper-return objects are treated by shape: paused helpers return {pill,status}; deterministic helpers are read through their .status field.
+
+
+### Seeded dispatch lifecycle validity
+
+Seeded recovery snapshots now satisfy the same DispatchLedger lifecycle invariants as runtime-created records:
+- AWAITING_RESPONSE has acceptedAt and no completedAt;
+- RESPONSE_COMMITTED has acceptedAt and completedAt;
+- CREATED has neither acceptedAt nor completedAt;
+- ACCEPTED has acceptedAt and no completedAt.
+
+This prevents the worker from rejecting synthetic crash snapshots during ledger restore before the intended recovery behavior is exercised.

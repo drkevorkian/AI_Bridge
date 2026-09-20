@@ -536,6 +536,8 @@ async function main() {
       nextSeq: 2,
       log: []
     };
+    const baseDispatchCreatedAt = Number(recordsAfterResume[0]?.createdAt) || Date.now();
+    const baseDispatchAcceptedAt = Math.max(baseDispatchCreatedAt, Date.now());
     const baseDispatch = {
       ...recordsAfterResume[0],
       dispatchId: 'e2e-seeded-source-d1',
@@ -543,7 +545,15 @@ async function main() {
       tabId: providerTabs.a,
       purpose: 'RELAY',
       payloadHash: 'e2e-seeded-hash',
+      createdAt: baseDispatchCreatedAt,
+      acceptedAt: baseDispatchAcceptedAt,
+      completedAt: null,
       failureReason: null
+    };
+    const committedBaseDispatch = {
+      ...baseDispatch,
+      status: 'RESPONSE_COMMITTED',
+      completedAt: baseDispatchAcceptedAt + 1
     };
 
     // Case 1: a committed response with no continuation and no other live work
@@ -555,7 +565,7 @@ async function main() {
     await poll(() => workerTarget(cdp, extensionId), value => value === null, 10000);
     await setExtensionStorage(cdp, extensionId, {
       bridgeState: { ...baseState },
-      aiBridgeRuntimeDispatchLedger: { records: [{ ...baseDispatch, status: 'RESPONSE_COMMITTED' }] },
+      aiBridgeRuntimeDispatchLedger: { records: [committedBaseDispatch] },
       aiBridgeRuntimeParkedResponses: { records: [] }
     });
 
@@ -664,7 +674,7 @@ async function main() {
     };
     await setExtensionStorage(cdp, extensionId, {
       bridgeState: { ...baseState, nextTurnPending: positiveMarker, runtimePhase: 'NEXT_TURN_PENDING' },
-      aiBridgeRuntimeDispatchLedger: { records: [{ ...baseDispatch, status: 'RESPONSE_COMMITTED' }] },
+      aiBridgeRuntimeDispatchLedger: { records: [committedBaseDispatch] },
       aiBridgeRuntimeParkedResponses: { records: [] }
     });
 
@@ -768,7 +778,7 @@ async function main() {
       bridgeState: { ...baseState, nextTurnPending: positiveMarker, runtimePhase: 'NEXT_TURN_PENDING' },
       aiBridgeRuntimeDispatchLedger: {
         records: [
-          { ...baseDispatch, status: 'RESPONSE_COMMITTED' },
+          committedBaseDispatch,
           createdTarget
         ]
       },
@@ -823,7 +833,7 @@ async function main() {
         bridgeState: { ...baseState, nextTurnPending: positiveMarker, runtimePhase: 'DISPATCHING' },
         aiBridgeRuntimeDispatchLedger: {
           records: [
-            { ...baseDispatch, status: 'RESPONSE_COMMITTED' },
+            committedBaseDispatch,
             seededTarget
           ]
         },
