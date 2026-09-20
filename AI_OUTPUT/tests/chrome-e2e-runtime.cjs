@@ -314,10 +314,24 @@ async function main() {
 
     await poll(() => evaluate(cdp, providerA.sessionId, 'window.__providerActionCount'), count => count === 1, 15000);
 
-    const beforeKill = await extensionStorage(cdp, extensionId, ['aiBridgeRuntimeDispatchLedger']);
+    const healthBeforeKill = await poll(async () => {
+      const health = await extensionMessage(cdp, dashboard.sessionId, { type: 'AI_BRIDGE_PROVIDER_HEALTH', tabId: providerTabs.a });
+      if (!health.transportOk || !health.value?.ok) return null;
+      return health.value;
+    }, value =>
+      value?.connectionStatus === 'CONNECTED' &&
+      value?.actionAuthorityStatus === 'DOCUMENT_AUTHORITY_VERIFIED' &&
+      value?.capabilities?.relay === 'READY',
+    10000);
+    assert.equal(healthBeforeKill.capabilities.rollover, 'LIMITED');
+    assert.equal(healthBeforeKill.capabilities.artifacts, 'LIMITED');
+
+    const beforeKill = await extensionStorage(cdp, extensionId, ['aiBridgeRuntimeDispatchLedger', 'bridgeState']);
     const recordsBeforeKill = beforeKill.aiBridgeRuntimeDispatchLedger?.records || [];
     assert.equal(recordsBeforeKill.length, 1);
     assert.equal(recordsBeforeKill[0].status, 'DISPATCHING');
+    const responseCountBeforeKill = (beforeKill.bridgeState?.transcript || []).filter(entry => entry?.type === 'response').length;
+    assert.equal(responseCountBeforeKill, 0, 'Provider-click/ACK-loss setup should not commit a response before the worker kill');
 
     await cdp.send('Target.closeTarget', { targetId: dashboard.targetId });
     const dashboardIndex = pages.indexOf(dashboard);
@@ -337,6 +351,25 @@ async function main() {
     assert.equal(recoveredState.running, false);
     assert.match(recoveredState.pauseReason || '', /ambiguous|interrupted|replay/i);
 
+    const healthAfterRestart = await poll(async () => {
+      const health = await extensionMessage(cdp, dashboardAfter.sessionId, { type: 'AI_BRIDGE_PROVIDER_HEALTH', tabId: providerTabs.a });
+      if (!health.transportOk || !health.value?.ok) return null;
+      return health.value;
+    }, value =>
+      value?.connectionStatus === 'CONNECTED' &&
+      value?.actionAuthorityStatus === 'DOCUMENT_AUTHORITY_VERIFIED' &&
+      value?.capabilities?.relay === 'READY',
+    15000);
+    assert.equal(healthAfterRestart.capabilities.rollover, 'LIMITED');
+    assert.equal(healthAfterRestart.capabilities.artifacts, 'LIMITED');
+
+    const pausedAfterHealth = await extensionMessage(cdp, dashboardAfter.sessionId, { type: 'AI_BRIDGE_GET_STATE', omitTranscript: false });
+    assert.equal(pausedAfterHealth.transportOk, true);
+    assert.equal(pausedAfterHealth.value?.state?.paused, true, 'Provider re-verification must not clear the session pause');
+    assert.equal(pausedAfterHealth.value?.state?.running, false, 'Provider re-verification must not resume the session');
+    const responseCountAfterRestart = (pausedAfterHealth.value?.state?.transcript || []).filter(entry => entry?.type === 'response').length;
+    assert.equal(responseCountAfterRestart, 0, 'Worker restart must not manufacture a response transcript commit');
+
     const afterKill = await extensionStorage(cdp, extensionId, ['aiBridgeRuntimeDispatchLedger', 'bridgeState']);
     const recordsAfterKill = afterKill.aiBridgeRuntimeDispatchLedger?.records || [];
     assert.equal(recordsAfterKill.length, 1);
@@ -352,17 +385,40 @@ async function main() {
       labelA: 'Fixture ChatGPT A',
       labelB: 'Fixture ChatGPT B'
     });
-    assert.equal(resume.transportOk, false, 'Resume should fail closed while an ambiguous dispatch exists');
+    assert.equal(resume.transportOk, true, 'Resume transport should succeed so the runtime can return its fail-closed application result');
+    assert.equal(resume.value?.ok, false, 'Resume should fail closed while an ambiguous dispatch exists');
+    assert.match(String(resume.value?.error || ''), /UNRESOLVED_DISPATCH_BLOCKS_REPLAY|unresolved|ambiguous/i);
+
     await sleep(500);
     const actionCountAfterResume = await evaluate(cdp, providerA.sessionId, 'window.__providerActionCount');
     assert.equal(actionCountAfterResume, actionCountBeforeResume, 'Resume replayed an ambiguous provider action');
 
+    const afterResume = await extensionStorage(cdp, extensionId, ['aiBridgeRuntimeDispatchLedger', 'bridgeState']);
+    const recordsAfterResume = afterResume.aiBridgeRuntimeDispatchLedger?.records || [];
+    assert.equal(recordsAfterResume.length, 1, 'Resume changed the number of durable dispatches');
+    assert.equal(recordsAfterResume[0].dispatchId, recordsAfterKill[0].dispatchId, 'Resume replaced the ambiguous dispatch ID');
+    assert.equal(recordsAfterResume[0].status, 'DELIVERY_AMBIGUOUS', 'Resume changed ambiguous delivery state');
+    assert.equal(afterResume.bridgeState?.paused, true, 'Resume should leave the session paused after fail-closed refusal');
+    assert.equal(afterResume.bridgeState?.running, false, 'Resume should not leave the session running after fail-closed refusal');
+    const responseCountAfterResume = (afterResume.bridgeState?.transcript || []).filter(entry => entry?.type === 'response').length;
+    assert.equal(responseCountAfterResume, 0, 'Resume refusal must not mutate the response transcript');
+
     const visible = await poll(
       () => evaluate(cdp, dashboardAfter.sessionId, 'document.body.innerText'),
-      text => /Runtime:\s*Paused/i.test(text) && /New chat — Limited/i.test(text),
+      text =>
+        /Runtime:\s*Paused/i.test(text) &&
+        /New chat — Limited/i.test(text) &&
+        /Connection:\s*Connected/i.test(text) &&
+        /Authority:\s*Verified/i.test(text) &&
+        /Relay:\s*READY/i.test(text) &&
+        /Rollover:\s*LIMITED/i.test(text) &&
+        /Artifacts:\s*LIMITED/i.test(text),
       10000
     );
     assert.match(visible, /Paused/i);
+    assert.match(visible, /Connection:\s*Connected/i);
+    assert.match(visible, /Authority:\s*Verified/i);
+    assert.match(visible, /Relay:\s*READY/i);
 
     const workers = (await cdp.send('Target.getTargets')).targetInfos.filter(target =>
       target.type === 'service_worker' &&
@@ -377,7 +433,10 @@ async function main() {
       dispatchId: recordsAfterKill[0].dispatchId,
       dispatchStatus: recordsAfterKill[0].status,
       runtimePhase: recoveredState.runtimePhase,
-      paused: recoveredState.paused
+      paused: recoveredState.paused,
+      providerAuthority: healthAfterRestart.actionAuthorityStatus,
+      relayCapability: healthAfterRestart.capabilities.relay,
+      responseTranscriptCount: responseCountAfterResume
     }, null, 2));
   } finally {
     for (const page of pages) {

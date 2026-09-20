@@ -45,5 +45,7 @@ jobs:
         run: node AI_OUTPUT/tests/chrome-pack-smoke.mjs
       - name: Runtime review pack validation
         run: node AI_OUTPUT/tests/runtime-review-pack-smoke.mjs
+      - name: Round 31 browser health contract
+        run: node AI_OUTPUT/tests/round31-browser-health-contract.mjs
       - name: Real Chrome MV3 E2E
         run: node AI_OUTPUT/tests/chrome-e2e-runtime.cjs

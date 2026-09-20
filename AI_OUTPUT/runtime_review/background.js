@@ -2787,10 +2787,17 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
         connected = pong?.ok === true;
       } catch (_) {}
       const side = sideForTab(tabId);
-      const authority = side ? reviewAuthorityBySide.get(side) : null;
+      let authority = side ? reviewAuthorityBySide.get(side) : null;
       let pong = null;
       if (connected) {
         try { pong = await chrome.tabs.sendMessage(tabId, { type: "AI_BRIDGE_PING" }); } catch (_) {}
+      }
+      if (connected && side && !authority) {
+        try {
+          authority = await reviewRegisterSideAuthority(side);
+        } catch (_) {
+          authority = null;
+        }
       }
       const relayReady = Boolean(
         authority &&

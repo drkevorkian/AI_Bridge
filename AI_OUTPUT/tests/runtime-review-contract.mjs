@@ -54,6 +54,8 @@ assert.ok(content.includes('AI_BRIDGE_THREAD_LIMIT'));
 assert.ok(content.includes('generationEpoch:registration.generationEpoch'));
 assert.ok(content.includes('conversationIdentity:registration.identity'));
 assert.ok(settings.includes('AI_BRIDGE_PROVIDER_HEALTH'));
+assert.ok(background.includes('if (connected && side && !authority)'));
+assert.ok(background.includes('authority = await reviewRegisterSideAuthority(side)'));
 assert.ok(background.includes('reviewLedger.create'));
 assert.ok(background.includes('reviewPersistLedger'));
 assert.ok(background.includes('DISPATCH_STATUS.DELIVERY_AMBIGUOUS'));

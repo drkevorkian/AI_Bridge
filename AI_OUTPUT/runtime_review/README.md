@@ -44,3 +44,14 @@ The harness uses `--remote-debugging-pipe` plus `--enable-unsafe-extension-debug
 - New Chat and fresh-chat startup remain visibly LIMITED.
 
 A browser policy that forbids unpacked extension installation is a test failure, not a pass or silent skip.
+
+
+### Paused-session provider re-verification
+
+Provider health checks for already-bound tabs may re-establish document authority even while the relay session is paused. This registration handshake has no provider-side action and does not clear the session pause.
+
+The real-Chrome gate requires both truths after ambiguous-delivery recovery:
+- provider: Connected / Verified / Relay READY;
+- session: Paused because prior delivery is ambiguous.
+
+The harness also counts response transcript commits and requires zero for the provider-click-before-ACK kill case and after the refused Resume.
