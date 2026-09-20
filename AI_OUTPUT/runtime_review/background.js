@@ -39,6 +39,8 @@ const DEFAULT_STATE = {
   running: false,
   paused: false,
   pauseReason: "",
+  runtimePhase: "IDLE",
+  nextTurnPending: null,
 
   tabA: null,
   tabB: null,
@@ -107,7 +109,7 @@ let stateReady = loadState();
  * Chrome listeners remain top-level/synchronous; these maps hold only ephemeral
  * per-worker authority. A restarted worker must re-register before any action.
  */
-const REVIEW_RUNTIME_VERSION = "1.18.0-review.2";
+const REVIEW_RUNTIME_VERSION = "1.18.0-review.3";
 const { DispatchLedger, DISPATCH_STATUS } = AIBridgeRuntimeCore.ledger;
 const { RolloverCoordinator } = AIBridgeRuntimeCore.rollover;
 const { validateIncomingResponse, DISPOSITION } = AIBridgeRuntimeCore.responseGate;
@@ -205,24 +207,31 @@ async function reviewPauseForAmbiguity(reason) {
   await pauseBridge(reason);
   return { ok: false, paused: true, reason };
 }
-async function reviewContinueAfterCommittedResponse(sourceSide) {
-  if (!state.sessionActive || state.awaitingHuman) return { ok: true, paused: true };
-  if (hasReachedTurnLimit()) return { ok: true, finished: true };
-
-  state.running = true;
-  state.paused = false;
-  state.pauseReason = "";
-  await saveState();
+function reviewCloneOutgoing(outgoing) {
+  return {
+    text: String(outgoing?.text || ""),
+    deliveredSeq: Number.isFinite(Number(outgoing?.deliveredSeq)) ? Number(outgoing.deliveredSeq) : null,
+    deliveredSources: Boolean(outgoing?.deliveredSources),
+    artifactIds: Array.isArray(outgoing?.artifactIds) ? [...outgoing.artifactIds] : [],
+    mainInterjectionIds: Array.isArray(outgoing?.mainInterjectionIds) ? [...outgoing.mainInterjectionIds] : []
+  };
+}
+function reviewBuildNextTurnPending(sourceDispatchId, sourceSide) {
+  if (!state.sessionActive || state.awaitingHuman || hasReachedTurnLimit()) return null;
 
   if (isBatchWorkMode()) {
-    const transition = await advanceBatchIfReady();
-    return { ok: true, ...transition };
+    if (state.phasePendingSides.length) return null;
+    return {
+      kind: "BATCH_ADVANCE",
+      sourceDispatchId: String(sourceDispatchId),
+      sourceSide,
+      workMode: state.workMode,
+      workPhase: state.workPhase,
+      createdAt: Date.now()
+    };
   }
 
   const targetSide = SIDES.includes(state.currentSide) ? state.currentSide : nextSide(sourceSide);
-  await new Promise(resolve => setTimeout(resolve, state.delayMs));
-  if (!state.sessionActive || !state.running || state.awaitingHuman) return { ok: false, stopped: true };
-
   const entry = [...state.transcript].reverse().find(item =>
     item?.type === "response" && item?.side === sourceSide
   ) || null;
@@ -230,21 +239,126 @@ async function reviewContinueAfterCommittedResponse(sourceSide) {
     ? directTurnMessage(sourceSide, targetSide, entry)
     : normalTurnMessage(targetSide);
 
+  return {
+    kind: "SEQUENTIAL_SEND",
+    sourceDispatchId: String(sourceDispatchId),
+    sourceSide,
+    targetSide,
+    direct: Boolean(entry?.directToSide),
+    outgoing: reviewCloneOutgoing(outgoing),
+    createdAt: Date.now()
+  };
+}
+async function reviewPersistNextTurnPending(pending) {
+  state.nextTurnPending = pending;
+  state.runtimePhase = pending ? "NEXT_TURN_PENDING" : (state.sessionActive ? "AWAITING_PROVIDER_RESPONSE" : "IDLE");
+  if (pending) {
+    state.running = true;
+    state.paused = false;
+    state.pauseReason = "";
+  }
+  await saveState();
+}
+async function reviewClearNextTurnPending(sourceDispatchId = null) {
+  const pending = state.nextTurnPending;
+  if (!pending) return false;
+  if (sourceDispatchId != null && String(pending.sourceDispatchId) !== String(sourceDispatchId)) return false;
+  state.nextTurnPending = null;
+  state.runtimePhase = state.sessionActive ? "AWAITING_PROVIDER_RESPONSE" : "IDLE";
+  await saveState();
+  return true;
+}
+async function reviewRecoverNextTurnPending() {
+  const pending = state.nextTurnPending;
+  if (!pending || !state.sessionActive) return { recovered: false };
+  const source = reviewLedger.get(pending.sourceDispatchId);
+  if (!source || source.status !== DISPATCH_STATUS.RESPONSE_COMMITTED) {
+    await reviewPauseForAmbiguity("The durable next-turn marker does not match a committed source response. Relay recovery is paused.");
+    return { recovered: false, paused: true };
+  }
+  state.runtimePhase = "RECOVERING_NEXT_TURN";
+  await saveState();
+  return reviewContinueAfterCommittedResponse(pending.sourceSide);
+}
+
+async function reviewContinueAfterCommittedResponse(sourceSide) {
+  if (!state.sessionActive || state.awaitingHuman) return { ok: true, paused: true };
+  if (hasReachedTurnLimit()) {
+    await reviewClearNextTurnPending();
+    return { ok: true, finished: true };
+  }
+
+  const pending = state.nextTurnPending;
+  if (!pending) return { ok: false, paused: true, reason: "NO_DURABLE_CONTINUATION" };
+  state.running = true;
+  state.paused = false;
+  state.pauseReason = "";
+  state.runtimePhase = "RECOVERING_NEXT_TURN";
+  await saveState();
+
+  if (pending.kind === "BATCH_ADVANCE") {
+    if (!isBatchWorkMode()) {
+      return reviewPauseForAmbiguity("Durable batch continuation no longer matches the active work mode.");
+    }
+    if (state.phasePendingSides.length) {
+      const unsent = pendingUnsentSides();
+      if (unsent.length) {
+        try {
+          await sendBatchPhase(unsent);
+          if (state.nextTurnPending?.sourceDispatchId === pending.sourceDispatchId) {
+            await reviewClearNextTurnPending(pending.sourceDispatchId);
+          }
+          return { ok: true, advanced: true, phase: state.workPhase };
+        } catch (error) {
+          await pauseBridge("Could not recover batch continuation: " + (error?.message || error));
+          return { ok: false, error: error?.message || String(error) };
+        }
+      }
+      return reviewPauseForAmbiguity("Batch continuation has pending AI responses but no safely reconstructable unsent target.");
+    }
+
+    if (state.workMode === "review" && state.workPhase === "primary") {
+      resetBatchPhase("review");
+      await saveState();
+      try {
+        await sendBatchPhase();
+        await reviewClearNextTurnPending(pending.sourceDispatchId);
+        return { ok: true, advanced: true, phase: "review" };
+      } catch (error) {
+        await pauseBridge("Could not start recovered peer-review phase: " + (error?.message || error));
+        return { ok: false, error: error?.message || String(error) };
+      }
+    }
+
+    await reviewClearNextTurnPending(pending.sourceDispatchId);
+    const reason = state.workMode === "review" ? "Peer-review cycle complete" : workModeLabel() + " pass complete";
+    await endBridge(reason);
+    return { ok: true, advanced: true, finished: true };
+  }
+
+  if (pending.kind !== "SEQUENTIAL_SEND" || !SIDES.includes(pending.targetSide) || !pending.outgoing?.text) {
+    return reviewPauseForAmbiguity("Durable next-turn continuation is malformed.");
+  }
+
+  await new Promise(resolve => setTimeout(resolve, state.delayMs));
+  if (!state.sessionActive || !state.running || state.awaitingHuman) return { ok: false, stopped: true };
+
   try {
-    await sendToSide(targetSide, outgoing.text, {
+    const outgoing = pending.outgoing;
+    await sendToSide(pending.targetSide, outgoing.text, {
       deliveredSeq: outgoing.deliveredSeq,
       deliveredSources: outgoing.deliveredSources,
       artifactIds: outgoing.artifactIds,
-      artifacts: outgoing.artifacts,
-      mainInterjectionIds: outgoing.mainInterjectionIds || []
+      artifacts: artifactRecordsForIds(outgoing.artifactIds),
+      mainInterjectionIds: outgoing.mainInterjectionIds,
+      continuationSourceDispatchId: pending.sourceDispatchId
     });
-    return { ok: true, direct: Boolean(entry?.directToSide), targetSide };
+    return { ok: true, direct: Boolean(pending.direct), targetSide: pending.targetSide };
   } catch (error) {
-    await pauseBridge("Could not send to AI " + targetSide + ": " + (error?.message || error));
+    await pauseBridge("Could not send recovered next turn to AI " + pending.targetSide + ": " + (error?.message || error));
     return { ok: false, error: error?.message || String(error) };
   }
 }
-
 async function reviewProcessIncomingEnvelope(envelope, { fromParked = false } = {}) {
   await reviewRuntimeReady;
   const dispatch = reviewLedger.get(envelope.dispatchId);
@@ -317,8 +431,8 @@ async function reviewProcessIncomingEnvelope(envelope, { fromParked = false } = 
     await reviewTransitionDispatch(envelope.dispatchId, DISPATCH_STATUS.RESPONSE_COMMITTED, {
       completedAt: Number.isFinite(Number(envelope.completedAt)) ? Number(envelope.completedAt) : Date.now()
     });
-    await reviewParkedStore.finalize(envelope.dispatchId);
 
+    let pending = null;
     if (
       shouldRelay &&
       state.sessionActive &&
@@ -326,8 +440,15 @@ async function reviewProcessIncomingEnvelope(envelope, { fromParked = false } = 
       !stateResult?.finished &&
       !stateResult?.commandError
     ) {
-      return reviewContinueAfterCommittedResponse(envelope.side);
+      pending = reviewBuildNextTurnPending(envelope.dispatchId, envelope.side);
+      if (pending) await reviewPersistNextTurnPending(pending);
     }
+
+    await reviewParkedStore.finalize(envelope.dispatchId);
+
+    if (pending) return reviewContinueAfterCommittedResponse(envelope.side);
+    state.runtimePhase = state.sessionActive ? (state.awaitingHuman ? "PAUSED" : "AWAITING_PROVIDER_RESPONSE") : "IDLE";
+    await saveState();
     return stateResult;
   } catch (error) {
     return reviewPauseForAmbiguity("Response commit was interrupted and cannot be replayed automatically: " + (error?.message || error));
@@ -521,6 +642,8 @@ function cloneDefaultState() {
     pendingHumanQueue: [],
     pendingMainInterjections: [],
     suppressedHumanRequests: [],
+    runtimePhase: "IDLE",
+    nextTurnPending: null,
     transcript: [],
     log: []
   };
@@ -1290,6 +1413,8 @@ async function loadState() {
     state.startSide = SIDES.includes(state.startSide) ? state.startSide : SIDES[0];
     state.mainSide = SIDES.includes(state.mainSide) ? state.mainSide : state.startSide;
     if (state.currentSide && !SIDES.includes(state.currentSide)) state.currentSide = state.startSide;
+    state.runtimePhase = String(state.runtimePhase || "IDLE");
+    state.nextTurnPending = state.nextTurnPending && typeof state.nextTurnPending === "object" ? state.nextTurnPending : null;
     state.workMode = normalizeWorkMode(state.workMode);
     if (!isBatchWorkMode(state.workMode)) {
       state.workPhase = state.workMode === "collaborate" ? "collaborate" : (state.workMode === "mesh" ? "mesh" : "relay");
@@ -1344,6 +1469,10 @@ async function loadState() {
   if (state.sessionActive && state.running) {
     try {
       await Promise.all(SIDES.map(side => reviewRegisterSideAuthority(side)));
+      if (state.nextTurnPending) {
+        const recovered = await reviewRecoverNextTurnPending();
+        if (recovered?.paused) throw new Error("Next-turn recovery paused.");
+      }
     } catch (err) {
       state.running = false;
       state.paused = true;
@@ -2068,7 +2197,7 @@ async function ensureTabListener(tabId) {
   throw new Error("The page listener could not be established after reinjection.");
 }
 
-async function sendToSide(side, text, { record = true, deliveredSeq = null, deliveredSources = false, artifactIds = [], artifacts = [], mainInterjectionIds = [], saveRecord = true } = {}) {
+async function sendToSide(side, text, { record = true, deliveredSeq = null, deliveredSources = false, artifactIds = [], artifacts = [], mainInterjectionIds = [], saveRecord = true, continuationSourceDispatchId = null } = {}) {
   await reviewRuntimeReady;
   const tabId = Number(tabForSide(side));
   if (Array.isArray(artifacts) && artifacts.length) {
@@ -2112,6 +2241,8 @@ async function sendToSide(side, text, { record = true, deliveredSeq = null, deli
   }
 
   await reviewTransitionDispatch(dispatch.dispatchId, DISPATCH_STATUS.DISPATCHING);
+  state.runtimePhase = "DISPATCHING";
+  await saveState();
 
   const command = {
     type: "AI_BRIDGE_ACTION",
@@ -2155,7 +2286,12 @@ async function sendToSide(side, text, { record = true, deliveredSeq = null, deli
   await reviewTransitionDispatch(dispatch.dispatchId, DISPATCH_STATUS.ACCEPTED, {
     acceptedAt: Date.now()
   });
+  if (continuationSourceDispatchId != null) {
+    await reviewClearNextTurnPending(continuationSourceDispatchId);
+  }
   await reviewTransitionDispatch(dispatch.dispatchId, DISPATCH_STATUS.AWAITING_RESPONSE);
+  state.runtimePhase = "AWAITING_PROVIDER_RESPONSE";
+  await saveState();
 
 const round = beginRoundTimer(side);
   appendLog({
@@ -2295,6 +2431,7 @@ async function pauseBridge(reason = "Paused by user") {
   state.running = false;
   state.paused = true;
   state.pauseReason = reason;
+  state.runtimePhase = "PAUSED";
   appendLog({ time: Date.now(), type: "system", text: reason });
   await saveState();
 }
@@ -2305,6 +2442,8 @@ async function endBridge(reason = "Stopped") {
   state.paused = false;
   state.pauseReason = "";
   state.currentSide = null;
+  state.runtimePhase = "IDLE";
+  state.nextTurnPending = null;
   state.awaitingHuman = false;
   state.pendingHuman = null;
   state.pendingHumanQueue = [];

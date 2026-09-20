@@ -777,52 +777,43 @@ function updateControls(s) {
   $("commandHistory").querySelectorAll(".history-use").forEach(button => { button.disabled = Boolean(s.sessionActive); });
 }
 
+function runtimePhaseLabel(raw) {
+  return ({
+    IDLE: "Idle",
+    DISPATCHING: "Dispatching provider action",
+    AWAITING_PROVIDER_RESPONSE: "Awaiting provider response",
+    NEXT_TURN_PENDING: "Next relay turn pending",
+    RECOVERING_NEXT_TURN: "Recovering next relay turn",
+    PAUSED: "Paused"
+  })[String(raw || "IDLE")] || String(raw || "Unknown").replaceAll("_", " ");
+}
+
 function updateStatus(s) {
   const limit = limitLabel(s);
   $("turnCounter").textContent = `${s.turn || 0} / ${limit}`;
   updateSessionPill(s);
+  const phase = runtimePhaseLabel(s.runtimePhase);
 
   if (s.sessionActive && s.awaitingHuman && s.pendingHuman) {
-    $("status").textContent = `PAUSED — HUMAN INPUT NEEDED\nWaiting on controller for ${s.pendingHuman.requestingLabel || `AI ${s.pendingHuman.requestingSide}`}.`;
+    $("status").textContent = `PAUSED — HUMAN INPUT NEEDED\nRuntime: ${phase}\nWaiting on controller for ${s.pendingHuman.requestingLabel || `AI ${s.pendingHuman.requestingSide}`}.`;
+  } else if (s.sessionActive && ["NEXT_TURN_PENDING","RECOVERING_NEXT_TURN"].includes(s.runtimePhase)) {
+    $("status").textContent = `Running — recovering next relay turn\nRuntime: ${phase}\nAI turns: ${s.turn}/${limit}`;
   } else if (s.sessionActive && s.running) {
     const batch = ["compete", "parallel", "review"].includes(s.workMode);
     if (batch) {
       const pending = Array.isArray(s.phasePendingSides) && s.phasePendingSides.length ? s.phasePendingSides.map(side => `AI ${side}`).join(", ") : "phase transition";
-      $("status").textContent = `Running — ${WORK_MODE_INFO[s.workMode]?.label || s.workMode} / ${String(s.workPhase || "primary").toUpperCase()}\nWaiting on: ${pending}\nAI turns: ${s.turn}/${limit}`;
+      $("status").textContent = `Running — ${WORK_MODE_INFO[s.workMode]?.label || s.workMode} / ${String(s.workPhase || "primary").toUpperCase()}\nRuntime: ${phase}\nWaiting on: ${pending}\nAI turns: ${s.turn}/${limit}`;
     } else {
-      $("status").textContent = `Running — ${WORK_MODE_INFO[s.workMode]?.label || "Relay"}\nWaiting on: ${currentLabel(s)}\nAI turns: ${s.turn}/${limit}`;
+      $("status").textContent = `Running — ${WORK_MODE_INFO[s.workMode]?.label || "Relay"}\nRuntime: ${phase}\nWaiting on: ${currentLabel(s)}\nAI turns: ${s.turn}/${limit}`;
     }
   } else if (s.sessionActive && s.paused) {
     const batch = ["compete", "parallel", "review"].includes(s.workMode);
     const next = batch ? ((s.phasePendingSides || []).map(side => `AI ${side}`).join(", ") || "phase transition") : currentLabel(s);
     const suppressed = Array.isArray(s.suppressedHumanRequests) ? s.suppressedHumanRequests.length : 0;
-    $("status").textContent = `PAUSED — ${s.pauseReason || "Session saved."}\nNext/current: ${next}\nAI turns: ${s.turn}/${limit}${suppressed ? `\nSuppressed human requests: ${suppressed}` : ""}`;
+    $("status").textContent = `PAUSED — ${s.pauseReason || "Session saved."}\nRuntime: ${phase}\nNext/current: ${next}\nAI turns: ${s.turn}/${limit}${suppressed ? `\nSuppressed human requests: ${suppressed}` : ""}`;
   } else {
     const last = s.log?.length ? s.log[s.log.length - 1]?.text : "";
-    $("status").textContent = `Idle${last ? ` — ${last}` : ""}`;
-  }
-}
-
-async function refreshProviderHealth() {
-  for (const side of SIDES) {
-    const node = $(`health${side}`);
-    const tabId = selectedTab(side);
-    if (!node) continue;
-    if (!tabId) {
-      node.textContent = "Connection: — · Authority: — · Relay: Waiting · Rollover: Limited · Artifacts: Limited";
-      continue;
-    }
-    try {
-      const res = await chrome.runtime.sendMessage({ type: "AI_BRIDGE_PROVIDER_HEALTH", tabId });
-      const connection = res?.connectionStatus === "CONNECTED" ? "Connected" : "Disconnected";
-      const authority = res?.actionAuthorityStatus === "DOCUMENT_AUTHORITY_VERIFIED"
-        ? "Verified"
-        : (res?.actionAuthorityStatus === "REGISTERING" ? "Registering" : "Not verified");
-      node.textContent =
-        `Connection: ${connection} · Authority: ${authority} · Relay: ${res?.capabilities?.relay || "WAITING"} · Rollover: ${res?.capabilities?.rollover || "LIMITED"} · Artifacts: ${res?.capabilities?.artifacts || "LIMITED"}`;
-    } catch (_) {
-      node.textContent = "Connection: Disconnected · Authority: Not verified · Relay: Waiting · Rollover: Limited · Artifacts: Limited";
-    }
+    $("status").textContent = `Idle · Runtime: ${phase}${last ? ` — ${last}` : ""}`;
   }
 }
 

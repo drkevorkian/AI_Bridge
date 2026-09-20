@@ -9,7 +9,9 @@ Security/runtime differences from root v1.18:
 - Worker restart converts unresolved DISPATCHING/ACCEPTED delivery into DELIVERY_AMBIGUOUS and pauses instead of generating a replacement dispatch.
 - Provider actions require document registration and documentId-targeted commands.
 - Inbound responses carry dispatchId, generationEpoch, and six-field conversation identity and must pass the response gate before transcript/turn mutation.
-- Response envelopes are durably parked/claimed; response state is saved with relay suppressed, then RESPONSE_COMMITTED is persisted before any next-turn provider dispatch.
+- Response envelopes are durably parked/claimed; response state is saved with relay suppressed, then RESPONSE_COMMITTED and a durable NEXT_TURN_PENDING obligation are persisted before the parked response is finalized.
+- The exact next sequential payload (or batch phase-advance obligation) survives MV3 worker death. Recovery reconstructs the owed continuation exactly once or pauses on contradictory/ambiguous state.
+- Dashboard exposes runtime progression separately from provider health: Dispatching, Awaiting response, Next turn pending, Recovering next turn, Paused.
 - Broad-text New Chat automation is disabled.
 - Synthetic Enter fallback is disabled.
 - Raw Upload is LIMITED until trusted upload authority exists.
