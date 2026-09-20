@@ -1,0 +1,12 @@
+import assert from 'node:assert/strict';
+import {createRequire} from 'node:module';
+const require=createRequire(import.meta.url);
+const {ThreadRolloverOrchestrator}=require('../thread_rollover/thread-rollover-orchestrator.js');
+const {STATUS,AgentParticipationGuard}=require('../team_coordination/agent-participation-guard.js');
+const calls=[];let tx={phase:'AWAITING_NEW_IDENTITY'};
+const coordinator={begin(input){return input;},get(){return tx;},transition(side,phase,patch){calls.push(['transition',side,phase,patch]);tx={...tx,phase,...patch};return tx;},promoteCandidateAuthority(side,authority){calls.push(['promote',side,authority]);tx={...tx,candidateAuthority:authority};return tx;}};
+const orchestrator=new ThreadRolloverOrchestrator({coordinator,classifyLimit:()=>({state:'HARD_THREAD_LIMIT',automaticRollover:true}),classifyIdentityTransition:(a,b)=>b.kind==='surface'?'NEW_CHAT_SURFACE':b.kind==='conversation'?'NEW_CONVERSATION_CONFIRMED':'IDENTITY_UNCHANGED'});
+const provisional={state:'PROVISIONAL',identity:{kind:'surface'}};assert.equal(orchestrator.applyIdentityObservation({side:'A',previousIdentity:{},currentIdentity:{kind:'surface'},candidateAuthority:provisional}).applied,true);assert.equal(calls.at(-1)[2],'NEW_IDENTITY_VERIFIED');
+const confirmed={state:'CONFIRMED',identity:{kind:'conversation'}};assert.equal(orchestrator.applyIdentityObservation({side:'A',previousIdentity:{},currentIdentity:{kind:'conversation'},candidateAuthority:confirmed}).applied,true);assert.equal(calls.at(-1)[0],'promote');
+const mem={data:{},async load(k){return this.data[k]??null;},async save(k,v){this.data[k]=structuredClone(v);}};
+let g=new AgentParticipationGuard({threshold:3,store:mem});await g.init();await g.record('C','echo');await g.record('C','echo');assert.equal(g.canProceedWithout('C'),false);g=new AgentParticipationGuard({threshold:3,store:mem});await g.init();assert.equal((await g.record('C','echo')).status,STATUS.BYPASSED_FOR_GATE);assert.equal(g.canProceedWithout('C'),true);g=new AgentParticipationGuard({threshold:3,store:mem});await g.init();assert.equal((await g.record('C','I reviewed the defects and CONFIRM the tests PASS after review.')).status,STATUS.ACTIVE);console.log('round6-a: PASS');

@@ -1,0 +1,42 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>AI Bridge</title>
+  <link rel="stylesheet" href="popup.css">
+</head>
+<body>
+  <main>
+    <div class="head">
+      <div>
+        <div class="eyebrow">AI BRIDGE</div>
+        <h1>Bridge control</h1>
+      </div>
+      <div id="pill" class="pill idle">Idle</div>
+    </div>
+
+    <div id="status" class="status">Loading…</div>
+    <label class="theme-label" for="themeSelect">Theme</label>
+    <select id="themeSelect" class="theme-select">
+      <option value="blizzard">Blizzard Blue</option>
+      <option value="ghostwhite">Ghost White</option>
+      <option value="midnight">Midnight</option>
+      <option value="slate">Slate</option>
+      <option value="light">Light</option>
+      <option value="solarized">Solarized Light</option>
+      <option value="ocean">Ocean</option>
+      <option value="terminal">Terminal</option>
+    </select>
+    <button id="openDashboard" class="primary">Open Dashboard</button>\n    <button id="openSettings" class="secondary">Settings</button>
+
+    <div class="actions">
+      <button id="pause" class="secondary" disabled>Pause</button>
+      <button id="stop" class="danger" disabled>Stop</button>
+    </div>
+
+    <p class="hint">The dashboard runs the bridge. Settings contains themes, layouts, sync, provider health, updates, and power controls.</p>
+  </main>
+  <script src="popup.js"></script>
+</body>
+</html>

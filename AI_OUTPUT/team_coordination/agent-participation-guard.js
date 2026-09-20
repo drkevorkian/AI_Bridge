@@ -1,0 +1,21 @@
+'use strict';
+const STATUS=Object.freeze({ACTIVE:'ACTIVE',DEGRADED:'DEGRADED',BYPASSED_FOR_GATE:'BYPASSED_FOR_GATE'});
+function normalizeText(value){return String(value||'').replace(/\s+/g,' ').trim();}
+function looksLikePromptEcho(text){const t=normalizeText(text).toLowerCase();if(!t)return true;const signatures=['you are ai ','your assigned job:','team roster:','team rules (all members):','primary objective from the human controller:','shared updates since your last handoff:'];const matches=signatures.filter(sig=>t.includes(sig)).length;const hasReviewLanguage=/\b(confirm|challenge|found|defect|agree|disagree|pass|fail|reviewed|tested)\b/.test(t);if(matches>=5)return true;return matches>=4&&!hasReviewLanguage;}
+function isSubstantive(text,{minChars=48}={}){const t=normalizeText(text);if(t.length<minChars)return false;if(looksLikePromptEcho(t))return false;return /\b(confirm|challenge|found|defect|agree|disagree|pass|fail|reviewed|tested|implemented|fixed|commit)\b/i.test(t);}
+class AgentParticipationGuard{
+  constructor({threshold=3,store,key='aiBridgeAgentParticipation'}={}) {
+    if(!Number.isInteger(threshold)||threshold<2||threshold>20) throw new TypeError('threshold must be an integer between 2 and 20.');
+    if(!store||typeof store.load!=='function'||typeof store.save!=='function') throw new TypeError('An async participation store is required.');
+    this.threshold=threshold;this.store=store;this.key=normalizeText(key)||'aiBridgeAgentParticipation';this.records=new Map();this.loaded=false;this._queue=Promise.resolve();
+  }
+  _enqueue(task){const run=this._queue.catch(()=>{}).then(task);this._queue=run.catch(()=>{});return run;}
+  async init(){return this._enqueue(async()=>{const raw=await this.store.load(this.key);this.records.clear();if(raw&&typeof raw==='object'&&!Array.isArray(raw)){for(const [agentId,value] of Object.entries(raw)){const id=normalizeText(agentId).toUpperCase();const misses=Number(value?.misses);const status=String(value?.status||'');if(!id||!Number.isInteger(misses)||misses<0||misses>this.threshold||!Object.values(STATUS).includes(status))continue;this.records.set(id,Object.freeze({agentId:id,substantive:false,misses,status}));}}this.loaded=true;return this.snapshot();});}
+  _requireLoaded(){if(!this.loaded)throw new Error('AgentParticipationGuard.init() must complete before use.');}
+  async _persist(){const out={};for(const [id,r] of this.records.entries())out[id]={misses:r.misses,status:r.status};await this.store.save(this.key,out);}
+  async record(agentId,responseText){return this._enqueue(async()=>{this._requireLoaded();const id=normalizeText(agentId).toUpperCase();if(!id)throw new TypeError('agentId is required.');const substantive=isSubstantive(responseText);const prior=this.records.get(id)||{misses:0,status:STATUS.ACTIVE};const misses=substantive?0:Math.min(this.threshold,prior.misses+1);const status=misses>=this.threshold?STATUS.BYPASSED_FOR_GATE:misses>0?STATUS.DEGRADED:STATUS.ACTIVE;const record=Object.freeze({agentId:id,substantive,misses,status});this.records.set(id,record);await this._persist();return record;});}
+  canProceedWithout(agentId){this._requireLoaded();return this.records.get(normalizeText(agentId).toUpperCase())?.status===STATUS.BYPASSED_FOR_GATE;}
+  rootIntegrationReviewRequired(agentId){return this.canProceedWithout(agentId);}
+  snapshot(){const out={};for(const [id,r] of this.records.entries())out[id]={misses:r.misses,status:r.status};return out;}
+}
+module.exports={STATUS,looksLikePromptEcho,isSubstantive,AgentParticipationGuard};

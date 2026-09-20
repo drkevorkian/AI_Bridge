@@ -1,0 +1,20 @@
+import assert from 'node:assert/strict';
+import {createRequire} from 'node:module';
+const require=createRequire(import.meta.url);
+const {ThreadRolloverOrchestrator}=require('../thread_rollover/thread-rollover-orchestrator.js');
+const {STATUS,AgentParticipationGuard}=require('../team_coordination/agent-participation-guard.js');
+function makeCoordinator(){let tx={phase:'AWAITING_NEW_IDENTITY',candidateAuthority:null};const calls=[];return{calls,begin(input){return input;},get(){return tx;},transition(side,phase,patch){calls.push(['transition',side,phase,patch]);tx={...tx,phase,...patch};return tx;},promoteCandidateAuthority(side,authority){calls.push(['promote',side,authority]);tx={...tx,candidateAuthority:authority};return tx;}};}
+const classify=(a,b)=>b.kind==='surface'?'NEW_CHAT_SURFACE':b.kind==='conversation'?'NEW_CONVERSATION_CONFIRMED':'IDENTITY_UNCHANGED';
+let coordinator=makeCoordinator();
+let orchestrator=new ThreadRolloverOrchestrator({coordinator,classifyLimit:()=>({state:'HARD_THREAD_LIMIT',automaticRollover:true}),classifyIdentityTransition:classify});
+const confirmed={state:'CONFIRMED',identity:{kind:'conversation'}};
+const direct=orchestrator.applyIdentityObservation({side:'A',previousIdentity:{},currentIdentity:{kind:'conversation'},candidateAuthority:confirmed});
+assert.equal(direct.applied,true);assert.equal(direct.directConfirmation,true);assert.equal(coordinator.calls.at(-1)[2],'NEW_IDENTITY_VERIFIED');
+coordinator=makeCoordinator();
+orchestrator=new ThreadRolloverOrchestrator({coordinator,classifyLimit:()=>({state:'HARD_THREAD_LIMIT',automaticRollover:true}),classifyIdentityTransition:classify});
+const provisional={state:'PROVISIONAL',identity:{kind:'surface'}};
+assert.equal(orchestrator.applyIdentityObservation({side:'A',previousIdentity:{},currentIdentity:{kind:'surface'},candidateAuthority:provisional}).applied,true);
+assert.equal(orchestrator.applyIdentityObservation({side:'A',previousIdentity:{},currentIdentity:{kind:'conversation'},candidateAuthority:confirmed}).applied,true);
+assert.equal(coordinator.calls.at(-1)[0],'promote');
+const mem={data:{},async load(k){return this.data[k]??null;},async save(k,v){await Promise.resolve();this.data[k]=structuredClone(v);}};
+let g=new AgentParticipationGuard({threshold:3,store:mem});await g.init();await Promise.all([g.record('C','echo'),g.record('C','echo'),g.record('C','echo')]);assert.equal(g.canProceedWithout('C'),true);assert.equal(mem.data.aiBridgeAgentParticipation.C.misses,3);g=new AgentParticipationGuard({threshold:3,store:mem});await g.init();assert.equal((await g.record('C','I reviewed the defects and CONFIRM the tests PASS after review.')).status,STATUS.ACTIVE);console.log('round8-a: PASS');

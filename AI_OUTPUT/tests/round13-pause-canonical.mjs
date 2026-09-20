@@ -1,0 +1,18 @@
+import assert from 'node:assert/strict';
+import {mapSubsystemReason,PAUSE_REASON,ACTION_CERTAINTY,pauseMeta} from '../integration/pause-reasons.js';
+import {sanitizePause,applyStructuredPause} from '../integration/pause-state-schema.js';
+assert.equal(mapSubsystemReason('CLAIM_EXPIRED_RECONCILIATION_REQUIRED'),PAUSE_REASON.ROLLOVER_CLAIM_RECONCILIATION_REQUIRED);
+assert.equal(mapSubsystemReason('RECOVERY_LOAD_FAILED'),PAUSE_REASON.RUNTIME_RECOVERY_LOAD_FAILED);
+for(const r of ['RECOVERY_ENTRY_LIMIT_EXCEEDED','RECOVERY_TOTAL_BYTES_EXCEEDED','RECOVERY_DUPLICATE_DISPATCH','RECOVERY_SCHEMA_INVALID']) assert.equal(mapSubsystemReason(r),PAUSE_REASON.RUNTIME_RECOVERY_VALIDATION_FAILED);
+assert.equal(mapSubsystemReason('RECOVERY_PERSIST_FAILED'),PAUSE_REASON.RUNTIME_RECOVERY_PERSIST_FAILED);
+const forged=sanitizePause({code:PAUSE_REASON.ROLLOVER_CLAIM_AMBIGUOUS,certainty:'NO_ACTION_TAKEN',message:'Everything is fine.',side:'b',provider:'ChatGPT'});
+assert.equal(forged.certainty,ACTION_CERTAINTY.ACTION_OUTCOME_AMBIGUOUS);
+assert.equal(forged.message,pauseMeta(PAUSE_REASON.ROLLOVER_CLAIM_AMBIGUOUS).message);
+const first=sanitizePause({code:'FUTURE_NEW_REASON',side:'A',provider:'ChatGPT',detail:'x'});
+assert.equal(first.code,PAUSE_REASON.RUNTIME_UNMAPPED_SAFETY_STATE);assert.equal(first.sourceCode,'FUTURE_NEW_REASON');
+const state=applyStructuredPause({running:true,paused:false,pause:null,pauseReason:''},first);
+assert.equal(state.pause.sourceCode,'FUTURE_NEW_REASON');
+const reloaded=sanitizePause(JSON.parse(JSON.stringify(state.pause)));
+assert.equal(reloaded.sourceCode,'FUTURE_NEW_REASON');
+assert.equal(reloaded.certainty,ACTION_CERTAINTY.UNKNOWN);
+console.log('round13-pause-canonical: PASS');
