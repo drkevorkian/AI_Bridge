@@ -1,8 +1,8 @@
 {
   "manifest_version": 3,
-  "name": "AI Bridge Review",
-  "version": "1.18.0",
-  "description": "Review-only secure runtime candidate for AI Bridge. Root remains unchanged pending human approval.",
+  "name": "AI Bridge AI A Development",
+  "version": "1.19.0",
+  "description": "AI A development build staged in AI_OUTPUT. Human-test snapshots are copied to AI_INPUT after validation.",
   "permissions": [
     "tabs",
     "storage",
@@ -41,7 +41,7 @@
   },
   "action": {
     "default_popup": "popup.html",
-    "default_title": "AI Bridge",
+    "default_title": "AI Bridge AI A Dev",
     "default_icon": {
       "128": "icon128.png"
     }
@@ -67,5 +67,6 @@
   },
   "content_security_policy": {
     "extension_pages": "script-src 'self'; object-src 'none'; base-uri 'none'; frame-ancestors 'none'"
-  }
+  },
+  "version_name": "AI A 1.19.0-dev.1"
 }
