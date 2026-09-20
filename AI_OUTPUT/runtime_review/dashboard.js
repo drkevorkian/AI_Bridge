@@ -766,7 +766,8 @@ function updateControls(s) {
   $("resume").disabled = !s.sessionActive || s.running || s.awaitingHuman;
   $("stop").disabled = !s.sessionActive;
   const manualFreshAllowed = !s.sessionActive;
-  const activeTabsValid = validateActiveTabs() === null;
+  const bindingStatus = activeBindingStatus();
+  const activeTabsValid = bindingStatus.valid;
   $("newAllChats").disabled = !manualFreshAllowed || !activeTabsValid;
   $("freshOnStart").disabled = !manualFreshAllowed || !activeTabsValid;
   $("agentCount").disabled = Boolean(s.sessionActive);
@@ -780,9 +781,7 @@ function updateControls(s) {
   updateWorkModeUI();
 
   for (const side of SIDES) {
-    const tabId = selectedTab(side);
-    const manualTabReady = Number.isInteger(tabId) && tabId > 0 && tabsById.has(tabId);
-    $(`newChat${side}`).disabled = !manualFreshAllowed || !manualTabReady;
+    $(`newChat${side}`).disabled = !manualFreshAllowed || !bindingStatus.valid;
     const batchDone = ["compete", "parallel", "review"].includes(s.workMode) && Array.isArray(s.phaseCompletedSides) && s.phaseCompletedSides.includes(side);
     $(`resend${side}`).disabled = !s.sessionActive || !s.running || s.awaitingHuman || !s.lastSentBySide?.[side] || batchDone;
   }
@@ -932,10 +931,43 @@ function selectedBindings() {
   return data;
 }
 
+function activeBindingStatus() {
+  const bindings = SIDES.map(side => ({ side, tabId: selectedTab(side) }));
+  const missingSides = bindings
+    .filter(({ tabId }) => !Number.isInteger(tabId) || tabId <= 0 || !tabsById.has(tabId))
+    .map(({ side }) => side);
+
+  const ownersByTab = new Map();
+  for (const { side, tabId } of bindings) {
+    if (!Number.isInteger(tabId) || tabId <= 0 || !tabsById.has(tabId)) continue;
+    const owners = ownersByTab.get(tabId) || [];
+    owners.push(side);
+    ownersByTab.set(tabId, owners);
+  }
+
+  const duplicateTabs = new Set(
+    [...ownersByTab.entries()]
+      .filter(([, owners]) => owners.length > 1)
+      .map(([tabId]) => tabId)
+  );
+  const duplicateSides = new Set(
+    bindings
+      .filter(({ tabId }) => duplicateTabs.has(tabId))
+      .map(({ side }) => side)
+  );
+
+  return Object.freeze({
+    valid: missingSides.length === 0 && duplicateTabs.size === 0,
+    missingSides: Object.freeze(missingSides),
+    duplicateTabs,
+    duplicateSides
+  });
+}
+
 function validateActiveTabs() {
-  const ids = SIDES.map(selectedTab);
-  if (ids.some(id => !id)) return `Choose ${SIDES.length} supported AI tab${SIDES.length === 1 ? "" : "s"}.`;
-  if (new Set(ids).size !== ids.length) return "Each logical AI must use a different browser tab. Multiple tabs from the same LLM are allowed.";
+  const status = activeBindingStatus();
+  if (status.missingSides.length) return `Choose ${SIDES.length} supported AI tab${SIDES.length === 1 ? "" : "s"}.`;
+  if (status.duplicateTabs.size) return "Each logical AI must use a different browser tab. Multiple tabs from the same LLM are allowed.";
   return null;
 }
 
@@ -1003,12 +1035,9 @@ async function openFreshChats(rawSides) {
     return;
   }
 
-  const missing = requested.filter(side => {
-    const tabId = selectedTab(side);
-    return !Number.isInteger(tabId) || tabId <= 0 || !tabsById.has(tabId);
-  });
-  if (missing.length) {
-    $("status").textContent = `Choose an open supported AI tab for ${missing.map(side => "AI " + side).join(", ")}.`;
+  const bindingError = validateActiveTabs();
+  if (bindingError) {
+    $("status").textContent = bindingError;
     return;
   }
 
