@@ -141,3 +141,17 @@ While a provider event is active, provider health may still show a connected and
 Provider operational events are control-plane inputs. Before a provider event may pause or otherwise change a session, the background verifies the currently registered top-level active document, Chrome documentId, authority-registration token, tab/side/provider, generation epoch, and the full six-field conversation identity against both the live document authority and the dispatch ledger. Stale or mismatched events are rejected before provider-event history, transcript, or relay/session state is mutated.
 
 Operational-event DOM probes are restricted to visible alert/ARIA-live system surfaces outside assistant-message DOM. Assistant responses are never scanned for provider-error phrases, preventing a model that quotes an error message from falsely triggering recovery.
+
+
+## Human-test UI workflow
+
+AI_OUTPUT is the development/playground surface. The corresponding human-test package is mirrored into AI_INPUT after playground validation.
+
+Current playground version: **v1.19.0**.
+
+Layout behavior:
+- Classic: Runtime + Team left, transcript center, Human Interjection first on the right followed by remaining controls.
+- Studio: standard two-pane workspace with all controls on the left.
+- Focus: transcript-first layout with only brand/Settings and Runtime in the compact left rail.
+
+Classic is the default when no layout preference is stored. Extension-page navigation between Dashboard and Settings is same-tab navigation. Packaged HTML must not contain literal `\n` text nodes.

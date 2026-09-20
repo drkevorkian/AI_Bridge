@@ -1,6 +1,6 @@
-# AI Bridge — Human Test Build
+# AI Bridge — Human Test Build v1.19.0
 
-This folder is a runnable **unpacked Chrome extension** copied from the reviewed `AI_OUTPUT/runtime_review/` candidate at commit `1303dab89dcd58fcd4fdea8eca7d379cfd287597`.
+This folder is the runnable **v1.19.0 unpacked Chrome extension** mirrored from the AI_OUTPUT playground after UI validation.
 
 It is intentionally separate from the production/root extension. Production work is paused while this build is under human testing.
 
@@ -22,7 +22,7 @@ Classic defaults to a three-pane desktop layout:
 - **Center:** Shared transcript.
 - **Right:** Human Interjection at the top, followed by the remaining controls, Vault, work strategy, sources, limits, and suppressed requests.
 
-Studio and Focus restore the original two-pane arrangement.
+Studio is a full two-pane workspace with all controls on the left. Focus is transcript-first: it keeps only the brand/Settings and Runtime controls in a narrow left rail so the transcript gets most of the screen.
 
 ## Human-test priorities
 
@@ -49,3 +49,13 @@ For every issue, record:
 - screenshots or console errors if available.
 
 Do not test against valuable/irreversible provider actions. This is a human-test build, not production integration.
+
+
+## v1.19.0 human-test fixes
+
+- Dashboard → Settings stays in the same extension tab.
+- Settings → Dashboard stays in the same extension tab.
+- Classic, Studio, and Focus now have visibly different structures.
+- Literal `\n` text accidentally rendered by packaged HTML has been removed.
+- Classic is the consistent default when no layout preference is stored.
+- Human-test versioning now follows the AI Bridge v1.19.x line.

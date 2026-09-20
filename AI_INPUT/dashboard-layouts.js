@@ -56,7 +56,7 @@
     if(changes[LAYOUT_KEY])applyLayout(changes[LAYOUT_KEY].newValue);
     if(changes[WIDTH_KEY])applyWidth(changes[WIDTH_KEY].newValue);
   });
-  document.getElementById("openSettings")?.addEventListener("click",()=>chrome.tabs.create({url:chrome.runtime.getURL("settings.html")}));
+  document.getElementById("openSettings")?.addEventListener("click",()=>window.location.assign(chrome.runtime.getURL("settings.html")));
 
   const splitter=document.getElementById("paneSplitter");
   const shell=document.querySelector(".app-shell");
