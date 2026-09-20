@@ -67,3 +67,14 @@ Covered snapshots:
 - committed response with valid continuation: deterministic recovery, exactly one target provider action, one target dispatch in AWAITING_RESPONSE, continuation marker cleared.
 
 The positive fixture separates SEND confirmation from assistant-response emission so recovery can reach a stable AWAITING_PROVIDER_RESPONSE state without triggering another relay turn.
+
+
+### Dashboard lifecycle across seeded recovery cases
+
+The DISPATCHING/ACCEPTED matrix now tracks the currently-live Dashboard target explicitly instead of repeatedly closing the earlier CREATED-case page. Each scenario owns the page produced by the previous scenario, preventing stale-target failures from skipping the ACCEPTED case.
+
+The CREATED reuse scenario also asserts the rendered success state:
+- session Running;
+- Runtime: Awaiting provider response;
+- not Runtime: Paused;
+- same durable target dispatch ID reused.

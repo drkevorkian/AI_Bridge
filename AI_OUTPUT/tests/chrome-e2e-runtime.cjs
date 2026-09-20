@@ -649,6 +649,153 @@ async function main() {
     assert.match(positiveUi, /Awaiting provider response/i);
     assert.doesNotMatch(positiveUi, /Runtime:\s*Paused/i);
 
+    // Case 4: CLAIMED parked response + source AWAITING_RESPONSE means response
+    // mutation ownership was interrupted. Restart must pause, never replay it.
+    await cdp.send('Target.closeTarget', { targetId: dashboardPositive.targetId });
+    const positiveIndex = pages.indexOf(dashboardPositive);
+    if (positiveIndex >= 0) pages.splice(positiveIndex, 1);
+    await cdp.send('ServiceWorker.stopAllWorkers');
+    await poll(() => workerTarget(cdp, extensionId), value => value === null, 10000);
+
+    const claimedNow = Date.now();
+    await setExtensionStorage(cdp, extensionId, {
+      bridgeState: { ...baseState, runtimePhase: 'AWAITING_PROVIDER_RESPONSE' },
+      aiBridgeRuntimeDispatchLedger: { records: [{ ...baseDispatch, status: 'AWAITING_RESPONSE' }] },
+      aiBridgeRuntimeParkedResponses: {
+        records: [{
+          dispatchId: baseDispatch.dispatchId,
+          state: 'CLAIMED',
+          envelope: { dispatchId: baseDispatch.dispatchId, side: 'A', text: 'Seeded claimed response.' },
+          parkedAt: claimedNow - 1000,
+          expiresAt: claimedNow + 60000,
+          claimedAt: claimedNow - 500
+        }]
+      }
+    });
+
+    const dashboardClaimed = await createExtensionPage(cdp, extensionId, 'dashboard.html');
+    pages.push(dashboardClaimed);
+    const claimedState = await poll(async () => {
+      const response = await extensionMessage(cdp, dashboardClaimed.sessionId, { type: 'AI_BRIDGE_GET_STATE', omitTranscript: false });
+      return response.transportOk ? response.value?.state : null;
+    }, state => state?.paused === true && state?.running === false, 15000);
+    assert.match(claimedState.pauseReason || '', /response was interrupted|ambiguous response|durable commit|replay/i);
+    assert.equal((claimedState.transcript || []).filter(entry => entry?.type === 'response').length, 1);
+    assert.equal(await evaluate(cdp, providerA.sessionId, 'window.__providerActionCount'), positiveActionCountABefore);
+    assert.equal(await evaluate(cdp, providerB.sessionId, 'window.__providerActionCount'), positiveActionCountBBefore + 1);
+    await assertPausedDashboard(dashboardClaimed, /response was interrupted|ambiguous response|durable commit|replay/i);
+
+    // Case 5: source committed + valid continuation + exact target CREATED.
+    // Recovery must reuse that exact target dispatch ID, not allocate a new one.
+    await cdp.send('Target.closeTarget', { targetId: dashboardClaimed.targetId });
+    const claimedIndex = pages.indexOf(dashboardClaimed);
+    if (claimedIndex >= 0) pages.splice(claimedIndex, 1);
+    await cdp.send('ServiceWorker.stopAllWorkers');
+    await poll(() => workerTarget(cdp, extensionId), value => value === null, 10000);
+
+    const createdTarget = {
+      ...positiveStorage.target,
+      status: 'CREATED',
+      acceptedAt: null,
+      completedAt: null,
+      failureReason: null
+    };
+    const createdActionCountBefore = await evaluate(cdp, providerB.sessionId, 'window.__providerActionCount');
+    await setExtensionStorage(cdp, extensionId, {
+      bridgeState: { ...baseState, nextTurnPending: positiveMarker, runtimePhase: 'NEXT_TURN_PENDING' },
+      aiBridgeRuntimeDispatchLedger: {
+        records: [
+          { ...baseDispatch, status: 'RESPONSE_COMMITTED' },
+          createdTarget
+        ]
+      },
+      aiBridgeRuntimeParkedResponses: { records: [] }
+    });
+
+    const dashboardCreated = await createExtensionPage(cdp, extensionId, 'dashboard.html');
+    pages.push(dashboardCreated);
+    await poll(
+      () => evaluate(cdp, providerB.sessionId, 'window.__providerActionCount'),
+      count => count === createdActionCountBefore + 1,
+      15000
+    );
+    const createdRecovered = await poll(async () => {
+      const stored = await extensionStorage(cdp, extensionId, ['aiBridgeRuntimeDispatchLedger', 'bridgeState']);
+      const target = (stored.aiBridgeRuntimeDispatchLedger?.records || []).find(record => record.dispatchId === createdTarget.dispatchId);
+      if (!target || target.status !== 'AWAITING_RESPONSE') return null;
+      return { stored, target };
+    }, Boolean, 15000);
+    const createdTargets = createdRecovered.stored.aiBridgeRuntimeDispatchLedger.records.filter(record => record.side === 'B');
+    assert.equal(createdTargets.length, 1, 'CREATED recovery allocated a replacement target dispatch');
+    assert.equal(createdTargets[0].dispatchId, createdTarget.dispatchId, 'CREATED recovery did not reuse the original dispatch ID');
+    assert.equal(createdRecovered.stored.bridgeState?.nextTurnPending, null);
+    assert.equal(createdRecovered.stored.bridgeState?.running, true);
+    assert.equal(createdRecovered.stored.bridgeState?.paused, false);
+    assert.equal(createdRecovered.stored.bridgeState?.runtimePhase, 'AWAITING_PROVIDER_RESPONSE');
+    assert.equal((createdRecovered.stored.bridgeState?.transcript || []).filter(entry => entry?.type === 'response').length, 1);
+
+    const createdUi = await poll(
+      () => evaluate(cdp, dashboardCreated.sessionId, 'document.body.innerText'),
+      body =>
+        /Runtime:\s*Awaiting provider response/i.test(body) &&
+        /Running/i.test(body) &&
+        !/Runtime:\s*Paused/i.test(body),
+      10000
+    );
+    assert.match(createdUi, /Runtime:\s*Awaiting provider response/i);
+    assert.doesNotMatch(createdUi, /Runtime:\s*Paused/i);
+
+    // Cases 6/7: target DISPATCHING or ACCEPTED has crossed the provider-action
+    // ambiguity boundary. Restart must convert the same ID to DELIVERY_AMBIGUOUS.
+    // currentDashboard always tracks the live Dashboard from the preceding case.
+    let currentDashboard = dashboardCreated;
+    for (const seededStatus of ['DISPATCHING', 'ACCEPTED']) {
+      await cdp.send('Target.closeTarget', { targetId: currentDashboard.targetId });
+      const currentIndex = pages.indexOf(currentDashboard);
+      if (currentIndex >= 0) pages.splice(currentIndex, 1);
+      await cdp.send('ServiceWorker.stopAllWorkers');
+      await poll(() => workerTarget(cdp, extensionId), value => value === null, 10000);
+
+      const seededTarget = {
+        ...positiveStorage.target,
+        status: seededStatus,
+        failureReason: null,
+        ...(seededStatus === 'ACCEPTED' ? { acceptedAt: Date.now() } : {})
+      };
+      const actionBeforeAmbiguousRecoveryA = await evaluate(cdp, providerA.sessionId, 'window.__providerActionCount');
+      const actionBeforeAmbiguousRecoveryB = await evaluate(cdp, providerB.sessionId, 'window.__providerActionCount');
+      await setExtensionStorage(cdp, extensionId, {
+        bridgeState: { ...baseState, nextTurnPending: positiveMarker, runtimePhase: 'DISPATCHING' },
+        aiBridgeRuntimeDispatchLedger: {
+          records: [
+            { ...baseDispatch, status: 'RESPONSE_COMMITTED' },
+            seededTarget
+          ]
+        },
+        aiBridgeRuntimeParkedResponses: { records: [] }
+      });
+
+      const dashboardAmbiguous = await createExtensionPage(cdp, extensionId, 'dashboard.html');
+      pages.push(dashboardAmbiguous);
+      const ambiguousRecovered = await poll(async () => {
+        const stored = await extensionStorage(cdp, extensionId, ['aiBridgeRuntimeDispatchLedger', 'bridgeState']);
+        const target = (stored.aiBridgeRuntimeDispatchLedger?.records || []).find(record => record.dispatchId === seededTarget.dispatchId);
+        if (!target || target.status !== 'DELIVERY_AMBIGUOUS' || stored.bridgeState?.paused !== true) return null;
+        return { stored, target };
+      }, Boolean, 15000);
+
+      assert.equal(ambiguousRecovered.target.dispatchId, seededTarget.dispatchId);
+      assert.equal(ambiguousRecovered.target.status, 'DELIVERY_AMBIGUOUS');
+      assert.equal(ambiguousRecovered.stored.bridgeState?.running, false);
+      assert.equal(ambiguousRecovered.stored.bridgeState?.runtimePhase, 'PAUSED');
+      assert.equal((ambiguousRecovered.stored.bridgeState?.transcript || []).filter(entry => entry?.type === 'response').length, 1);
+      assert.equal(await evaluate(cdp, providerA.sessionId, 'window.__providerActionCount'), actionBeforeAmbiguousRecoveryA);
+      assert.equal(await evaluate(cdp, providerB.sessionId, 'window.__providerActionCount'), actionBeforeAmbiguousRecoveryB);
+      await assertPausedDashboard(dashboardAmbiguous, /delivery was interrupted|may already have been sent|replay|ambiguous/i);
+
+      currentDashboard = dashboardAmbiguous;
+    }
+
     console.log('chrome-e2e-runtime: PASS');
     console.log(JSON.stringify({
       extensionId,

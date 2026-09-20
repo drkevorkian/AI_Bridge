@@ -49,5 +49,7 @@ jobs:
         run: node AI_OUTPUT/tests/round31-browser-health-contract.mjs
       - name: Round 32 Chrome recovery UI matrix
         run: node AI_OUTPUT/tests/round32-chrome-recovery-ui-matrix.mjs
+      - name: Round 33 Chrome dashboard lifecycle
+        run: node AI_OUTPUT/tests/round33-chrome-dashboard-lifecycle.mjs
       - name: Real Chrome MV3 E2E
         run: node AI_OUTPUT/tests/chrome-e2e-runtime.cjs
