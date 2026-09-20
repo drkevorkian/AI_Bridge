@@ -2,7 +2,7 @@
   "manifest_version": 3,
   "name": "AI Bridge Review",
   "version": "1.19.1",
-  "description": "AI Bridge reviewed playground build 1.19.1.13-AI-B with restart-proof rollover snapshot and continuity integrity checks.",
+  "description": "AI Bridge reviewed playground build 1.19.1.14-AI-A with restart-hardened automatic ChatGPT rollover, narrow Classic responsive cleanup, and max-thread control-plane isolation.",
   "permissions": [
     "tabs",
     "storage",
@@ -68,5 +68,5 @@
   "content_security_policy": {
     "extension_pages": "script-src 'self'; object-src 'none'; base-uri 'none'; frame-ancestors 'none'"
   },
-  "version_name": "1.19.1.13-AI-B"
+  "version_name": "1.19.1.14-AI-A"
 }
