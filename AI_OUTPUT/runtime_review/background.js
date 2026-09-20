@@ -238,11 +238,15 @@ function reviewFindUnresolvedDispatch(side, payloadHash, {
     // added. Never accept an older same-text record from before this pending turn.
     return Number(record.createdAt) >= createdFloor;
   };
-  const exact = candidates.find(r => r.payloadHash === payloadHash && belongsToContinuation(r)) || null;
-  const blocking = candidates.find(r =>
-    r !== exact &&
-    (r.status !== DISPATCH_STATUS.CREATED || r.payloadHash !== payloadHash || !belongsToContinuation(r))
-  ) || null;
+  const reusable = candidates.filter(r =>
+    r.status === DISPATCH_STATUS.CREATED &&
+    r.payloadHash === payloadHash &&
+    belongsToContinuation(r)
+  );
+  const exact = reusable.length === 1 ? reusable[0] : null;
+  const blocking = reusable.length > 1
+    ? reusable[1]
+    : candidates.find(r => r !== exact) || null;
   return { exact, blocking };
 }
 async function reviewTransitionDispatch(dispatchId, status, patch = {}) {
