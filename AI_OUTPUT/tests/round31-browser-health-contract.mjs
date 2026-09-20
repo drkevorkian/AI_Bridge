@@ -15,7 +15,8 @@ const healthBlock=background.slice(healthStart,healthEnd);
 assert.ok(healthBlock.includes('if (connected && side && !authority)'));
 assert.ok(healthBlock.includes('authority = await reviewRegisterSideAuthority(side)'));
 assert.ok(healthBlock.includes('actionAuthorityStatus: authority ? "DOCUMENT_AUTHORITY_VERIFIED"'));
-assert.ok(healthBlock.includes('relay: relayReady ? "READY" : "WAITING"'));
+assert.ok(healthBlock.includes('const providerBlocked = Boolean(side && state.providerRecovery?.side === side)'));
+assert.ok(healthBlock.includes('relay: providerBlocked ? "BLOCKED" : (relayReady ? "READY" : "WAITING")'));
 
 for(const token of [
   'resume.transportOk, true',
