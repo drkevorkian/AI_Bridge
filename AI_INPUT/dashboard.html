@@ -1,0 +1,342 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>AI Bridge Human Test Dashboard</title>
+  <link rel="stylesheet" href="dashboard.css">\n  <link rel="stylesheet" href="dashboard-layouts.css">
+</head>
+<body>
+  <div class="app-shell">
+    <aside class="control-panel">
+      <header class="brand-block">
+        <div>
+          <div class="eyebrow">AI BRIDGE</div>
+          <h1>1–5 agents. One workspace.</h1>
+        </div>
+        <div class="header-tools">
+          <select id="themeSelect" class="theme-select" aria-label="Theme">
+            <option value="blizzard">Blizzard Blue</option>
+            <option value="ghostwhite">Ghost White</option>
+            <option value="midnight">Midnight</option>
+            <option value="slate">Slate</option>
+            <option value="light">Light</option>
+            <option value="solarized">Solarized Light</option>
+            <option value="ocean">Ocean</option>
+            <option value="terminal">Terminal</option>
+          </select>
+          <button id="openSettings" class="ghost tiny" type="button">Settings</button>\n          <div id="sessionPill" class="session-pill idle">Idle</div>
+        </div>
+      </header>
+
+      <section class="panel-section runtime-card">
+        <div class="section-heading">
+          <span>Runtime</span>
+          <span id="turnCounter" class="muted">0 / ∞</span>
+        </div>
+        <div id="status" class="status-text">Idle</div>
+        <div class="control-grid four">
+          <button id="start" class="primary">Start</button>
+          <button id="pause" class="secondary" disabled>Pause</button>
+          <button id="resume" class="resume" disabled>Resume</button>
+          <button id="stop" class="danger" disabled>Stop</button>
+        </div>
+        <div class="fresh-chat-row">
+          <label class="check-line" for="freshOnStart">
+            <input id="freshOnStart" type="checkbox" disabled>
+            <span>Start in fresh AI chats — Limited</span>
+          </label>
+          <button id="newAllChats" class="tiny ghost" type="button" disabled title="Trusted automatic New Chat authority is not available yet.">New AI chats — Limited</button>
+        </div>
+        <div class="field-help">Uses the selected, already-open AI tabs. Each logical AI must use its own browser tab; multiple tabs may use the same LLM provider.</div>
+      </section>
+
+      <section class="panel-section">
+        <div class="section-heading"><span>Team</span><span id="teamRouteLabel" class="muted">A → B → C</span></div>
+
+        <div class="field-row agent-count-row">
+          <label for="agentCount">Active AI tabs</label>
+          <select id="agentCount">
+            <option value="1">1 AI</option>
+            <option value="2">2 AIs</option>
+            <option value="3" selected>3 AIs</option>
+            <option value="4">4 AIs</option>
+            <option value="5">5 AIs</option>
+          </select>
+          <div id="agentCountHelp" class="field-help">Choose how many separate AI tabs participate. Multiple tabs from the same LLM are allowed and count as separate agents.</div>
+        </div>
+
+        <article id="agentCardA" class="agent-card agent-a">
+          <div class="agent-topline">
+            <div class="agent-identity"><strong>AI A</strong><div class="agent-timers"><span id="timerTotalA" class="round-timer idle" title="Total working time for this AI in the current session">Total 0s</span><span id="timerCurrentA" class="round-timer idle" title="Current AI turn timer">Current —</span></div></div>
+            <div class="agent-actions">
+              <button id="newChatA" class="tiny ghost" type="button" disabled title="Trusted automatic New Chat authority is not available yet.">New chat — Limited</button>
+              <button id="resendA" class="tiny ghost" disabled>Resend</button>
+            </div>
+          </div>
+          <select id="tabA" aria-label="AI A tab"></select>
+          <div id="healthA" class="field-help">Connection: — · Authority: — · Relay: — · Rollover: Limited · Artifacts: Limited</div>
+          <textarea id="jobA" rows="3" placeholder="AI A job / responsibility"></textarea>
+        </article>
+
+        <article id="agentCardB" class="agent-card agent-b">
+          <div class="agent-topline">
+            <div class="agent-identity"><strong>AI B</strong><div class="agent-timers"><span id="timerTotalB" class="round-timer idle" title="Total working time for this AI in the current session">Total 0s</span><span id="timerCurrentB" class="round-timer idle" title="Current AI turn timer">Current —</span></div></div>
+            <div class="agent-actions">
+              <button id="newChatB" class="tiny ghost" type="button" disabled title="Trusted automatic New Chat authority is not available yet.">New chat — Limited</button>
+              <button id="resendB" class="tiny ghost" disabled>Resend</button>
+            </div>
+          </div>
+          <select id="tabB" aria-label="AI B tab"></select>
+          <div id="healthB" class="field-help">Connection: — · Authority: — · Relay: — · Rollover: Limited · Artifacts: Limited</div>
+          <textarea id="jobB" rows="3" placeholder="AI B job / responsibility"></textarea>
+        </article>
+
+        <article id="agentCardC" class="agent-card agent-c">
+          <div class="agent-topline">
+            <div class="agent-identity"><strong>AI C</strong><div class="agent-timers"><span id="timerTotalC" class="round-timer idle" title="Total working time for this AI in the current session">Total 0s</span><span id="timerCurrentC" class="round-timer idle" title="Current AI turn timer">Current —</span></div></div>
+            <div class="agent-actions">
+              <button id="newChatC" class="tiny ghost" type="button" disabled title="Trusted automatic New Chat authority is not available yet.">New chat — Limited</button>
+              <button id="resendC" class="tiny ghost" disabled>Resend</button>
+            </div>
+          </div>
+          <select id="tabC" aria-label="AI C tab"></select>
+          <div id="healthC" class="field-help">Connection: — · Authority: — · Relay: — · Rollover: Limited · Artifacts: Limited</div>
+          <textarea id="jobC" rows="3" placeholder="AI C job / responsibility"></textarea>
+        </article>
+
+        <article id="agentCardD" class="agent-card agent-d" hidden>
+          <div class="agent-topline">
+            <div class="agent-identity"><strong>AI D</strong><div class="agent-timers"><span id="timerTotalD" class="round-timer idle" title="Total working time for this AI in the current session">Total 0s</span><span id="timerCurrentD" class="round-timer idle" title="Current AI turn timer">Current —</span></div></div>
+            <div class="agent-actions">
+              <button id="newChatD" class="tiny ghost" type="button" disabled title="Trusted automatic New Chat authority is not available yet.">New chat — Limited</button>
+              <button id="resendD" class="tiny ghost" disabled>Resend</button>
+            </div>
+          </div>
+          <select id="tabD" aria-label="AI D tab"></select>
+          <div id="healthD" class="field-help">Connection: — · Authority: — · Relay: — · Rollover: Limited · Artifacts: Limited</div>
+          <textarea id="jobD" rows="3" placeholder="AI D job / responsibility"></textarea>
+        </article>
+
+        <article id="agentCardE" class="agent-card agent-e" hidden>
+          <div class="agent-topline">
+            <div class="agent-identity"><strong>AI E</strong><div class="agent-timers"><span id="timerTotalE" class="round-timer idle" title="Total working time for this AI in the current session">Total 0s</span><span id="timerCurrentE" class="round-timer idle" title="Current AI turn timer">Current —</span></div></div>
+            <div class="agent-actions">
+              <button id="newChatE" class="tiny ghost" type="button" disabled title="Trusted automatic New Chat authority is not available yet.">New chat — Limited</button>
+              <button id="resendE" class="tiny ghost" disabled>Resend</button>
+            </div>
+          </div>
+          <select id="tabE" aria-label="AI E tab"></select>
+          <div id="healthE" class="field-help">Connection: — · Authority: — · Relay: — · Rollover: Limited · Artifacts: Limited</div>
+          <textarea id="jobE" rows="3" placeholder="AI E job / responsibility"></textarea>
+        </article>
+
+        <div class="manual-relay-panel">
+          <div class="section-heading">
+            <span>Manual relay</span>
+            <span class="muted">recover a missed response</span>
+          </div>
+          <p class="field-help">Pause the bridge, choose the AI whose visible reply was missed, then send that recovered reply to one or more active teammates.</p>
+          <div class="manual-relay-row">
+            <span class="manual-relay-label">From</span>
+            <div class="manual-relay-from" role="group" aria-label="Source AI">
+              <button id="forceFromA" class="layout-chip active" type="button" aria-pressed="true">A</button>
+              <button id="forceFromB" class="layout-chip" type="button" aria-pressed="false">B</button>
+              <button id="forceFromC" class="layout-chip" type="button" aria-pressed="false">C</button>
+              <button id="forceFromD" class="layout-chip" type="button" aria-pressed="false">D</button>
+              <button id="forceFromE" class="layout-chip" type="button" aria-pressed="false">E</button>
+            </div>
+            <span class="manual-relay-label">To</span>
+            <div class="manual-relay-to" role="group" aria-label="Destination AIs">
+              <label class="check-line"><input id="forceToA" type="checkbox"> A</label>
+              <label class="check-line"><input id="forceToB" type="checkbox" checked> B</label>
+              <label class="check-line"><input id="forceToC" type="checkbox" checked> C</label>
+              <label class="check-line"><input id="forceToD" type="checkbox"> D</label>
+              <label class="check-line"><input id="forceToE" type="checkbox"> E</label>
+            </div>
+            <button id="forceRelayBtn" class="tiny" type="button" disabled>Re-read and send</button>
+          </div>
+          <div id="manualRelayStatus" class="field-help"></div>
+        </div>
+
+        <div class="history-block">
+          <div class="history-heading">
+            <span>Role history</span>
+            <button id="clearJobHistory" class="tiny ghost" type="button">Clear</button>
+          </div>
+          <div id="jobHistory" class="history-list">
+            <div class="history-empty">No previous jobs yet.</div>
+          </div>
+        </div>
+      </section>
+
+      <details id="vaultPanel" class="vault-panel" open>
+        <summary>
+          <span class="vault-summary-title">Shared Vault</span>
+          <span id="relaySummary" class="muted">No relayed files</span>
+        </summary>
+        <div class="vault-body">
+          <div class="field-help">AI-generated downloads are stored persistently across Bridge sessions until the Vault limit evicts the oldest files or you clear it. ZIP/code text is inspected while the original bytes remain available for relay or download.</div>
+          <div class="vault-actions">
+            <button id="clearRelayArtifacts" class="tiny ghost" type="button">Clear vault</button>
+          </div>
+          <div id="relayArtifacts" class="relay-list">
+            <div class="history-empty">No AI-generated files captured yet.</div>
+          </div>
+        </div>
+      </details>
+
+      <section class="panel-section">
+        <div class="work-mode-card">
+          <div class="field-row">
+            <label for="workMode">Work strategy</label>
+            <select id="workMode">
+              <option value="relay">Relay — active roster</option>
+              <option value="collaborate">Collaborate — one shared deliverable</option>
+              <option value="compete">Compete — simultaneous submissions</option>
+              <option value="parallel">Parallel — simultaneous independent</option>
+              <option value="review">Review — independent + peer critique</option>
+              <option value="mesh">Direct Mesh — AI-directed routing</option>
+            </select>
+          </div>
+          <div id="workModeHelp" class="field-help work-mode-help">Normal sequential relay. Each AI receives shared updates from the previous agents.</div>
+        </div>
+
+        <div class="field-row">
+          <label for="startSide">Main AI (first speaker)</label>
+          <select id="startSide">
+            <option value="A">AI A — Main</option>
+            <option value="B">AI B — Main</option>
+            <option value="C">AI C — Main</option>
+            <option value="D" hidden>AI D — Main</option>
+            <option value="E" hidden>AI E — Main</option>
+          </select>
+          <div class="field-help">This is the Main AI for the run. Human interjections wait for this model and are delivered with its next group turn.</div>
+        </div>
+
+        <div class="history-heading">
+          <label for="teamRules">Team rules</label>
+          <button id="applyTeamRules" class="tiny ghost" type="button">Apply to all members</button>
+        </div>
+        <textarea id="teamRules" rows="5" maxlength="12000" placeholder="Standing rules every active teammate must follow..."></textarea>
+        <div class="field-help">These rules are included on later AI turns. They can be updated during a saved or running session without changing the roster.</div>
+
+        <label for="prompt">Primary objective</label>
+        <textarea id="prompt" rows="7" placeholder="Define the objective shared by all active agents..."></textarea>
+
+        <div class="history-block command-history-block">
+          <div class="history-heading">
+            <span>Previous commands</span>
+            <button id="clearCommandHistory" class="tiny ghost" type="button">Clear</button>
+          </div>
+          <div id="commandHistory" class="history-list">
+            <div class="history-empty">No previous commands yet.</div>
+          </div>
+        </div>
+
+        <section class="source-section" aria-labelledby="sourceHeading">
+          <div class="section-heading">
+            <span id="sourceHeading">Local code / files</span>
+            <span id="sourceSummary" class="muted">No files</span>
+          </div>
+          <div id="sourceDropZone" class="source-drop-zone" tabindex="0">
+            <strong>Drop code files here, or use Add folder</strong>
+            <span>No GitHub required. Text/code only; common dependency folders are skipped.</span>
+          </div>
+          <div class="source-actions">
+            <button id="pickFiles" class="ghost" type="button">Add files</button>
+            <button id="pickFolder" class="ghost" type="button">Add folder</button>
+            <button id="clearSources" class="ghost" type="button" disabled>Clear</button>
+          </div>
+          <input id="sourceFileInput" class="hidden" type="file" multiple>
+          <input id="sourceFolderInput" class="hidden" type="file" multiple webkitdirectory directory>
+          <div class="field-help">Up to 100 files · 200,000 chars/file · 400,000 chars combined. Files are sent once to each AI chat and again when a session is resumed.</div>
+          <div id="sourceNotice" class="source-notice hidden"></div>
+          <div id="sourceList" class="source-list"></div>
+        </section>
+
+        <div class="split-fields">
+          <div>
+            <label for="maxTurns">Max AI turns</label>
+            <input id="maxTurns" type="number" min="-1" max="10000" step="1" value="-1" inputmode="numeric">
+            <div class="field-help"><strong>-1 = Infinite</strong> · 1–10000 = finite</div>
+          </div>
+          <div>
+            <label for="delayMs">Relay delay (ms)</label>
+            <input id="delayMs" type="number" min="0" max="30000" step="100" value="1500" inputmode="numeric">
+          </div>
+        </div>
+      </section>
+
+      <details id="suppressedPanel" class="vault-panel suppressed-panel">
+        <summary>
+          <span class="vault-summary-title">Suppressed requests</span>
+          <span id="suppressedSummary" class="muted">None</span>
+        </summary>
+        <div class="vault-body">
+          <div class="field-help">Suppressed human-input requests stay attached to this saved session. Reopen one whenever you are ready to answer it.</div>
+          <div id="suppressedRequests" class="suppressed-list">
+            <div class="history-empty">No suppressed requests.</div>
+          </div>
+        </div>
+      </details>
+
+      <section class="human-panel interject-panel">
+        <div class="section-heading"><span>Human interjection</span><span class="muted">queued for Main AI</span></div>
+        <textarea id="interjectText" rows="3" placeholder="Add your 2 cents, correction, priority, or steering note..."></textarea>
+        <button id="sendInterject" class="human-send" type="button" disabled>Queue for Main AI</button>
+        <div class="field-help">Safe delivery: your note is queued now, but it is not injected into the currently queued model. It is sent with the Main AI's next group turn, then becomes shared context for later teammates.</div>
+      </section>
+    </aside>
+
+    <div id="paneSplitter" class="pane-splitter" role="separator" aria-orientation="vertical" aria-valuemin="24" aria-valuemax="70" aria-valuenow="36" tabindex="0" title="Drag to resize the control pane"></div>
+
+    <main class="workspace">
+      <header class="workspace-header">
+        <div>
+          <div class="eyebrow">LIVE OUTPUT</div>
+          <h2>Shared transcript</h2>
+        </div>
+        <div class="workspace-actions">
+          <button id="interjectNow" class="ghost" type="button" disabled>Interject</button>
+          <button id="jumpLatest" class="ghost hidden">Jump to latest</button>
+          <button id="refreshTabs" class="ghost">Refresh AI tabs</button>
+        </div>
+      </header>
+
+      <div id="transcript" class="transcript" aria-live="polite" aria-label="AI Bridge transcript">
+        <div id="emptyTranscript" class="empty-state">
+          <div class="empty-icon">↔</div>
+          <h3>No AI output yet</h3>
+          <p>Start a session and completed responses from the active AI roster will appear here in sequence.</p>
+        </div>
+      </div>
+    </main>
+
+    <aside id="classicRightPanel" class="classic-right-panel" hidden aria-label="Classic secondary controls"></aside>
+  </div>
+
+  <div id="humanModal" class="modal-backdrop hidden" aria-hidden="true">
+    <section class="human-modal" role="dialog" aria-modal="true" aria-labelledby="humanModalTitle" aria-describedby="humanModalQuestion">
+      <div class="human-modal-alert">HUMAN INTERACTION NEEDED</div>
+      <div class="human-modal-head">
+        <div>
+          <div id="humanModalTitle" class="human-modal-title">AI Bridge needs you</div>
+          <div id="humanModalWho" class="muted"></div>
+        </div>
+        <div class="human-modal-pulse" aria-hidden="true">!</div>
+      </div>
+      <div id="humanModalQuestion" class="human-question"></div>
+      <label for="humanModalResponse">Your response</label>
+      <textarea id="humanModalResponse" rows="5" placeholder="Answer the AI's question or give the needed decision..."></textarea>
+      <button id="sendHumanModal" class="human-send" type="button">Send response & continue</button>
+      <div class="human-modal-actions" role="group" aria-label="Human request actions">
+        <button id="suppressHumanModal" class="secondary" type="button">Suppress request</button>
+        <button id="stopHumanModal" class="danger" type="button">Stop session</button>
+      </div>
+      <div id="humanModalQueue" class="field-help"></div>
+    </section>
+  </div>
+  <script src="dashboard.js"></script>\n  <script src="dashboard-layouts.js"></script>
+</body>
+</html>
