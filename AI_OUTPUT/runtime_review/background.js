@@ -2768,8 +2768,13 @@ async function sendToSide(side, text, { record = true, deliveredSeq = null, deli
   });
   let dispatch;
   if (unresolved.blocking) {
-    await reviewPauseForAmbiguity("A prior dispatch for AI " + side + " is unresolved (" + unresolved.blocking.status + "). Automatic resend is blocked.");
-    throw new Error("UNRESOLVED_DISPATCH_BLOCKS_REPLAY");
+    const blocker = unresolved.blocking;
+    const blockerSource = blocker.continuationSourceDispatchId == null ? "legacy" : String(blocker.continuationSourceDispatchId);
+    const blockerDetail = String(blocker.status) + ":" + String(blocker.dispatchId) + ":source=" + blockerSource;
+    await reviewPauseForAmbiguity(
+      "A prior dispatch for AI " + side + " is unresolved (" + blockerDetail + "). Automatic resend is blocked."
+    );
+    throw new Error("UNRESOLVED_DISPATCH_BLOCKS_REPLAY:" + blockerDetail);
   }
   if (unresolved.exact) {
     dispatch = unresolved.exact;
