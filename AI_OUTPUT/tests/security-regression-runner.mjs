@@ -29,6 +29,7 @@ const tests=[
   'round50-responsive-classic-layout.mjs',
   'round51-thread-limit-control-plane-isolation.mjs',
   'round52-rollover-pre-navigation-integrity.mjs',
+  'round57-manual-new-chat-sender-authority.mjs',
   'round53-narrow-header-wrapping.mjs',
   'round54-rollover-navigation-idempotency.mjs',
   'round55-narrow-header-and-manual-chat-wording.mjs',

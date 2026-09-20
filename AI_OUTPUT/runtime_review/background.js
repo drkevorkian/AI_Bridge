@@ -4575,6 +4575,10 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
     }
 
     if (msg.type === "AI_BRIDGE_NEW_CHATS") {
+      if(!reviewTrustedExtensionPage(sender)){
+        sendResponse({ok:false,reason:"NEW_CHAT_CONTROL_UNTRUSTED_SENDER"});
+        return;
+      }
       const sides = Array.isArray(msg.sides) ? msg.sides : SIDES;
       const resetSides = await resetSelectedChats(msg, sides);
       sendResponse({ ok: true, sides: resetSides });
