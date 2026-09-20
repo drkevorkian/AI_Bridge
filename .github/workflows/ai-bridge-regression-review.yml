@@ -1,0 +1,63 @@
+name: AI Bridge regression (review candidate)
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches:
+      - main
+      - "ai-a/**"
+      - "ai-b/**"
+      - "ai-c/**"
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  regression:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
+        with: {node-version: "22", check-latest: true}
+      - name: Root syntax and integrity
+        run: |
+          node --check background.js
+          node --check content.js
+          node tests/repository-integrity.mjs
+      - name: Security and authority regressions
+        run: node AI_OUTPUT/tests/security-regression-runner.mjs
+      - name: Chrome extension structure
+        run: node AI_OUTPUT/tests/chrome-extension-smoke.mjs
+      - name: Runtime review contract
+        run: node AI_OUTPUT/tests/runtime-review-contract.mjs
+      - name: Runtime durable exactly-once
+        run: node AI_OUTPUT/tests/runtime-review-durable-exactly-once.mjs
+      - name: Round 28 next-turn durability
+        run: node AI_OUTPUT/tests/round28-next-turn-durability.mjs
+      - name: Round 29 continuation commit ordering
+        run: node AI_OUTPUT/tests/round29-continuation-order.mjs
+      - name: Classic runtime contract
+        run: node AI_OUTPUT/tests/classic-runtime-contract.mjs
+      - name: Chrome pack validation
+        run: node AI_OUTPUT/tests/chrome-pack-smoke.mjs
+      - name: Runtime review pack validation
+        run: node AI_OUTPUT/tests/runtime-review-pack-smoke.mjs
+      - name: Round 31 browser health contract
+        run: node AI_OUTPUT/tests/round31-browser-health-contract.mjs
+      - name: Round 32 Chrome recovery UI matrix
+        run: node AI_OUTPUT/tests/round32-chrome-recovery-ui-matrix.mjs
+      - name: Round 33 Chrome dashboard lifecycle
+        run: node AI_OUTPUT/tests/round33-chrome-dashboard-lifecycle.mjs
+      - name: Round 34 paused Dashboard helper
+        run: node AI_OUTPUT/tests/round34-paused-dashboard-helper.cjs
+      - name: Round 35 CREATED dispatch isolation
+        run: node AI_OUTPUT/tests/round35-created-dispatch-isolation.mjs
+      - name: Round 36 lost-ACK element UI
+        run: node AI_OUTPUT/tests/round36-lost-ack-element-ui.mjs
+      - name: Round 37 seeded dispatch lifecycle
+        run: node AI_OUTPUT/tests/round37-seeded-dispatch-lifecycle.mjs
+      - name: Real Chrome MV3 E2E
+        run: node AI_OUTPUT/tests/chrome-e2e-runtime.cjs
