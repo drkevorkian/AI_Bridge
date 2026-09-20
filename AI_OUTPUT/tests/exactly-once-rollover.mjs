@@ -7,6 +7,7 @@ const oldIdentity={provider:"chatgpt",kind:"conversation",routeClass:"conversati
 const oldAuthority={side:"B",tabId:10,generationEpoch:5,identity:oldIdentity,state:"CONFIRMED"};
 const revoked={...oldAuthority,state:"REVOKED"};
 const freshSurface={side:"B",tabId:10,generationEpoch:6,identity:{provider:"chatgpt",kind:"surface",routeClass:"home",threadKey:null,writable:true,provisional:true},state:"PROVISIONAL"};
+const confirmedConversation={side:"B",tabId:10,generationEpoch:6,identity:{provider:"chatgpt",kind:"conversation",routeClass:"conversation",threadKey:"new",writable:true,provisional:false},state:"CONFIRMED"};
 const authoritativeLimitEvidence={
   state:"HARD_THREAD_LIMIT",
   automaticRollover:true,
@@ -35,7 +36,15 @@ coord.transition("B",PHASE.AWAITING_CONTINUITY_RESPONSE,{},8);
 assert.equal(coord.canAcceptContinuityResponse({side:"B",rolloverId:"r1",dispatchId:"wrong",observedIdentity:{...oldIdentity,threadKey:"new"}}).reason,"DISPATCH_MISMATCH");
 assert.equal(coord.canAcceptContinuityResponse({side:"B",rolloverId:"r1",dispatchId:"d-cont",observedIdentity:oldIdentity}).reason,"STALE_OLD_CONVERSATION");
 assert.equal(coord.canAcceptContinuityResponse({side:"B",rolloverId:"r1",dispatchId:"d-cont",observedIdentity:{...oldIdentity,kind:"share",writable:false}}).reason,"READ_ONLY_IDENTITY");
-assert.equal(coord.canAcceptContinuityResponse({side:"B",rolloverId:"r1",dispatchId:"d-cont",observedIdentity:{...oldIdentity,threadKey:"new"}}).ok,true);
+assert.equal(
+  coord.canAcceptContinuityResponse({side:"B",rolloverId:"r1",dispatchId:"d-cont",observedIdentity:confirmedConversation.identity}).reason,
+  "CANDIDATE_CONFIRMATION_PENDING"
+);
+coord.promoteCandidateAuthority("B",confirmedConversation,9);
+assert.equal(
+  coord.canAcceptContinuityResponse({side:"B",rolloverId:"r1",dispatchId:"d-cont",observedIdentity:confirmedConversation.identity}).reason,
+  "NEW_CONVERSATION_CONFIRMED"
+);
 
 const restored=new RolloverCoordinator(coord.snapshot());
 assert.equal(restored.get("B").phase,PHASE.AWAITING_CONTINUITY_RESPONSE);
