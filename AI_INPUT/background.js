@@ -149,6 +149,23 @@ async function reviewPersistLedger() {
 async function reviewPersistAuthorityEpochs() {
   await chrome.storage.local.set({ [REVIEW_AUTH_EPOCH_KEY]: reviewAuthorityEpochs });
 }
+async function reviewResetSessionDurability() {
+  // A new Bridge session is a new exactly-once transaction domain. Once the
+  // prior session is inactive there is no legitimate provider action to resume,
+  // so stale unresolved dispatches/parked responses must not cross this boundary.
+  await chrome.storage.local.set({
+    [REVIEW_DISPATCH_KEY]: { records: [] },
+    aiBridgeRuntimeParkedResponses: { records: [] }
+  });
+  reviewLedger = new DispatchLedger();
+  reviewRollover = new RolloverCoordinator();
+  reviewParkedStore = new ParkedResponseStore({
+    store: reviewChromeParkedAdapter,
+    key: "aiBridgeRuntimeParkedResponses"
+  });
+  await reviewParkedStore.init();
+  reviewRecoveryPauseReason = "";
+}
 async function reviewInitializeDurableRuntime() {
   const stored = await chrome.storage.local.get([REVIEW_DISPATCH_KEY, REVIEW_AUTH_EPOCH_KEY]);
   const records = Array.isArray(stored?.[REVIEW_DISPATCH_KEY]?.records) ? stored[REVIEW_DISPATCH_KEY].records : [];
@@ -223,18 +240,20 @@ function reviewFindUnresolvedDispatch(side, payloadHash, {
   const targetSide = String(side).toUpperCase();
   const sourceId = continuationSourceDispatchId == null ? null : String(continuationSourceDispatchId);
   const createdFloor = Number(continuationCreatedAt) || 0;
-  const candidates = reviewLedger.snapshot().filter(r =>
-    r.side === targetSide && active.has(r.status)
-  );
   const belongsToContinuation = record => {
     if (sourceId === null) return record.continuationSourceDispatchId == null;
     if (record.continuationSourceDispatchId != null) {
       return String(record.continuationSourceDispatchId) === sourceId;
     }
     // Backward-compatible fallback for records persisted before provenance was
-    // added. Never accept an older same-text record from before this pending turn.
+    // added. Records older than this durable pending turn belong to an older
+    // transaction domain and must not poison current recovery.
     return Number(record.createdAt) >= createdFloor;
   };
+  const candidates = reviewLedger.snapshot().filter(r => {
+    if (r.side !== targetSide || !active.has(r.status)) return false;
+    return sourceId === null ? true : belongsToContinuation(r);
+  });
   const reusable = candidates.filter(r =>
     r.status === DISPATCH_STATUS.CREATED &&
     r.payloadHash === payloadHash &&
@@ -3315,6 +3334,11 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
       if (fresh.teamRules.length > 12000) throw new Error("Team rules are limited to 12,000 characters.");
       fresh.sourceFiles = normalizeSourceFiles(msg.sourceFiles);
       fresh.sourceDeliveredBySide = { A: false, B: false, C: false, D: false, E: false };
+
+      // A new session must not inherit unresolved relay transactions from a
+      // previously stopped session. Reset relay durability only; keep history,
+      // settings and the persistent Vault.
+      await reviewResetSessionDurability();
 
       for (const side of requestedSides) {
         fresh[`tab${side}`] = Number(msg[`tab${side}`]);
