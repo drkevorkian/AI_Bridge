@@ -25,6 +25,7 @@ const tests=[
   'round42-content-runtime-lifecycle.mjs',
   'round43-next-turn-adoption.mjs',
   'round44-restart-delivery-recovery.mjs',
+  'round45-transaction-scoped-recovery.mjs',
   'round45-session-durability-isolation.mjs',
   'dom-authority-disabled-send.mjs',
   'update-checkpoint-crash-stages.mjs',
