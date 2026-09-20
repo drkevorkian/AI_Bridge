@@ -2358,7 +2358,9 @@ async function sendToSide(side, text, { record = true, deliveredSeq = null, deli
     await reviewTransitionDispatch(dispatch.dispatchId, DISPATCH_STATUS.FAILED, {
       failureReason: result.reason || "REJECTED_PRE_ACTION"
     });
-    throw new Error(result.reason || result.error || "Provider action was rejected before execution.");
+    const rejectedReason=result.reason || result.error || "Provider action was rejected before execution.";
+    const rejectedDetail=result.detail ? ": "+String(result.detail) : "";
+    throw new Error(rejectedReason+rejectedDetail);
   }
 
   if (result?.outcome !== "ACTION_CONFIRMED") {
