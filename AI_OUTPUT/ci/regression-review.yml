@@ -37,6 +37,8 @@ jobs:
         run: node AI_OUTPUT/tests/runtime-review-durable-exactly-once.mjs
       - name: Round 28 next-turn durability
         run: node AI_OUTPUT/tests/round28-next-turn-durability.mjs
+      - name: Round 29 continuation commit ordering
+        run: node AI_OUTPUT/tests/round29-continuation-order.mjs
       - name: Classic runtime contract
         run: node AI_OUTPUT/tests/classic-runtime-contract.mjs
       - name: Chrome pack validation

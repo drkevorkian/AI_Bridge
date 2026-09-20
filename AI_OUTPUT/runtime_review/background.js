@@ -109,7 +109,7 @@ let stateReady = loadState();
  * Chrome listeners remain top-level/synchronous; these maps hold only ephemeral
  * per-worker authority. A restarted worker must re-register before any action.
  */
-const REVIEW_RUNTIME_VERSION = "1.18.0-review.3";
+const REVIEW_RUNTIME_VERSION = "1.18.0-review.4";
 const { DispatchLedger, DISPATCH_STATUS } = AIBridgeRuntimeCore.ledger;
 const { RolloverCoordinator } = AIBridgeRuntimeCore.rollover;
 const { validateIncomingResponse, DISPOSITION } = AIBridgeRuntimeCore.responseGate;
@@ -268,6 +268,34 @@ async function reviewClearNextTurnPending(sourceDispatchId = null) {
   await saveState();
   return true;
 }
+function reviewHasNonterminalDispatch() {
+  const active = new Set([
+    DISPATCH_STATUS.CREATED,
+    DISPATCH_STATUS.DISPATCHING,
+    DISPATCH_STATUS.ACCEPTED,
+    DISPATCH_STATUS.AWAITING_RESPONSE,
+    DISPATCH_STATUS.DELIVERY_AMBIGUOUS
+  ]);
+  return reviewLedger.snapshot().some(record => active.has(record.status));
+}
+function reviewCommittedWithoutContinuationIsInconsistent() {
+  if (!state.sessionActive || !state.running || state.awaitingHuman || state.nextTurnPending) return false;
+  if (hasReachedTurnLimit()) return false;
+  if (reviewHasNonterminalDispatch()) return false;
+  return reviewLedger.snapshot().some(record => record.status === DISPATCH_STATUS.RESPONSE_COMMITTED);
+}
+async function reviewEnforceContinuationConsistency() {
+  if (!reviewCommittedWithoutContinuationIsInconsistent()) return false;
+  const reason = "RUNTIME_CONTINUATION_STATE_INCONSISTENT: A committed response is missing its durable next-turn record. AI Bridge paused instead of guessing or sending a duplicate.";
+  state.running = false;
+  state.paused = true;
+  state.runtimePhase = "PAUSED";
+  state.pauseReason = reason;
+  appendLog({ time: Date.now(), type: "system", text: reason });
+  await saveState();
+  return true;
+}
+
 async function reviewRecoverNextTurnPending() {
   const pending = state.nextTurnPending;
   if (!pending || !state.sessionActive) return { recovered: false };
@@ -428,10 +456,6 @@ async function reviewProcessIncomingEnvelope(envelope, { fromParked = false } = 
       completedAt: envelope.completedAt
     });
 
-    await reviewTransitionDispatch(envelope.dispatchId, DISPATCH_STATUS.RESPONSE_COMMITTED, {
-      completedAt: Number.isFinite(Number(envelope.completedAt)) ? Number(envelope.completedAt) : Date.now()
-    });
-
     let pending = null;
     if (
       shouldRelay &&
@@ -441,7 +465,27 @@ async function reviewProcessIncomingEnvelope(envelope, { fromParked = false } = 
       !stateResult?.commandError
     ) {
       pending = reviewBuildNextTurnPending(envelope.dispatchId, envelope.side);
-      if (pending) await reviewPersistNextTurnPending(pending);
+      if (pending) {
+        try {
+          await reviewPersistNextTurnPending(pending);
+        } catch (error) {
+          return reviewPauseForAmbiguity(
+            "Could not durably save the next-turn obligation. The source response remains uncommitted: " +
+            (error?.message || error)
+          );
+        }
+      }
+    }
+
+    try {
+      await reviewTransitionDispatch(envelope.dispatchId, DISPATCH_STATUS.RESPONSE_COMMITTED, {
+        completedAt: Number.isFinite(Number(envelope.completedAt)) ? Number(envelope.completedAt) : Date.now()
+      });
+    } catch (error) {
+      return reviewPauseForAmbiguity(
+        "The next-turn obligation is durable but the source response could not be marked committed. Recovery is paused: " +
+        (error?.message || error)
+      );
     }
 
     await reviewParkedStore.finalize(envelope.dispatchId);
@@ -1455,12 +1499,19 @@ async function loadState() {
 
   await validateSavedBindings();
   await reviewRuntimeReady;
+
+  if (await reviewEnforceContinuationConsistency()) {
+    reviewRecoveryPauseReason = state.pauseReason;
+  }
+
   if (reviewRecoveryPauseReason && state.sessionActive) {
+    const alreadyApplied = state.paused && state.pauseReason === reviewRecoveryPauseReason;
     state.running = false;
     state.paused = true;
+    state.runtimePhase = "PAUSED";
     state.pauseReason = reviewRecoveryPauseReason;
-    appendLog({ time: Date.now(), type: "system", text: reviewRecoveryPauseReason });
-    await saveState();
+    if (!alreadyApplied) appendLog({ time: Date.now(), type: "system", text: reviewRecoveryPauseReason });
+    if (!alreadyApplied) await saveState();
   }
 
   // Manifest V3 service workers are disposable. When Chrome wakes this worker

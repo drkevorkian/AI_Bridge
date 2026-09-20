@@ -26,8 +26,9 @@ const responseCommitted=processBlock.indexOf('DISPATCH_STATUS.RESPONSE_COMMITTED
 const persistPending=processBlock.indexOf('reviewPersistNextTurnPending(pending)');
 const finalizeParked=processBlock.indexOf('reviewParkedStore.finalize(envelope.dispatchId)');
 assert.ok(responseCommitted>=0,'response commit missing');
-assert.ok(persistPending>responseCommitted,'continuation must persist after source response commit');
-assert.ok(finalizeParked>persistPending,'parked response must finalize only after continuation obligation is durable');
+assert.ok(persistPending>=0,'continuation persistence missing');
+assert.ok(responseCommitted>persistPending,'continuation must be durable before source RESPONSE_COMMITTED');
+assert.ok(finalizeParked>responseCommitted,'parked response must finalize only after source commit');
 
 const sendStart=background.indexOf('async function sendToSide');
 const sendEnd=background.indexOf('\nasync function openDashboard()',sendStart);
@@ -41,6 +42,9 @@ assert.ok(background.includes('if (state.nextTurnPending) {'));
 assert.ok(background.includes('reviewRecoverNextTurnPending()'));
 assert.ok(background.includes('source.status !== DISPATCH_STATUS.RESPONSE_COMMITTED'));
 assert.ok(background.includes('NO_DURABLE_CONTINUATION'));
+assert.ok(background.includes('reviewCommittedWithoutContinuationIsInconsistent'));
+assert.ok(background.includes('reviewEnforceContinuationConsistency'));
+assert.ok(background.includes('RUNTIME_CONTINUATION_STATE_INCONSISTENT'));
 
 assert.ok(dashboard.includes('runtimePhaseLabel'));
 assert.ok(dashboard.includes('recovering next relay turn'));
