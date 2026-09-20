@@ -449,6 +449,30 @@
       })().then(sendResponse).catch(error=>sendResponse({ok:false,error:error.message||String(error)}));
       return true;
     }
+    if(msg.type==="AI_BRIDGE_ACTION_STATUS"){
+      try{
+        const action=String(msg.action||"").toUpperCase();
+        const authorityId=String(msg.authorityId||msg.dispatchId||"").trim();
+        if(!action||!authorityId){
+          sendResponse({ok:false,error:"INVALID_ACTION_STATUS_QUERY"});
+          return false;
+        }
+        const cached=byAuthority.get(action+":"+authorityId)||null;
+        sendResponse({
+          ok:true,
+          found:Boolean(cached),
+          action,
+          authorityId,
+          result:cached?{...cached}:null,
+          side:registration?.side||null,
+          generationEpoch:registration?.generationEpoch??null,
+          conversationIdentity:routeIdentity()
+        });
+      }catch(error){
+        sendResponse({ok:false,error:error.message||String(error)});
+      }
+      return false;
+    }
     if(msg.type==="AI_BRIDGE_ACTION"){
       handleAction(msg).then(sendResponse).catch(error=>sendResponse({ok:false,outcome:"REJECTED_PRE_ACTION",reason:"CONTENT_GATE_ERROR",error:error.message||String(error)}));
       return true;
