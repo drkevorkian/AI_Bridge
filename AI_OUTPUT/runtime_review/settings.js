@@ -33,7 +33,7 @@ const UPDATE_PHASE_TEXT=Object.freeze({
 });
 const secureUpdater={
   busy:false,pinged:false,hostConnected:false,hostName:"",schema:null,
-  releaseConfigured:null,releaseReady:false,algorithm:"",keyBits:0,
+  releaseConfigured:null,releaseReady:false,algorithm:"",keyBits:0,minimumKeyBits:0,releaseReason:"",
   checkedTarget:null,checkpoint:null,boundary:null
 };
 
@@ -198,7 +198,16 @@ function renderSecureUpdater(){
     $("verificationStatus").textContent="Not configured";
   }else if(!secureUpdater.releaseReady){
     $("releaseTrustStatus").textContent="Invalid configuration";
-    $("verificationStatus").textContent=secureUpdater.algorithm||"Invalid configuration";
+    const parts=[];
+    if(secureUpdater.algorithm)parts.push(secureUpdater.algorithm);
+    if(secureUpdater.keyBits>0)parts.push(secureUpdater.keyBits+"-bit");
+    let detail=parts.join(" · ")||"Invalid configuration";
+    if(secureUpdater.minimumKeyBits>0&&secureUpdater.keyBits>0&&secureUpdater.keyBits<secureUpdater.minimumKeyBits){
+      detail+=" — requires ≥"+secureUpdater.minimumKeyBits+"-bit";
+    }else if(secureUpdater.releaseReason){
+      detail+=" · "+secureUpdater.releaseReason;
+    }
+    $("verificationStatus").textContent=detail;
   }else{
     $("releaseTrustStatus").textContent="Ready";
     $("verificationStatus").textContent=secureUpdater.algorithm+
@@ -210,7 +219,7 @@ function renderSecureUpdater(){
   }else if(checkpointIsActive(cp)){
     $("automaticApplyStatus").textContent=cp.phase==="CHECKPOINTED"?"Ready to apply":"In progress";
   }else{
-    $("automaticApplyStatus").textContent="Ready";
+    $("automaticApplyStatus").textContent="Available";
   }
 
   if(cp?.phase){
@@ -261,6 +270,8 @@ async function testNativeUpdater({quiet=false}={}){
       secureUpdater.releaseReady=false;
       secureUpdater.algorithm="";
       secureUpdater.keyBits=0;
+      secureUpdater.minimumKeyBits=0;
+      secureUpdater.releaseReason="";
       secureUpdater.checkedTarget=null;
       if(!quiet)setSecureUpdateNotice("Updater host unavailable: "+secureUpdateError(response,"Native updater is not installed or unavailable."),true);
       return response;
@@ -273,7 +284,9 @@ async function testNativeUpdater({quiet=false}={}){
     secureUpdater.releaseConfigured=verification.configured===true;
     secureUpdater.releaseReady=verification.ready===true;
     secureUpdater.algorithm=String(verification.algorithm||"");
-    secureUpdater.keyBits=Number.isInteger(Number(verification.key_bits))?Math.max(0,Number(verification.key_bits)):0;
+    secureUpdater.keyBits=Number(verification.key_bits)||0;
+    secureUpdater.minimumKeyBits=Number(verification.minimum_key_bits)||0;
+    secureUpdater.releaseReason=String(verification.reason||"");
     if(!quiet){
       if(secureUpdater.releaseConfigured===false){
         setSecureUpdateNotice("Updater host connected. Release verification is not configured, so signed CHECK/APPLY remain disabled.");
