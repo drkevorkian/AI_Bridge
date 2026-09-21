@@ -10,7 +10,7 @@ const host=fs.readFileSync(path.join(root,"update_system","native_host.py"),"utf
 const installer=fs.readFileSync(path.join(root,"update_system","install_native_host.py"),"utf8");
 
 assert.ok(manifest.permissions.includes("nativeMessaging"));
-assert.equal(manifest.version_name,"1.19.1.26-AI-B");
+assert.equal(manifest.name,"AI Bridge Review");\nassert.equal(manifest.version,"1.19.1");
 for(const token of [
   'REVIEW_NATIVE_UPDATER_HOST="com.aibridge.updater"',
   'chrome.runtime.sendNativeMessage(REVIEW_NATIVE_UPDATER_HOST,message)',
