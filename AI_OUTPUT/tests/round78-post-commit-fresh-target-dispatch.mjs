@@ -24,6 +24,11 @@ assert.ok(bg.includes('pending.targetSide===normalizedSide'));
 assert.ok(bg.includes('"RECOVERY_START_PROCESSING"'));
 assert.ok(bg.includes('"RECOVERY_START_CAUGHT_UP"'));
 assert.ok(bg.includes('"RECOVERY_START_REPLAYING_FAILED_HANDOFF"'));
+assert.ok(bg.includes("const freshSurfaceNoDispatch=Boolean("));
+assert.ok(bg.includes("targetProbe.freshSurface &&"));
+assert.ok(bg.includes("matching.length===0"));
+assert.ok(bg.includes('"TARGET_STILL_FRESH_NO_DISPATCH"'));
+assert.ok(bg.includes("!retrySafe.length && !freshSurfaceNoDispatch"));
 
 const sendStart=bg.indexOf("async function sendToSide");
 const sendEnd=bg.indexOf("async function openDashboard",sendStart);
