@@ -73,8 +73,15 @@ function setAgentCountUI(raw, { persist = false } = {}) {
       option.hidden = !active;
       option.disabled = !active;
     }
+    const recoveryOption = [...($("readResponseStartSide")?.options || [])].find(item => item.value === side);
+    if (recoveryOption) {
+      recoveryOption.hidden = !active;
+      recoveryOption.disabled = !active;
+    }
   }
   if ($("startSide") && !SIDES.includes($("startSide").value)) $("startSide").value = SIDES[0];
+  if ($("readResponseStartSide") && !SIDES.includes($("readResponseStartSide").value)) $("readResponseStartSide").value = SIDES[0];
+  updateRecoveryStartLabel();
   const relayOption = [...($("workMode")?.options || [])].find(item => item.value === "relay");
   if (relayOption) relayOption.textContent = "Relay — " + SIDES.join(" → ");
   updateWorkModeUI();
@@ -97,6 +104,11 @@ async function loadAgentCountPreference() {
 function selectedWorkMode() {
   const value = $("workMode")?.value || "relay";
   return WORK_MODE_INFO[value] ? value : "relay";
+}
+
+function updateRecoveryStartLabel() {
+  const side = SIDES.includes($("readResponseStartSide")?.value) ? $("readResponseStartSide").value : SIDES[0];
+  if ($("readResponseStart") && side) $("readResponseStart").textContent = `Read ${side} response to start`;
 }
 
 function updateWorkModeUI() {
@@ -768,13 +780,16 @@ function updateControls(s) {
   const manualFreshAllowed = !s.sessionActive;
   const bindingStatus = activeBindingStatus();
   const activeTabsValid = bindingStatus.valid;
+  const stoppedRecoveryAvailable = !s.sessionActive && (Boolean(String(s.initialPrompt || "").trim()) || Number(s.transcriptCount || 0) > 0);
+  if ($("readResponseStartSide")) $("readResponseStartSide").disabled = Boolean(s.sessionActive);
+  if ($("readResponseStart")) $("readResponseStart").disabled = !stoppedRecoveryAvailable || !activeTabsValid;
   $("newAllChats").disabled = !manualFreshAllowed || !activeTabsValid;
   $("freshOnStart").disabled = !manualFreshAllowed || !activeTabsValid;
   $("agentCount").disabled = Boolean(s.sessionActive);
   $("workMode").disabled = Boolean(s.sessionActive);
   $("teamRules").disabled = false;
   $("applyTeamRules").disabled = false;
-  $("forceRelayBtn").disabled = !s.sessionActive || s.running || s.awaitingHuman || selectedManualRelayTargets().length === 0;
+  $("forceRelayBtn").disabled = !s.sessionActive || s.awaitingHuman || selectedManualRelayTargets().length === 0;
   $("sendInterject").disabled = !s.sessionActive || s.awaitingHuman;
   $("interjectText").disabled = !s.sessionActive || s.awaitingHuman;
   $("interjectNow").disabled = !s.sessionActive || s.awaitingHuman;
@@ -799,6 +814,9 @@ function runtimePhaseLabel(raw) {
     RECOVERING_NEXT_TURN: "Recovering next relay turn",
     PROVIDER_RECOVERY_REQUIRED: "Provider recovery required",
     PROVIDER_RESPONSE_RECOVERED: "Provider response recovered",
+    READ_RESPONSE_TO_START: "Reading stopped-session response",
+    RECOVERY_START_PROCESSING: "Restarting from recovered response",
+    RECOVERY_START_REPLAYING_FAILED_HANDOFF: "Replaying previously failed recovery handoff",
     THREAD_ROLLOVER_CONTINUITY_DISPATCHING: "Sending continuation context",
     THREAD_ROLLOVER_AWAITING_CONTINUITY_RESPONSE: "Awaiting continuation response",
     PAUSED: "Paused"
@@ -1155,6 +1173,34 @@ $("start").addEventListener("click", async () => {
   }
 });
 
+$("readResponseStartSide").addEventListener("change", () => {
+  updateRecoveryStartLabel();
+});
+
+$("readResponseStart").addEventListener("click", async () => {
+  const tabError = validateActiveTabs();
+  if (tabError) return $("readResponseStartStatus").textContent = tabError;
+  const sourceSide = $("readResponseStartSide").value;
+  $("readResponseStartStatus").textContent = `Reading AI ${sourceSide}'s last completed response and restarting from that boundary…`;
+  $("readResponseStart").disabled = true;
+  try {
+    const res = await chrome.runtime.sendMessage({
+      type: "AI_BRIDGE_READ_RESPONSE_TO_START",
+      sourceSide,
+      agentCount: SIDES.length,
+      ...selectedBindings()
+    });
+    if (!res?.ok) throw new Error(res?.error || "Recovery start failed");
+    const routed = res.targetSide ? ` Next AI: ${res.targetSide}.` : "";
+    const replayed = res.replayedCommitted ? " The response was already committed, so only its previously failed handoff was replayed." : "";
+    $("readResponseStartStatus").textContent = `Recovered AI ${sourceSide}'s completed response.${replayed}${routed} Automatic Bridge operation has restarted.`;
+    await refreshState();
+  } catch (err) {
+    $("readResponseStartStatus").textContent = `Recovery start failed: ${err.message}`;
+    await refreshState();
+  }
+});
+
 $("applyTeamRules").addEventListener("click", async () => {
   const rules = $("teamRules").value.trim();
   if (rules.length > 12000) {
@@ -1186,7 +1232,7 @@ for (const side of ALL_SIDES) {
 $("forceRelayBtn").addEventListener("click", async () => {
   const targetSides = selectedManualRelayTargets();
   if (!targetSides.length) return;
-  $("manualRelayStatus").textContent = `Reading AI ${manualRelaySource}'s last visible reply…`;
+  $("manualRelayStatus").textContent = `Recovering AI ${manualRelaySource}'s last completed reply and freezing automatic progression…`;
   try {
     const res = await chrome.runtime.sendMessage({
       type: "AI_BRIDGE_MANUAL_RELAY",
