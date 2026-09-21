@@ -611,7 +611,7 @@ function reviewValidateNativeUpdaterResponse(op,result){
     const version=reviewBoundedNativeString(available.version,{max:128});
     const build=reviewBoundedNativeString(available.build,{max:128});
     const files=Number(available.files);
-    if(!version||!build||!Number.isInteger(files)||files<1||files>10000){
+    if(!version||!build||!Number.isInteger(files)||files<1||files>REVIEW_NATIVE_UPDATER_ALLOWED_FILES.size){
       return {ok:false,reason:"NATIVE_UPDATE_CHECK_RESPONSE_INVALID"};
     }
     return {ok:true,available:{version,build,files}};
@@ -623,7 +623,7 @@ function reviewValidateNativeUpdaterResponse(op,result){
     if(!checkpointId||!version||!build||result.reload_required!==true){
       return {ok:false,reason:"NATIVE_UPDATE_APPLY_RESPONSE_INVALID"};
     }
-    if(!Array.isArray(result.files)||result.files.length<1||result.files.length>100){
+    if(!Array.isArray(result.files)||result.files.length<1||result.files.length>REVIEW_NATIVE_UPDATER_ALLOWED_FILES.size){
       return {ok:false,reason:"NATIVE_UPDATE_APPLY_RESPONSE_INVALID"};
     }
     const files=[];
