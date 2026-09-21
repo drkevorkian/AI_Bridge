@@ -31,6 +31,7 @@ export const PROVIDER_CONTRACTS = Object.freeze({
   }),
   grok: Object.freeze({
     composer: freezeContracts([
+      { id: "grok-composer-chat-input-direct", selector: "div.ProseMirror[data-testid='chat-input'][contenteditable='true'][role='textbox']", rank: RANK.EXACT_SEMANTIC },
       { id: "grok-composer-chat-input", selector: "[data-testid='chat-input'] div.ProseMirror[contenteditable='true'][role='textbox']", rank: RANK.EXACT_SEMANTIC },
       { id: "grok-composer-prosemirror", selector: "div.ProseMirror[contenteditable='true'][role='textbox'][aria-label*='Grok']", rank: RANK.ACCESSIBLE_EXACT },
       { id: "grok-composer-ask", selector: "textarea[placeholder*='Ask']", rank: RANK.ACCESSIBLE_EXACT },
