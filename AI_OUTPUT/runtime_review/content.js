@@ -222,6 +222,16 @@
     throw new Error("TRUSTED_COMPOSER_NOT_EDITABLE");
   }
   async function sleep(ms){ return new Promise(resolve=>setTimeout(resolve,ms)); }
+  async function waitForTrusted(selectors,{requireEnabled=false,attempts=40,delayMs=75}={}){
+    const boundedAttempts=Math.max(1,Math.min(80,Number(attempts)||1));
+    const boundedDelay=Math.max(0,Math.min(250,Number(delayMs)||0));
+    for(let i=0;i<boundedAttempts;i++){
+      const node=resolveTrusted(selectors,{requireEnabled});
+      if(node) return node;
+      if(i+1<boundedAttempts && boundedDelay>0) await sleep(boundedDelay);
+    }
+    return null;
+  }
   async function confirmSend(composer,originalText){
     for(let i=0;i<20;i++){
       await sleep(125);
@@ -247,9 +257,19 @@
     if(artifacts.length) return rememberCommand(command,reject(command,"UPLOAD_UNSUPPORTED"));
 
     // Security boundary, phase 1: prove only the stable composer before typing.
-    // ChatGPT may not render its Send control at all while the composer is empty.
-    const composer1=resolveTrusted(config.composer);
-    if(!composer1) return rememberCommand(command,reject(command,"DOM_AUTHORITY_UNAVAILABLE","COMPOSER"));
+    // Fresh/new provider surfaces can mount the trusted editor asynchronously.
+    // Wait only for the already-pinned selectors; never broaden authority to a
+    // generic textbox. Re-prove route identity after the bounded mount window.
+    const composer1=await waitForTrusted(config.composer,{attempts:40,delayMs:75});
+    if(!composer1){
+      const stats=trustedSelectorStats(config.composer);
+      const detail=`COMPOSER provider=${provider}; matched=${stats.matched}; visible=${stats.visible}; enabled=${stats.enabled}`;
+      return rememberCommand(command,reject(command,"DOM_AUTHORITY_UNAVAILABLE",detail));
+    }
+    const identityAfterComposerWait=routeIdentity();
+    if(!sameIdentity(identityAfterComposerWait,command.expectedIdentity) || !sameIdentity(identityAfterComposerWait,registration.identity)) {
+      return rememberCommand(command,reject(command,"STALE_CONVERSATION_AUTHORITY"));
+    }
     const composer2=resolveTrusted(config.composer);
     if(composer1!==composer2 || !composer2?.isConnected) {
       return rememberCommand(command,reject(command,"DOM_AUTHORITY_CHANGED","COMPOSER"));
