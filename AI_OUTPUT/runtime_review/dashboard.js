@@ -306,8 +306,6 @@ function hydrateFromState(s) {
   updateWorkModeUI();
   if (Number.isInteger(Number(s.maxTurns))) $("maxTurns").value = String(s.maxTurns);
   if (Number.isFinite(Number(s.delayMs))) $("delayMs").value = String(s.delayMs);
-  $("freshOnStart").checked = false;
-  $("freshOnStart").disabled = true;
   selectedSourceFiles = Array.isArray(s.sourceFiles) ? s.sourceFiles.map(file => ({ ...file })) : [];
   renderSourceFiles();
   renderHistory(s.history);
@@ -767,9 +765,11 @@ function updateControls(s) {
   $("pause").disabled = !s.sessionActive || !s.running || s.awaitingHuman;
   $("resume").disabled = !s.sessionActive || s.running || s.awaitingHuman;
   $("stop").disabled = !s.sessionActive;
-  $("newAllChats").disabled = true;
-  $("freshOnStart").checked = false;
-  $("freshOnStart").disabled = true;
+  const manualFreshAllowed = !s.sessionActive;
+  const bindingStatus = activeBindingStatus();
+  const activeTabsValid = bindingStatus.valid;
+  $("newAllChats").disabled = !manualFreshAllowed || !activeTabsValid;
+  $("freshOnStart").disabled = !manualFreshAllowed || !activeTabsValid;
   $("agentCount").disabled = Boolean(s.sessionActive);
   $("workMode").disabled = Boolean(s.sessionActive);
   $("teamRules").disabled = false;
@@ -781,7 +781,7 @@ function updateControls(s) {
   updateWorkModeUI();
 
   for (const side of SIDES) {
-    $(`newChat${side}`).disabled = true;
+    $(`newChat${side}`).disabled = !manualFreshAllowed || !bindingStatus.valid;
     const batchDone = ["compete", "parallel", "review"].includes(s.workMode) && Array.isArray(s.phaseCompletedSides) && s.phaseCompletedSides.includes(side);
     $(`resend${side}`).disabled = !s.sessionActive || !s.running || s.awaitingHuman || !s.lastSentBySide?.[side] || batchDone;
   }
@@ -798,8 +798,34 @@ function runtimePhaseLabel(raw) {
     RECOVERING_NEXT_TURN: "Recovering next relay turn",
     PROVIDER_RECOVERY_REQUIRED: "Provider recovery required",
     PROVIDER_RESPONSE_RECOVERED: "Provider response recovered",
+    THREAD_ROLLOVER_CONTINUITY_DISPATCHING: "Sending continuation context",
+    THREAD_ROLLOVER_AWAITING_CONTINUITY_RESPONSE: "Awaiting continuation response",
     PAUSED: "Paused"
   })[String(raw || "IDLE")] || String(raw || "Unknown").replaceAll("_", " ");
+}
+
+function rolloverStatusText(s) {
+  const rollover = s?.threadRollover;
+  if (!rollover?.active) return "";
+  const from = String(rollover.previousTitle || "").trim();
+  const to = String(rollover.nextTitle || "").trim();
+  const titleLine = from && to
+    ? from + " → " + to
+    : (to || from || ("AI " + (rollover.side || "?") + " continuation"));
+  const phase = String(rollover.phase || "");
+  const detail = ({
+    LIMIT_DETECTED: "Conversation limit reached. Preparing a seamless continuation…",
+    FINAL_RESPONSE_COMMITTED: "Final response saved.",
+    CONTINUITY_PREPARED: "Continuity context prepared.",
+    OLD_AUTHORITY_REVOKED: "Previous conversation safely finalized.",
+    OPENING_NEW_CHAT: "Opening continuation chat…",
+    AWAITING_NEW_IDENTITY: "Verifying the new conversation…",
+    NEW_IDENTITY_VERIFIED: "New conversation verified.",
+    CONTINUITY_PENDING: "Restoring context…",
+    CONTINUITY_SENT: "Continuation context sent.",
+    AWAITING_CONTINUITY_RESPONSE: "Context restored. Waiting for the AI to continue…"
+  })[phase] || ("Continuing rollover: " + phase.replaceAll("_", " "));
+  return "Continuing conversation…\n" + titleLine + "\n" + detail;
 }
 
 function updateStatus(s) {
@@ -810,6 +836,8 @@ function updateStatus(s) {
 
   if (s.sessionActive && s.awaitingHuman && s.pendingHuman) {
     $("status").textContent = `PAUSED — HUMAN INPUT NEEDED\nRuntime: ${phase}\nWaiting on controller for ${s.pendingHuman.requestingLabel || `AI ${s.pendingHuman.requestingSide}`}.`;
+  } else if (s.sessionActive && s.threadRollover?.active) {
+    $("status").textContent = rolloverStatusText(s) + `\nRuntime: ${phase}\nAI turns: ${s.turn || 0}/${limit}`;
   } else if (s.sessionActive && s.providerRecovery) {
     const event = s.providerRecovery;
     $("status").textContent = `PAUSED — provider action needed
@@ -903,10 +931,43 @@ function selectedBindings() {
   return data;
 }
 
+function activeBindingStatus() {
+  const bindings = SIDES.map(side => ({ side, tabId: selectedTab(side) }));
+  const missingSides = bindings
+    .filter(({ tabId }) => !Number.isInteger(tabId) || tabId <= 0 || !tabsById.has(tabId))
+    .map(({ side }) => side);
+
+  const ownersByTab = new Map();
+  for (const { side, tabId } of bindings) {
+    if (!Number.isInteger(tabId) || tabId <= 0 || !tabsById.has(tabId)) continue;
+    const owners = ownersByTab.get(tabId) || [];
+    owners.push(side);
+    ownersByTab.set(tabId, owners);
+  }
+
+  const duplicateTabs = new Set(
+    [...ownersByTab.entries()]
+      .filter(([, owners]) => owners.length > 1)
+      .map(([tabId]) => tabId)
+  );
+  const duplicateSides = new Set(
+    bindings
+      .filter(({ tabId }) => duplicateTabs.has(tabId))
+      .map(({ side }) => side)
+  );
+
+  return Object.freeze({
+    valid: missingSides.length === 0 && duplicateTabs.size === 0,
+    missingSides: Object.freeze(missingSides),
+    duplicateTabs,
+    duplicateSides
+  });
+}
+
 function validateActiveTabs() {
-  const ids = SIDES.map(selectedTab);
-  if (ids.some(id => !id)) return `Choose ${SIDES.length} supported AI tab${SIDES.length === 1 ? "" : "s"}.`;
-  if (new Set(ids).size !== ids.length) return "Each logical AI must use a different browser tab. Multiple tabs from the same LLM are allowed.";
+  const status = activeBindingStatus();
+  if (status.missingSides.length) return `Choose ${SIDES.length} supported AI tab${SIDES.length === 1 ? "" : "s"}.`;
+  if (status.duplicateTabs.size) return "Each logical AI must use a different browser tab. Multiple tabs from the same LLM are allowed.";
   return null;
 }
 
@@ -961,8 +1022,54 @@ chrome.storage.onChanged.addListener((changes, area) => {
   if (area === "local" && changes[THEME_KEY]) applyTheme(changes[THEME_KEY].newValue);
 });
 
-async function openFreshChats(_sides) {
-  $("status").textContent = "New Chat is LIMITED — AI Bridge does not currently have trusted provider New Chat authority.";
+async function openFreshChats(rawSides) {
+  const requested = [...new Set((Array.isArray(rawSides) ? rawSides : [])
+    .map(side => String(side || "").toUpperCase()))]
+    .filter(side => SIDES.includes(side));
+  if (!requested.length) {
+    $("status").textContent = "Choose at least one active AI role to open in a fresh chat.";
+    return;
+  }
+  if (latestState?.sessionActive) {
+    $("status").textContent = "Stop the current Bridge session before opening fresh AI chats manually.";
+    return;
+  }
+
+  const bindingError = validateActiveTabs();
+  if (bindingError) {
+    $("status").textContent = bindingError;
+    return;
+  }
+
+  const buttons = requested.map(side => $(`newChat${side}`)).filter(Boolean);
+  const bulkButton = $("newAllChats");
+  for (const button of buttons) button.disabled = true;
+  if (bulkButton) bulkButton.disabled = true;
+
+  const targetLabel = requested.length === 1
+    ? `AI ${requested[0]}`
+    : requested.map(side => `AI ${side}`).join(", ");
+  $("status").textContent = requested.length === 1
+    ? `Opening fresh chat for ${targetLabel}…`
+    : `Opening fresh chats for ${targetLabel}…`;
+
+  try {
+    const res = await chrome.runtime.sendMessage({
+      type: "AI_BRIDGE_NEW_CHATS",
+      sides: requested,
+      ...selectedBindings()
+    });
+    if (!res?.ok) throw new Error(res?.error || "Could not open fresh AI chat.");
+    await loadTabs({ preserve: true });
+    await refreshState();
+    $("status").textContent = requested.length === 1
+      ? `Fresh chat verified for ${targetLabel}.`
+      : `Fresh chats verified for ${targetLabel}.`;
+  } catch (err) {
+    $("status").textContent = `Fresh chat failed: ${err.message}`;
+  } finally {
+    if (latestState) updateControls(latestState);
+  }
 }
 
 async function clearHistory(kind) {

@@ -25,13 +25,16 @@ coord.begin({
   startedAt:1
 });
 
-coord.transition("B",PHASE.OLD_AUTHORITY_REVOKED,{oldAuthority:revoked},2);
-coord.transition("B",PHASE.OPENING_NEW_CHAT,{},3);
-coord.transition("B",PHASE.AWAITING_NEW_IDENTITY,{},4);
-coord.transition("B",PHASE.NEW_IDENTITY_VERIFIED,{candidateAuthority:freshSurface},5);
-coord.transition("B",PHASE.CONTINUITY_PENDING,{continuityDispatchId:"d-cont",continuityStatus:"PENDING"},6);
-coord.transition("B",PHASE.CONTINUITY_SENT,{continuityStatus:"ACCEPTED"},7);
-coord.transition("B",PHASE.AWAITING_CONTINUITY_RESPONSE,{},8);
+assert.throws(()=>coord.transition("B",PHASE.OLD_AUTHORITY_REVOKED,{oldAuthority:revoked},2),/Invalid rollover transition|final response/);
+coord.markFinalResponseCommitted("B",{dispatchId:"d-old",completedAt:2},2);
+coord.prepareContinuity("B",{schema:1,provider:"chatgpt",previousTitle:"Backend Debug Discovery",nextTitle:"Backend Debug Discovery - II",lastAssistantMessage:"Final committed answer",sourceMessageIndex:0},3);
+coord.transition("B",PHASE.OLD_AUTHORITY_REVOKED,{oldAuthority:revoked},4);
+coord.transition("B",PHASE.OPENING_NEW_CHAT,{},5);
+coord.transition("B",PHASE.AWAITING_NEW_IDENTITY,{},6);
+coord.transition("B",PHASE.NEW_IDENTITY_VERIFIED,{candidateAuthority:freshSurface},7);
+coord.transition("B",PHASE.CONTINUITY_PENDING,{continuityDispatchId:"d-cont",continuityStatus:"PENDING"},8);
+coord.transition("B",PHASE.CONTINUITY_SENT,{continuityStatus:"ACCEPTED"},9);
+coord.transition("B",PHASE.AWAITING_CONTINUITY_RESPONSE,{},10);
 
 assert.equal(coord.canAcceptContinuityResponse({side:"B",rolloverId:"r1",dispatchId:"wrong",observedIdentity:{...oldIdentity,threadKey:"new"}}).reason,"DISPATCH_MISMATCH");
 assert.equal(coord.canAcceptContinuityResponse({side:"B",rolloverId:"r1",dispatchId:"d-cont",observedIdentity:oldIdentity}).reason,"STALE_OLD_CONVERSATION");
@@ -40,7 +43,7 @@ assert.equal(
   coord.canAcceptContinuityResponse({side:"B",rolloverId:"r1",dispatchId:"d-cont",observedIdentity:confirmedConversation.identity}).reason,
   "CANDIDATE_CONFIRMATION_PENDING"
 );
-coord.promoteCandidateAuthority("B",confirmedConversation,9);
+coord.promoteCandidateAuthority("B",confirmedConversation,11);
 assert.equal(
   coord.canAcceptContinuityResponse({side:"B",rolloverId:"r1",dispatchId:"d-cont",observedIdentity:confirmedConversation.identity}).reason,
   "NEW_CONVERSATION_CONFIRMED"

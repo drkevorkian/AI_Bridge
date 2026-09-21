@@ -371,8 +371,14 @@ def apply_update(
     extension_root: Path,
     manifest_url: str = MANIFEST_URL,
     signature_url: str = SIGNATURE_URL,
+    expected_version: str | None = None,
+    expected_build: str | None = None,
 ) -> dict[str, object]:
     manifest = fetch_manifest(manifest_url, signature_url)
+    if expected_version is not None and manifest.version != str(expected_version):
+        raise UpdateError("Signed update manifest version changed after the checkpoint was prepared.")
+    if expected_build is not None and manifest.build != str(expected_build):
+        raise UpdateError("Signed update manifest build changed after the checkpoint was prepared.")
     return AtomicUpdater(extension_root).apply(manifest)
 
 

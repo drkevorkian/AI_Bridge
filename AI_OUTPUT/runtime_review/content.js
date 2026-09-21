@@ -84,6 +84,9 @@
   let registration = null;
   let lastHref = location.href;
   let awaitingDispatchId = null;
+  let awaitingResponseContext = null;
+  let awaitingResponseBaselineNode = null;
+  let awaitingResponseBaselineText = "";
   let lastResponseSignature = "";
   let lastObserved = "";
   let lastChangedAt = 0;
@@ -234,11 +237,38 @@
     const attempted=Object.freeze({ok:false,outcome:"ACTION_ATTEMPTED",reason:"ACTION_CONFIRMATION_NOT_PROVEN",commandId:command.commandId,authorityId:command.authorityId});
     consumeAuthority(command,attempted);
     captureProviderEventBaseline();
+    const responseBaseline=responseObservation();
+    const responseBaselineObservedAt=Date.now();
+    const responseBaselineIdentity=identityAfterDraft;
+    awaitingResponseBaselineNode=responseBaseline.node;
+    awaitingResponseBaselineText=responseBaseline.text;
     sendAgain.click();
     awaitingDispatchId=command.authorityId;
+    awaitingResponseContext=Object.freeze({
+      dispatchId:String(command.authorityId),
+      side:String(command.side||registration.side||"").toUpperCase(),
+      generationEpoch:Number(command.generationEpoch),
+      provider,
+      authorityRegistrationId:String(command.authorityRegistrationId||""),
+      rolloverId:command.rolloverId==null?null:String(command.rolloverId),
+      preSendAssistantText:String(responseBaseline.text||"").slice(0,200000),
+      preSendAssistantObservedAt:responseBaselineObservedAt,
+      preSendAssistantIdentity:responseBaselineIdentity
+    });
     const confirmation=await confirmSend(composer2,text);
     if(!confirmation.confirmed) return attempted;
-    return consumeAuthority(command,Object.freeze({ok:true,outcome:"ACTION_CONFIRMED",reason:null,commandId:command.commandId,authorityId:command.authorityId,evidence:confirmation.evidence}));
+    return consumeAuthority(command,Object.freeze({
+      ok:true,
+      outcome:"ACTION_CONFIRMED",
+      reason:null,
+      commandId:command.commandId,
+      authorityId:command.authorityId,
+      evidence:confirmation.evidence,
+      side:String(command.side||registration?.side||"").toUpperCase(),
+      generationEpoch:Number(command.generationEpoch),
+      conversationIdentity:identityAfterDraft,
+      rolloverId:command.rolloverId==null?null:String(command.rolloverId)
+    }));
   }
 
   async function handleAction(raw){
@@ -324,14 +354,16 @@
     return null;
   }
 
-  function responseText(){
+  function responseObservation(){
     const nodes=[];
     for(const selector of config.response||[]){
       try{ for(const node of document.querySelectorAll(selector)) if(visible(node)&&!nodes.includes(node)) nodes.push(node); }catch(_){}
     }
-    const node=nodes[nodes.length-1]; if(!node) return "";
-    return String(node.innerText||node.textContent||"").replace(/\u00a0/g," ").trim();
+    const node=nodes[nodes.length-1]||null;
+    const text=node?String(node.innerText||node.textContent||"").replace(/\u00a0/g," ").trim():"";
+    return {node,text};
   }
+  function responseText(){ return responseObservation().text; }
   function generationActive(){
     const stopSelectors=provider==="chatgpt"?["button[data-testid='stop-button']","button[aria-label='Stop generating']"]
       :provider==="grok"?["button[aria-label='Stop']"]
@@ -342,25 +374,59 @@
     monitorTimer=null;
     if(!awaitingDispatchId) return;
     if(await inspectProviderEvent()){scheduleMonitor(750);return;}
-    const text=responseText();
+    const observation=responseObservation();
+    const text=observation.text;
     if(!text) return;
-    if(text!==lastObserved){lastObserved=text;lastChangedAt=Date.now();scheduleMonitor(350);return;}
+    if(
+      observation.node===awaitingResponseBaselineNode &&
+      text===awaitingResponseBaselineText
+    ){
+      scheduleMonitor(350);
+      return;
+    }
+    if(text!==lastObserved || observation.node!==awaitingResponseBaselineNode){
+      lastObserved=text;
+      lastChangedAt=Date.now();
+      // Once a different response node/text exists, the old-response baseline
+      // has served its purpose. Do not suppress a legitimate identical reply
+      // rendered as a new assistant message.
+      awaitingResponseBaselineNode=null;
+      awaitingResponseBaselineText="";
+      scheduleMonitor(350);
+      return;
+    }
     if(generationActive() || Date.now()-lastChangedAt<1600){scheduleMonitor(350);return;}
     const signature=awaitingDispatchId+"::"+text;
     if(signature===lastResponseSignature) return;
     lastResponseSignature=signature;
     const dispatchId=awaitingDispatchId;
+    const responseContext=awaitingResponseContext && awaitingResponseContext.dispatchId===dispatchId
+      ? awaitingResponseContext
+      : (registration ? Object.freeze({
+          dispatchId,
+          side:registration.side,
+          generationEpoch:registration.generationEpoch,
+          provider:registration.provider,
+          authorityRegistrationId:registration.authorityRegistrationId,
+          rolloverId:null
+        }) : null);
     awaitingDispatchId=null;
+    awaitingResponseContext=null;
+    awaitingResponseBaselineNode=null;
+    awaitingResponseBaselineText="";
     try{
-      if(!registration) return;
+      if(!responseContext) return;
+      const liveIdentity=routeIdentity();
+      if(liveIdentity.provider!==responseContext.provider || liveIdentity.writable!==true) return;
       await chrome.runtime.sendMessage({
         type:"AI_BRIDGE_RESPONSE",
         text,
         completedAt:Date.now(),
         dispatchId,
-        generationEpoch:registration.generationEpoch,
-        conversationIdentity:registration.identity,
-        side:registration.side,
+        generationEpoch:responseContext.generationEpoch,
+        conversationIdentity:liveIdentity,
+        side:responseContext.side,
+        rolloverId:responseContext.rolloverId,
         artifacts:[]
       });
     }catch(_){}
@@ -384,9 +450,29 @@
       if(/usage limit|rate limit|try again in|upload limit|network error|something went wrong/i.test(text)) continue;
       if(!/maximum length for this conversation|you(?:'|’)ve reached the maximum length for this conversation/i.test(text)) continue;
       const signature=text.slice(0,500);
-      if(signature===lastLimitSignature) return;
-      lastLimitSignature=signature;
-      chrome.runtime.sendMessage({type:"AI_BRIDGE_THREAD_LIMIT",provider,text:signature}).catch(()=>{});
+      const limitSignatureKey=String(awaitingDispatchId||"none")+"::"+signature;
+      if(limitSignatureKey===lastLimitSignature) return;
+      if(!registration) return;
+      const liveIdentity=routeIdentity();
+      if(!sameIdentity(liveIdentity,registration.identity)) return;
+      const composer=resolveTrusted(config.composer);
+      lastLimitSignature=limitSignatureKey;
+      chrome.runtime.sendMessage({
+        type:"AI_BRIDGE_THREAD_LIMIT",
+        provider,
+        text:signature,
+        regions:[{kind:"provider-notice",text:signature,visible:true}],
+        composer:{present:Boolean(composer),disabled:Boolean(composer&&!enabled(composer))},
+        dispatchId:awaitingDispatchId,
+        side:registration.side,
+        generationEpoch:registration.generationEpoch,
+        authorityRegistrationId:registration.authorityRegistrationId,
+        conversationIdentity:liveIdentity,
+        observedAt:Date.now(),
+        preSendAssistantText:String(awaitingResponseContext?.preSendAssistantText||"").slice(0,200000),
+        preSendAssistantObservedAt:Number(awaitingResponseContext?.preSendAssistantObservedAt)||null,
+        preSendAssistantIdentity:awaitingResponseContext?.preSendAssistantIdentity||null
+      }).catch(()=>{});
       return;
     }
   }
@@ -403,11 +489,14 @@
     if(location.href!==lastHref){
       lastHref=location.href;
       registration=null;
-      awaitingDispatchId=null;
+      if(!awaitingResponseContext) awaitingDispatchId=null;
+      lastLimitSignature="";
       providerEventBaseline=new Set();
       providerEventSignatures.clear();
-      byCommand.clear();
-      byAuthority.clear();
+      // Keep the bounded UUID-keyed action cache across same-document SPA route
+      // changes. Registration is still revoked above, so cached results cannot
+      // authorize a new action; they only prove/deduplicate an action that was
+      // already executed before a worker restart.
       chrome.runtime.sendMessage({type:"AI_BRIDGE_DOCUMENT_ROUTE_CHANGED"}).catch(()=>{});
     }
     scheduleMonitor();
@@ -464,9 +553,9 @@
           action,
           authorityId,
           result:cached?{...cached}:null,
-          side:registration?.side||null,
-          generationEpoch:registration?.generationEpoch??null,
-          conversationIdentity:routeIdentity()
+          side:cached?.side||registration?.side||null,
+          generationEpoch:cached?.generationEpoch??registration?.generationEpoch??null,
+          conversationIdentity:cached?.conversationIdentity||routeIdentity()
         });
       }catch(error){
         sendResponse({ok:false,error:error.message||String(error)});
@@ -508,6 +597,9 @@
     try{ chrome.runtime.onMessage.removeListener(onRuntimeMessage); }catch(_){}
     registration=null;
     awaitingDispatchId=null;
+    awaitingResponseContext=null;
+    awaitingResponseBaselineNode=null;
+    awaitingResponseBaselineText="";
     providerEventBaseline.clear();
     providerEventSignatures.clear();
     byCommand.clear();

@@ -2,7 +2,7 @@
   "manifest_version": 3,
   "name": "AI Bridge Review",
   "version": "1.19.1",
-  "description": "AI Bridge reviewed playground build 1.19.1.05-AI-B with crash-recoverable live-update restore.",
+  "description": "AI Bridge reviewed playground build 1.19.1.26-AI-B with explicit native-updater release-verification readiness reporting.",
   "permissions": [
     "tabs",
     "storage",
@@ -12,7 +12,8 @@
     "scripting",
     "identity",
     "alarms",
-    "power"
+    "power",
+    "nativeMessaging"
   ],
   "host_permissions": [
     "https://chatgpt.com/*",
@@ -68,5 +69,5 @@
   "content_security_policy": {
     "extension_pages": "script-src 'self'; object-src 'none'; base-uri 'none'; frame-ancestors 'none'"
   },
-  "version_name": "1.19.1.05-AI-B"
+  "version_name": "1.19.1.26-AI-B"
 }

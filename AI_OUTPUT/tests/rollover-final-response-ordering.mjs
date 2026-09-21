@@ -1,0 +1,26 @@
+import assert from "node:assert/strict";
+import {createRequire} from "node:module";
+import fs from "node:fs";
+const require=createRequire(import.meta.url);
+const {PHASE,RolloverCoordinator}=require("../thread_rollover/rollover-coordinator.js");
+const {ThreadRolloverOrchestrator}=require("../thread_rollover/thread-rollover-orchestrator.js");
+const oldAuthority={side:"A",tabId:7,generationEpoch:3,identity:{provider:"chatgpt",kind:"conversation",routeClass:"conversation",threadKey:"old",writable:true,provisional:false},state:"CONFIRMED"};
+const coord=new RolloverCoordinator();
+coord.begin({rolloverId:"r",side:"A",provider:"chatgpt",triggeringDispatchId:"d",oldAuthority,hardLimitEvidence:{state:"HARD_THREAD_LIMIT",automaticRollover:true},startedAt:1});
+assert.equal(coord.get("A").phase,PHASE.LIMIT_DETECTED);
+assert.throws(()=>coord.transition("A",PHASE.OLD_AUTHORITY_REVOKED,{oldAuthority:{...oldAuthority,state:"REVOKED"}},2));
+coord.markFinalResponseCommitted("A",{dispatchId:"d",completedAt:2},2);
+assert.equal(coord.get("A").phase,PHASE.FINAL_RESPONSE_COMMITTED);
+assert.throws(()=>coord.transition("A",PHASE.OLD_AUTHORITY_REVOKED,{oldAuthority:{...oldAuthority,state:"REVOKED"}},3));
+const payload={schema:1,provider:"chatgpt",previousTitle:"Backend Debug Discovery",nextTitle:"Backend Debug Discovery - II",lastAssistantMessage:"final answer",sourceMessageIndex:0};
+coord.prepareContinuity("A",payload,3);
+assert.equal(coord.get("A").phase,PHASE.CONTINUITY_PREPARED);
+coord.transition("A",PHASE.OLD_AUTHORITY_REVOKED,{oldAuthority:{...oldAuthority,state:"REVOKED"}},4);
+assert.equal(coord.get("A").phase,PHASE.OLD_AUTHORITY_REVOKED);
+
+const runtime=fs.readFileSync(new URL("../runtime_review/runtime-core.js",import.meta.url),"utf8");
+assert.ok(runtime.includes('define("thread_rollover/continuity-payload.js"'));
+assert.ok(runtime.includes('define("thread_rollover/thread-rollover-orchestrator.js"'));
+assert.ok(runtime.includes('continuity:load("thread_rollover/continuity-payload.js")'));
+assert.ok(runtime.includes('rolloverOrchestrator:load("thread_rollover/thread-rollover-orchestrator.js")'));
+console.log("rollover-final-response-ordering: PASS");

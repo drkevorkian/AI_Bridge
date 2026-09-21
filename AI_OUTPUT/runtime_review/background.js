@@ -1,4 +1,4 @@
-importScripts("runtime-core.js","update-checkpoint.js");
+importScripts("runtime-core.js","provider-limit-signatures.js","update-checkpoint.js");
 const ALL_SIDES = ["A", "B", "C", "D", "E"];
 const DEFAULT_AGENT_COUNT = 3;
 const MIN_AGENT_COUNT = 1;
@@ -115,13 +115,15 @@ let stateReady = loadState();
  */
 const REVIEW_RUNTIME_VERSION = CONTENT_VERSION;
 const { DispatchLedger, DISPATCH_STATUS } = AIBridgeRuntimeCore.ledger;
-const { RolloverCoordinator } = AIBridgeRuntimeCore.rollover;
+const { RolloverCoordinator, PHASE: ROLLOVER_PHASE } = AIBridgeRuntimeCore.rollover;
+const { ThreadRolloverOrchestrator } = AIBridgeRuntimeCore.rolloverOrchestrator;
 const { validateIncomingResponse, DISPOSITION } = AIBridgeRuntimeCore.responseGate;
 const { ParkedResponseStore, RECORD_STATE } = AIBridgeRuntimeCore.parked;
-const { createConversationAuthority, AUTHORITY_STATES } = AIBridgeRuntimeCore.authority;
+const { createConversationAuthority, revokeAuthority, AUTHORITY_STATES } = AIBridgeRuntimeCore.authority;
 const { UPDATE_PHASE, classifyBoundary, createCheckpoint, transitionCheckpoint, reviseCheckpoint, blocksDispatch, buildMatches } = AIBridgeUpdateCheckpoint;
 const REVIEW_DISPATCH_KEY = "aiBridgeRuntimeDispatchLedger";
 const REVIEW_AUTH_EPOCH_KEY = "aiBridgeRuntimeAuthorityEpochs";
+const REVIEW_ROLLOVER_KEY = "aiBridgeRuntimeThreadRollover";
 const PROVIDER_EVENT_POLICY = Object.freeze({
   MESSAGE_DELIVERY_TIMEOUT: Object.freeze({ category:"DELIVERY", severity:"RECOVERABLE" }),
   CONNECTION_INTERRUPTED: Object.freeze({ category:"CONNECTION", severity:"RECOVERABLE" }),
@@ -134,6 +136,7 @@ const PROVIDER_EVENT_POLICY = Object.freeze({
 });
 let reviewLedger = new DispatchLedger();
 let reviewRollover = new RolloverCoordinator();
+let reviewRolloverContexts = Object.create(null);
 let reviewAuthorityEpochs = {};
 let reviewRecoveryPauseReason = "";
 const reviewChromeParkedAdapter = Object.freeze({
@@ -144,7 +147,92 @@ let reviewParkedStore = new ParkedResponseStore({ store: reviewChromeParkedAdapt
 let reviewRuntimeReady = reviewInitializeDurableRuntime();
 const reviewAuthorityBySide = new Map();
 const reviewPendingRegistrations = new Map();
+let reviewRolloverQueue = Promise.resolve();
 
+function reviewQueueRollover(task) {
+  const next = reviewRolloverQueue.catch(() => undefined).then(task);
+  reviewRolloverQueue = next.catch(() => undefined);
+  return next;
+}
+
+
+function reviewClassifyRolloverIdentityTransition(previousIdentity, currentIdentity) {
+  let previous, current;
+  try {
+    previous = reviewSanitizeIdentity(previousIdentity);
+    current = reviewSanitizeIdentity(currentIdentity);
+  } catch (_) {
+    return "INVALID_IDENTITY_TRANSITION";
+  }
+  if (previous.provider !== current.provider) return "PROVIDER_MISMATCH";
+  if (reviewSameIdentity(previous, current)) return "SAME_IDENTITY";
+  if (current.kind === "surface" && current.provisional === true && current.writable === true) {
+    return "NEW_CHAT_SURFACE";
+  }
+  if (
+    current.kind === "conversation" &&
+    current.provisional === false &&
+    current.writable === true &&
+    current.threadKey
+  ) {
+    return "NEW_CONVERSATION_CONFIRMED";
+  }
+  return "INVALID_IDENTITY_TRANSITION";
+}
+
+function reviewCreateRolloverOrchestrator() {
+  return new ThreadRolloverOrchestrator({
+    coordinator: reviewRollover,
+    classifyLimit: AIBridgeProviderLimitSignatures.classifyThreadLimit,
+    classifyIdentityTransition: reviewClassifyRolloverIdentityTransition
+  });
+}
+
+let reviewRolloverOrchestrator = reviewCreateRolloverOrchestrator();
+
+function reviewCloneRolloverContexts(raw) {
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) return Object.create(null);
+  const out = Object.create(null);
+  for (const side of ALL_SIDES) {
+    const value = raw[side];
+    if (!value || typeof value !== "object" || Array.isArray(value)) continue;
+    out[side] = JSON.parse(JSON.stringify(value));
+  }
+  return out;
+}
+
+function reviewActiveRolloverSummaries() {
+  return reviewRollover.snapshot()
+    .filter(tx => !["COMPLETE", "FAILED"].includes(tx.phase))
+    .sort((a, b) => Number(a.startedAt || 0) - Number(b.startedAt || 0))
+    .map(tx => Object.freeze({
+      active: true,
+      rolloverId: tx.rolloverId,
+      side: tx.side,
+      provider: tx.provider,
+      phase: tx.phase,
+      previousTitle: tx.continuityPayload?.previousTitle || null,
+      nextTitle: tx.continuityPayload?.nextTitle || null,
+      startedAt: tx.startedAt,
+      updatedAt: tx.updatedAt
+    }));
+}
+
+function reviewActiveRolloverSummary() {
+  const summaries = reviewActiveRolloverSummaries();
+  if (!summaries.length) return null;
+  return Object.freeze({ ...summaries[0], count: summaries.length });
+}
+
+async function reviewPersistRollover() {
+  const payload = {
+    schema: 1,
+    transactions: reviewRollover.snapshot(),
+    contexts: reviewCloneRolloverContexts(reviewRolloverContexts)
+  };
+  await chrome.storage.local.set({ [REVIEW_ROLLOVER_KEY]: payload });
+  return payload;
+}
 
 async function reviewPersistLedger() {
   await chrome.storage.local.set({ [REVIEW_DISPATCH_KEY]: { records: reviewLedger.snapshot() } });
@@ -158,10 +246,13 @@ async function reviewResetSessionDurability() {
   // so stale unresolved dispatches/parked responses must not cross this boundary.
   await chrome.storage.local.set({
     [REVIEW_DISPATCH_KEY]: { records: [] },
+    [REVIEW_ROLLOVER_KEY]: { schema: 1, transactions: [], contexts: {} },
     aiBridgeRuntimeParkedResponses: { records: [] }
   });
   reviewLedger = new DispatchLedger();
   reviewRollover = new RolloverCoordinator();
+  reviewRolloverContexts = Object.create(null);
+  reviewRolloverOrchestrator = reviewCreateRolloverOrchestrator();
   reviewParkedStore = new ParkedResponseStore({
     store: reviewChromeParkedAdapter,
     key: "aiBridgeRuntimeParkedResponses"
@@ -170,12 +261,25 @@ async function reviewResetSessionDurability() {
   reviewRecoveryPauseReason = "";
 }
 async function reviewInitializeDurableRuntime() {
-  const stored = await chrome.storage.local.get([REVIEW_DISPATCH_KEY, REVIEW_AUTH_EPOCH_KEY]);
+  const stored = await chrome.storage.local.get([REVIEW_DISPATCH_KEY, REVIEW_AUTH_EPOCH_KEY, REVIEW_ROLLOVER_KEY]);
   const records = Array.isArray(stored?.[REVIEW_DISPATCH_KEY]?.records) ? stored[REVIEW_DISPATCH_KEY].records : [];
   reviewLedger = new DispatchLedger(records);
   reviewAuthorityEpochs = stored?.[REVIEW_AUTH_EPOCH_KEY] && typeof stored[REVIEW_AUTH_EPOCH_KEY] === "object"
     ? stored[REVIEW_AUTH_EPOCH_KEY] : {};
-  reviewRollover = new RolloverCoordinator();
+
+  const persistedRollover = stored?.[REVIEW_ROLLOVER_KEY];
+  try {
+    const transactions = Array.isArray(persistedRollover?.transactions) ? persistedRollover.transactions : [];
+    reviewRollover = new RolloverCoordinator(transactions);
+    reviewRolloverContexts = reviewCloneRolloverContexts(persistedRollover?.contexts);
+  } catch (error) {
+    reviewRollover = new RolloverCoordinator();
+    reviewRolloverContexts = Object.create(null);
+    reviewRecoveryPauseReason =
+      "Persisted thread-rollover state is malformed. Automatic rollover is disabled until the session is safely restarted: " +
+      (error?.message || error);
+  }
+  reviewRolloverOrchestrator = reviewCreateRolloverOrchestrator();
   reviewParkedStore = new ParkedResponseStore({ store: reviewChromeParkedAdapter, key: "aiBridgeRuntimeParkedResponses" });
   await reviewParkedStore.init();
 
@@ -394,6 +498,7 @@ function reviewHasNonterminalDispatch() {
   return reviewLedger.snapshot().some(record => active.has(record.status));
 }
 function reviewCommittedWithoutContinuationIsInconsistent() {
+  if (reviewActiveRolloverSummary()) return false;
   if (!state.sessionActive || !state.running || state.awaitingHuman || state.nextTurnPending) return false;
   if (hasReachedTurnLimit()) return false;
   if (reviewHasNonterminalDispatch()) return false;
@@ -416,7 +521,7 @@ function reviewUpdateBoundary(){
     ledgerRecords:reviewLedger.snapshot(),
     parkedRecords:reviewParkedStore.snapshot().records,
     providerRecovery:state.providerRecovery,
-    threadRollover:state.threadRollover,
+    threadRollover:reviewActiveRolloverSummary(),
     nextTurnPending:state.nextTurnPending,
     sessionActive:state.sessionActive,
     running:state.running
@@ -436,6 +541,77 @@ function reviewTrustedExtensionPage(sender){
   if(sender?.frameId!=null&&Number(sender.frameId)!==0)return false;
   if(sender?.documentLifecycle!=null&&String(sender.documentLifecycle)!=="active")return false;
   return true;
+}
+const REVIEW_NATIVE_UPDATER_HOST="com.aibridge.updater";
+async function reviewSendNativeUpdater(command,payload={}){
+  const op=String(command||"").toUpperCase();
+  if(!["PING","CHECK","APPLY"].includes(op))return {ok:false,reason:"NATIVE_UPDATE_COMMAND_REJECTED"};
+  const message=op==="APPLY"
+    ? {
+        command:op,
+        checkpointId:String(payload.checkpointId||""),
+        expectedVersion:String(payload.expectedVersion||""),
+        expectedBuild:String(payload.expectedBuild||"")
+      }
+    : {command:op};
+  if(op==="APPLY"&&!message.checkpointId)return {ok:false,reason:"NATIVE_UPDATE_CHECKPOINT_REQUIRED"};
+  if(op==="APPLY"&&(!message.expectedVersion||!message.expectedBuild))return {ok:false,reason:"NATIVE_UPDATE_TARGET_REQUIRED"};
+  try{
+    const result=await chrome.runtime.sendNativeMessage(REVIEW_NATIVE_UPDATER_HOST,message);
+    if(!result||typeof result!=="object")return {ok:false,reason:"NATIVE_UPDATE_RESPONSE_INVALID"};
+    return result;
+  }catch(error){
+    return {ok:false,reason:"NATIVE_UPDATE_HOST_UNAVAILABLE",error:error?.message||String(error)};
+  }
+}
+async function reviewNativeApplyCheckpoint(){
+  const cp=state.updateCheckpoint;
+  if(!cp||cp.phase!==UPDATE_PHASE.CHECKPOINTED)return {ok:false,reason:"UPDATE_NOT_CHECKPOINTED"};
+  const result=await reviewSendNativeUpdater("APPLY",{
+    checkpointId:cp.checkpointId,
+    expectedVersion:cp.targetVersion,
+    expectedBuild:cp.targetBuild
+  });
+  if(result?.ok!==true)return result;
+  if(String(result.checkpointId||"")!==String(cp.checkpointId))return {ok:false,reason:"NATIVE_UPDATE_CHECKPOINT_MISMATCH"};
+  if(String(result.version||"")!==String(cp.targetVersion)||String(result.build||"")!==String(cp.targetBuild)){
+    return {ok:false,reason:"NATIVE_UPDATE_TARGET_MISMATCH"};
+  }
+  return reviewMarkUpdateApplied({
+    checkpointId:cp.checkpointId,
+    version:result.version,
+    build:result.build
+  });
+}
+const REVIEW_UI_CONTROL_TYPES=new Set([
+  "AI_BRIDGE_POWER_SET",
+  "AI_BRIDGE_AUTO_UPDATE_SET",
+  "AI_BRIDGE_SETTINGS_OPEN",
+  "AI_BRIDGE_PROVIDER_HEALTH",
+  "AI_BRIDGE_GET_STATE",
+  "AI_BRIDGE_OPEN_DASHBOARD",
+  "AI_BRIDGE_DOWNLOAD_ARTIFACT",
+  "AI_BRIDGE_CLEAR_ARTIFACTS",
+  "AI_BRIDGE_CLEAR_HISTORY",
+  "AI_BRIDGE_NEW_CHATS",
+  "AI_BRIDGE_START",
+  "AI_BRIDGE_UPDATE_RULES",
+  "AI_BRIDGE_UPDATE_NATIVE_PING",
+  "AI_BRIDGE_UPDATE_NATIVE_CHECK",
+  "AI_BRIDGE_UPDATE_NATIVE_APPLY",
+  "AI_BRIDGE_MANUAL_RELAY",
+  "AI_BRIDGE_PAUSE",
+  "AI_BRIDGE_RESUME",
+  "AI_BRIDGE_STOP",
+  "AI_BRIDGE_RESEND",
+  "AI_BRIDGE_HUMAN_REPLY",
+  "AI_BRIDGE_HUMAN_SUPPRESS",
+  "AI_BRIDGE_HUMAN_REOPEN",
+  "AI_BRIDGE_INTERJECT"
+]);
+function reviewUiControlSenderAllowed(msg,sender){
+  const type=String(msg?.type||"");
+  return !REVIEW_UI_CONTROL_TYPES.has(type)||reviewTrustedExtensionPage(sender);
 }
 async function reviewCaptureUpdateBindings(){
   if(!state.sessionActive)return [];
@@ -941,7 +1117,48 @@ async function reviewProcessIncomingEnvelope(envelope, { fromParked = false } = 
       );
     }
 
+    if (dispatch.purpose === "CONTINUITY") {
+      const tx = reviewRollover.get(envelope.side);
+      if (!tx) return reviewPauseForAmbiguity("Continuity response arrived without an active rollover transaction.");
+      const acceptance = reviewRollover.canAcceptContinuityResponse({
+        side:envelope.side,
+        rolloverId:envelope.rolloverId,
+        dispatchId:envelope.dispatchId,
+        observedIdentity:envelope.conversationIdentity
+      });
+      if (!acceptance.ok) {
+        return reviewPauseForAmbiguity("Continuity response could not complete rollover: " + acceptance.reason);
+      }
+
+      // COMPLETE is part of the durable response-commit barrier. Persist it
+      // before deleting the parked envelope: if storage fails here, the claimed
+      // response remains recoverable and startup reconciliation can retry.
+      const completedRollover = reviewRollover.transition(
+        envelope.side,
+        ROLLOVER_PHASE.COMPLETE,
+        {},
+        Date.now()
+      );
+      await reviewPersistRollover();
+      appendLog({
+        time:Date.now(),
+        type:"thread-rollover",
+        side:envelope.side,
+        rolloverId:completedRollover.rolloverId,
+        phase:ROLLOVER_PHASE.COMPLETE,
+        text:"Automatic thread rollover completed; normal relay resumed."
+      });
+    }
+
     await reviewParkedStore.finalize(envelope.dispatchId);
+
+    if (dispatch.purpose === "CONTINUITY") {
+      // The durable transaction is already COMPLETE. Context cleanup is only
+      // housekeeping; a failed cleanup write must never undo a proven response.
+      delete reviewRolloverContexts[envelope.side];
+      try { await reviewPersistRollover(); }
+      catch (error) { console.warn("AI Bridge rollover context cleanup deferred", error); }
+    }
 
     if(state.updateCheckpoint?.phase===UPDATE_PHASE.DRAINING){
       const ready=await reviewCheckpointAtSafeBoundary();
@@ -1044,7 +1261,20 @@ async function reviewRegisterSideAuthority(side) {
     && Number(prior.tabId) === tabId
     && String(prior.provider || "") === provider
     && reviewSameIdentity(prior.identity, expectedIdentity);
-  const generationEpoch = equivalent
+  const activeRollover = reviewRollover.get(side);
+  const rolloverSurfacePromotion = Boolean(
+    activeRollover &&
+    !["COMPLETE", "FAILED"].includes(activeRollover.phase) &&
+    prior &&
+    Number(prior.tabId) === tabId &&
+    String(prior.provider || "") === provider &&
+    prior.identity?.kind === "surface" &&
+    expectedIdentity.kind === "conversation" &&
+    expectedIdentity.provider === prior.identity.provider &&
+    expectedIdentity.writable === true &&
+    Number(prior.generationEpoch) === Number(activeRollover.oldAuthority?.generationEpoch || -1) + 1
+  );
+  const generationEpoch = (equivalent || rolloverSurfacePromotion)
     ? Number(prior.generationEpoch)
     : Number(prior?.generationEpoch || 0) + 1;
   const nonce = crypto.randomUUID();
@@ -1086,6 +1316,64 @@ async function reviewRegisterSideAuthority(side) {
   return registration;
 }
 
+async function reviewApplyRegisteredRolloverAuthority(record) {
+  const tx = reviewRollover.get(record?.side);
+  if (!tx || ["COMPLETE", "FAILED"].includes(tx.phase)) return false;
+  if (
+    Number(record.tabId) !== Number(tx.oldAuthority?.tabId) ||
+    String(record.provider) !== String(tx.provider)
+  ) return false;
+
+  const stateName = record.identity?.kind === "conversation"
+    ? AUTHORITY_STATES.CONFIRMED
+    : AUTHORITY_STATES.PROVISIONAL;
+  let authority;
+  try {
+    authority = createConversationAuthority({
+      side: record.side,
+      tabId: record.tabId,
+      generationEpoch: record.generationEpoch,
+      identity: record.identity,
+      state: stateName
+    });
+  } catch (_) {
+    return false;
+  }
+
+  if (tx.phase === "AWAITING_NEW_IDENTITY") {
+    const applied = reviewRolloverOrchestrator.applyIdentityObservation({
+      side: record.side,
+      previousIdentity: tx.oldAuthority.identity,
+      currentIdentity: record.identity,
+      candidateAuthority: authority,
+      now: Date.now()
+    });
+    if (applied?.applied) {
+      await reviewPersistRollover();
+      return true;
+    }
+    return false;
+  }
+
+  if (
+    tx.candidateAuthority?.state === AUTHORITY_STATES.PROVISIONAL &&
+    record.identity?.kind === "conversation"
+  ) {
+    const applied = reviewRolloverOrchestrator.applyIdentityObservation({
+      side: record.side,
+      previousIdentity: tx.candidateAuthority.identity,
+      currentIdentity: record.identity,
+      candidateAuthority: authority,
+      now: Date.now()
+    });
+    if (applied?.applied) {
+      await reviewPersistRollover();
+      return true;
+    }
+  }
+  return false;
+}
+
 function reviewAcceptDocumentRegistration(msg, sender) {
   const side = String(msg?.side || "").toUpperCase();
   const pending = reviewPendingRegistrations.get(side);
@@ -1124,9 +1412,11 @@ function reviewAcceptDocumentRegistration(msg, sender) {
     generationEpoch: record.generationEpoch,
     identity: record.identity
   };
-  reviewPersistAuthorityEpochs()
+  Promise.resolve()
+    .then(() => reviewApplyRegisteredRolloverAuthority(record))
+    .then(() => reviewPersistAuthorityEpochs())
     .then(() => reviewDrainParkedResponses(side))
-    .catch(error => console.error("AI Bridge review authority persistence/drain failed", error));
+    .catch(error => console.error("AI Bridge review authority persistence/rollover/drain failed", error));
   pending.resolve(record);
   return record;
 }
@@ -1784,8 +2074,11 @@ function appendLog(entry) {
 }
 
 function clientStateSnapshot({ includeSources = false, afterSeq = null, omitTranscript = false } = {}) {
+  const activeRollovers = reviewActiveRolloverSummaries();
   const snapshot = {
     ...state,
+    threadRollover: activeRollovers.length ? { ...activeRollovers[0], count: activeRollovers.length } : null,
+    threadRollovers: activeRollovers.map(item => ({ ...item })),
     history: {
       jobs: history.jobs.map(item => ({ ...item })),
       commands: history.commands.map(item => ({ ...item }))
@@ -1976,6 +2269,23 @@ async function loadState() {
   await validateSavedBindings();
   await reviewRuntimeReady;
   const updateRestore=await reviewRestoreUpdateCheckpoint();
+
+  const startupRollovers = reviewActiveRolloverSummaries();
+  if (startupRollovers.length && state.sessionActive) {
+    if (blocksDispatch(state.updateCheckpoint)) {
+      reviewRecoveryPauseReason = "Active thread rollover cannot resume while the live-update checkpoint blocks provider actions.";
+    } else {
+      for (const startupRollover of startupRollovers) {
+        try {
+          await reviewQueueRollover(() => reviewResumeThreadRollover(startupRollover.side));
+        } catch (error) {
+          await reviewFailThreadRollover(startupRollover.side, error);
+          reviewRecoveryPauseReason = state.pauseReason;
+          break;
+        }
+      }
+    }
+  }
 
   const startupRestartAmbiguities = reviewRestartAmbiguities();
   if (startupRestartAmbiguities.length && !state.nextTurnPending) {
@@ -2945,29 +3255,759 @@ function freshChatUrlFor(rawUrl) {
   try { url = new URL(String(rawUrl || "")); }
   catch (_) { throw new Error("The selected tab does not have a supported AI URL."); }
 
-  const host = url.hostname;
-  if (host === "chatgpt.com" || host === "chat.openai.com") return "https://chatgpt.com/";
-  if (host === "grok.com") return "https://grok.com/";
-  if (host === "claude.ai") return "https://claude.ai/new";
-  if (host === "gemini.google.com") return "https://gemini.google.com/app";
-  if (host === "copilot.microsoft.com") return "https://copilot.microsoft.com/";
-  throw new Error(`Unsupported AI tab: ${host || rawUrl}`);
+  const provider = reviewProviderFromUrl(url.href);
+  if (provider) return reviewCanonicalRolloverFreshUrl(provider);
+  throw new Error(`Unsupported AI tab: ${url.hostname || rawUrl}`);
 }
 
-async function waitForTabReady(tabId, timeoutMs = 20000) {
+function reviewCanonicalRolloverFreshUrl(provider) {
+  switch (String(provider || "").toLowerCase()) {
+    case "chatgpt": return "https://chatgpt.com/";
+    case "grok": return "https://grok.com/";
+    case "claude": return "https://claude.ai/new";
+    case "gemini": return "https://gemini.google.com/app";
+    case "copilot": return "https://copilot.microsoft.com/";
+    default: throw new Error("ROLLOVER_PROVIDER_FRESH_URL_UNSUPPORTED");
+  }
+}
+
+async function waitForTabReady(tabId, timeoutMs = 20000, expectedUrl = null) {
   const id = Number(tabId);
+  const expected = expectedUrl == null ? null : String(expectedUrl);
   const started = Date.now();
   while (Date.now() - started < timeoutMs) {
     try {
       const tab = await chrome.tabs.get(id);
-      if (tab?.status === "complete" && tab?.url) {
+      const committedUrl = String(tab?.url || "");
+      const pendingUrl = String(tab?.pendingUrl || "");
+      const committedReady = tab?.status === "complete" && Boolean(committedUrl);
+      const expectedReady = !expected || committedUrl === expected;
+      const redirectSettled = !expected || !pendingUrl;
+      if (committedReady && expectedReady && redirectSettled) {
         await ensureTabListener(id);
-        return tab;
+        const verified = await chrome.tabs.get(id);
+        const verifiedUrl = String(verified?.url || "");
+        const verifiedPendingUrl = String(verified?.pendingUrl || "");
+        if (
+          verified?.status === "complete" &&
+          (!expected || verifiedUrl === expected) &&
+          (!expected || !verifiedPendingUrl)
+        ) return verified;
       }
     } catch (_) {}
     await new Promise(resolve => setTimeout(resolve, 250));
   }
-  throw new Error("Timed out waiting for the AI page to open its new conversation.");
+  throw new Error(expected
+    ? "Timed out waiting for the AI page to commit the canonical fresh-chat destination."
+    : "Timed out waiting for the AI page to open its new conversation.");
+}
+
+function reviewRolloverTitle(rawTitle, side) {
+  let title = String(rawTitle || "").replace(/\s+[-|·–—]\s*(?:ChatGPT|OpenAI)\s*$/i, "").trim();
+  if (!title || /^(?:ChatGPT|New chat)$/i.test(title)) title = "AI " + side + " Continuation";
+  return title.replace(/\s+/g, " ").slice(0, 180);
+}
+
+function reviewLatestCommittedDispatchBefore(side, beforeCreatedAt) {
+  const cutoff = Number(beforeCreatedAt);
+  return reviewLedger.snapshot()
+    .filter(record =>
+      record.side === side &&
+      record.status === DISPATCH_STATUS.RESPONSE_COMMITTED &&
+      Number(record.createdAt) < cutoff
+    )
+    .sort((a, b) => Number(b.completedAt || b.createdAt) - Number(a.completedAt || a.createdAt))[0] || null;
+}
+
+function reviewLastAssistantResponseForSide(side) {
+  const entry = [...state.transcript].reverse().find(item =>
+    item?.type === "response" &&
+    item?.side === side &&
+    String(item?.text || "").trim()
+  );
+  return entry ? String(entry.text).trim() : "";
+}
+
+function reviewBuildContinuityText(tx, context) {
+  const payload = tx?.continuityPayload;
+  if (!payload || !context?.pendingPrompt) throw new Error("ROLLOVER_CONTINUITY_CONTEXT_MISSING");
+  const text = [
+    "AI BRIDGE AUTOMATIC THREAD CONTINUATION",
+    "",
+    "This is the same ongoing AI Bridge role and task, continued automatically because the previous provider conversation reached its maximum length.",
+    "Previous conversation title: " + payload.previousTitle,
+    "Requested continuation title: " + payload.nextTitle,
+    "",
+    "LAST COMPLETED ASSISTANT RESPONSE FROM THE PREVIOUS THREAD:",
+    payload.lastAssistantMessage,
+    "",
+    "UNANSWERED AI BRIDGE MESSAGE THAT HIT THE OLD THREAD LIMIT:",
+    context.pendingPrompt,
+    "",
+    "Continue seamlessly from the prior thread. Answer the unanswered AI Bridge message now. Do not restart the project, do not summarize merely because this is a new provider thread, and preserve your assigned role and the shared team context in that message."
+  ].join("\n");
+  if (text.length > 400000) throw new Error("ROLLOVER_CONTINUITY_PROMPT_TOO_LARGE");
+  return text;
+}
+
+async function reviewVerifyDurableRolloverContext(tx, context, { requireContinuity = false } = {}) {
+  if (!tx || !context || String(context.rolloverId || "") !== String(tx.rolloverId || "")) {
+    throw new Error("ROLLOVER_CONTEXT_MISSING");
+  }
+
+  const trigger = reviewLedger.get(tx.triggeringDispatchId);
+  if (!trigger) throw new Error("ROLLOVER_TRIGGER_DISPATCH_MISSING");
+  const pendingPrompt = String(context.pendingPrompt || "");
+  if (!pendingPrompt.trim()) throw new Error("ROLLOVER_PENDING_PROMPT_MISSING");
+  const pendingHash = await reviewPayloadHash(tx.side, pendingPrompt);
+  if (
+    pendingHash !== String(trigger.payloadHash || "") ||
+    pendingHash !== String(context.pendingPromptHash || "")
+  ) {
+    throw new Error("ROLLOVER_PENDING_PROMPT_INTEGRITY_MISMATCH");
+  }
+
+  const anchor = tx.finalResponseAnchor;
+  if (anchor?.kind === "DISPATCH") {
+    if (
+      context.finalResponseAnchorKind !== "DISPATCH" ||
+      String(context.finalResponseDispatchId || "") !== String(anchor.dispatchId || "")
+    ) {
+      throw new Error("ROLLOVER_DISPATCH_ANCHOR_CONTEXT_MISMATCH");
+    }
+    const finalDispatch = reviewLedger.get(anchor.dispatchId);
+    if (!finalDispatch || finalDispatch.status !== DISPATCH_STATUS.RESPONSE_COMMITTED) {
+      throw new Error("ROLLOVER_DISPATCH_ANCHOR_NOT_COMMITTED");
+    }
+    if (Number(finalDispatch.completedAt) !== Number(anchor.observedAt)) {
+      throw new Error("ROLLOVER_DISPATCH_ANCHOR_TIMESTAMP_MISMATCH");
+    }
+    const durableAssistantMessage = reviewLastAssistantResponseForSide(tx.side);
+    if (
+      !durableAssistantMessage ||
+      durableAssistantMessage !== String(context.lastAssistantMessage || "").trim()
+    ) {
+      throw new Error("ROLLOVER_DISPATCH_RESPONSE_CONTEXT_MISMATCH");
+    }
+  }
+
+  if (anchor?.kind === "PROVIDER_SNAPSHOT") {
+    if (context.finalResponseAnchorKind !== "PROVIDER_SNAPSHOT") {
+      throw new Error("ROLLOVER_PROVIDER_SNAPSHOT_CONTEXT_KIND_MISMATCH");
+    }
+    const snapshotHash = await reviewPayloadHash(tx.side, context.lastAssistantMessage);
+    if (snapshotHash !== String(anchor.contentHash || "")) {
+      throw new Error("ROLLOVER_PROVIDER_SNAPSHOT_DURABLE_HASH_MISMATCH");
+    }
+    if (Number(context.providerSnapshotObservedAt) !== Number(anchor.observedAt)) {
+      throw new Error("ROLLOVER_PROVIDER_SNAPSHOT_DURABLE_TIMESTAMP_MISMATCH");
+    }
+    let contextIdentity;
+    try { contextIdentity = reviewSanitizeIdentity(context.providerSnapshotIdentity); }
+    catch (_) { throw new Error("ROLLOVER_PROVIDER_SNAPSHOT_DURABLE_IDENTITY_MALFORMED"); }
+    if (
+      !reviewSameIdentity(contextIdentity, anchor.conversationIdentity) ||
+      !reviewSameIdentity(contextIdentity, tx.oldAuthority?.identity)
+    ) {
+      throw new Error("ROLLOVER_PROVIDER_SNAPSHOT_DURABLE_IDENTITY_MISMATCH");
+    }
+  }
+
+  if ([ROLLOVER_PHASE.LIMIT_DETECTED, ROLLOVER_PHASE.FINAL_RESPONSE_COMMITTED, ROLLOVER_PHASE.CONTINUITY_PREPARED].includes(tx.phase)) {
+    const oldTab = await chrome.tabs.get(Number(tx.oldAuthority?.tabId));
+    if (reviewProviderFromUrl(oldTab?.url) !== tx.provider) {
+      throw new Error("ROLLOVER_PREVIOUS_TITLE_PROVIDER_MISMATCH");
+    }
+    const durablePreviousTitle = reviewRolloverTitle(oldTab?.title, tx.side);
+    if (durablePreviousTitle !== String(context.previousTitle || "").trim()) {
+      throw new Error("ROLLOVER_PREVIOUS_TITLE_CONTEXT_MISMATCH");
+    }
+    const canonicalFreshUrl = reviewCanonicalRolloverFreshUrl(tx.provider);
+    if (String(context.freshChatUrl || "") !== canonicalFreshUrl) {
+      throw new Error("ROLLOVER_FRESH_CHAT_URL_CONTEXT_MISMATCH");
+    }
+  }
+
+  if (!requireContinuity) return null;
+  if (!tx.continuityPayload) throw new Error("ROLLOVER_CONTINUITY_PAYLOAD_MISSING");
+  const canonicalText = reviewBuildContinuityText(tx, context);
+  if (
+    context.continuityText != null &&
+    String(context.continuityText) !== canonicalText
+  ) {
+    throw new Error("ROLLOVER_CONTINUITY_TEXT_INTEGRITY_MISMATCH");
+  }
+  context.continuityText = canonicalText;
+  reviewRolloverContexts[tx.side] = context;
+  return canonicalText;
+}
+
+async function reviewPublishRolloverPhase(tx, note = "") {
+  await reviewPersistRollover();
+  state.running = true;
+  state.paused = false;
+  state.pauseReason = "";
+  state.runtimePhase = "THREAD_ROLLOVER_" + tx.phase;
+  if (note) {
+    appendLog({
+      time: Date.now(),
+      type: "thread-rollover",
+      side: tx.side,
+      rolloverId: tx.rolloverId,
+      phase: tx.phase,
+      text: note
+    });
+  }
+  await saveState();
+  return tx;
+}
+
+async function reviewFailThreadRollover(side, reason) {
+  const text = String(reason?.message || reason || "Unknown rollover failure.");
+  const tx = reviewRollover.get(side);
+  if (tx && ![ROLLOVER_PHASE.COMPLETE, ROLLOVER_PHASE.FAILED].includes(tx.phase)) {
+    try { reviewRollover.fail(side, text, Date.now()); } catch (_) {}
+    try { await reviewPersistRollover(); } catch (_) {}
+  }
+  state.running = false;
+  state.paused = true;
+  state.runtimePhase = "PAUSED";
+  state.pauseReason = "Automatic thread rollover failed for AI " + side + ": " + text;
+  appendLog({ time: Date.now(), type: "thread-rollover-error", side, text: state.pauseReason });
+  await saveState();
+  return { ok: false, paused: true, error: text };
+}
+
+async function reviewWaitForLimitDispatch(dispatchId, timeoutMs = 6000) {
+  const started = Date.now();
+  while (Date.now() - started < timeoutMs) {
+    const record = reviewLedger.get(dispatchId);
+    if (!record) throw new Error("THREAD_LIMIT_DISPATCH_UNKNOWN");
+    if (
+      record.status === DISPATCH_STATUS.AWAITING_RESPONSE ||
+      record.status === DISPATCH_STATUS.DELIVERY_AMBIGUOUS
+    ) return record;
+    if (![DISPATCH_STATUS.DISPATCHING, DISPATCH_STATUS.ACCEPTED].includes(record.status)) {
+      throw new Error("THREAD_LIMIT_DISPATCH_NOT_RECOVERABLE:" + record.status);
+    }
+    await new Promise(resolve => setTimeout(resolve, 75));
+  }
+  throw new Error("THREAD_LIMIT_DISPATCH_SETTLE_TIMEOUT");
+}
+
+function reviewAuthorizeThreadLimit(msg, sender) {
+  if (sender?.id !== chrome.runtime.id) return { ok:false, reason:"THREAD_LIMIT_EXTENSION_ID_MISMATCH" };
+  if (Number(sender?.frameId) !== 0) return { ok:false, reason:"THREAD_LIMIT_FRAME_MISMATCH" };
+  if (String(sender?.documentLifecycle || "").toLowerCase() !== "active") return { ok:false, reason:"THREAD_LIMIT_DOCUMENT_NOT_ACTIVE" };
+  const tabId = Number(sender?.tab?.id);
+  if (!Number.isInteger(tabId) || tabId <= 0) return { ok:false, reason:"THREAD_LIMIT_TAB_MISSING" };
+  const side = sideForTab(tabId);
+  if (!side || String(msg?.side || "").toUpperCase() !== side) return { ok:false, reason:"THREAD_LIMIT_SIDE_MISMATCH" };
+
+  const authority = reviewAuthorityBySide.get(side);
+  if (!authority) return { ok:false, reason:"THREAD_LIMIT_AUTHORITY_MISSING" };
+  if (!sender.documentId || String(sender.documentId) !== String(authority.documentId)) return { ok:false, reason:"THREAD_LIMIT_DOCUMENT_MISMATCH" };
+  if (String(msg?.authorityRegistrationId || "") !== String(authority.authorityRegistrationId)) return { ok:false, reason:"THREAD_LIMIT_AUTHORITY_TOKEN_MISMATCH" };
+  if (Number(msg?.generationEpoch) !== Number(authority.generationEpoch)) return { ok:false, reason:"THREAD_LIMIT_GENERATION_MISMATCH" };
+  if (String(msg?.provider || "").toLowerCase() !== String(authority.provider)) return { ok:false, reason:"THREAD_LIMIT_PROVIDER_MISMATCH" };
+  if (reviewProviderFromUrl(sender.url || sender.tab?.url) !== authority.provider) return { ok:false, reason:"THREAD_LIMIT_ORIGIN_MISMATCH" };
+
+  let observedIdentity;
+  try { observedIdentity = reviewSanitizeIdentity(msg?.conversationIdentity); }
+  catch (_) { return { ok:false, reason:"THREAD_LIMIT_IDENTITY_MALFORMED" }; }
+  if (!reviewSameIdentity(observedIdentity, authority.identity)) return { ok:false, reason:"THREAD_LIMIT_IDENTITY_MISMATCH" };
+  if (authority.identity?.kind !== "conversation" || authority.identity?.provisional || !authority.identity?.writable) {
+    return { ok:false, reason:"THREAD_LIMIT_REQUIRES_CONFIRMED_CONVERSATION" };
+  }
+
+  const dispatchId = String(msg?.dispatchId || "").trim();
+  if (!dispatchId) return { ok:false, reason:"THREAD_LIMIT_NO_ACTIVE_DISPATCH" };
+  const dispatch = reviewLedger.get(dispatchId);
+  if (!dispatch) return { ok:false, reason:"THREAD_LIMIT_DISPATCH_UNKNOWN" };
+  if (
+    dispatch.side !== side ||
+    Number(dispatch.tabId) !== tabId ||
+    Number(dispatch.generationEpoch) !== Number(authority.generationEpoch) ||
+    !reviewSameIdentity(dispatch.conversationIdentity, authority.identity)
+  ) return { ok:false, reason:"THREAD_LIMIT_DISPATCH_AUTHORITY_MISMATCH" };
+
+  const allowedKinds = new Set(["provider-notice", "system-banner", "composer-status"]);
+  const regions = (Array.isArray(msg?.regions) ? msg.regions : [])
+    .slice(0, 6)
+    .map(region => ({
+      kind: String(region?.kind || "").trim().toLowerCase(),
+      text: String(region?.text || "").replace(/\s+/g, " ").trim().slice(0, 1000),
+      visible: region?.visible !== false
+    }))
+    .filter(region => allowedKinds.has(region.kind) && region.text);
+  if (!regions.length && String(msg?.text || "").trim()) {
+    regions.push({ kind:"provider-notice", text:String(msg.text).replace(/\s+/g, " ").trim().slice(0, 1000), visible:true });
+  }
+  const observation = {
+    provider: authority.provider,
+    regions,
+    composer: {
+      present: msg?.composer?.present === true,
+      disabled: msg?.composer?.disabled === true
+    }
+  };
+  const evidence = AIBridgeProviderLimitSignatures.classifyThreadLimit(observation);
+  if (evidence?.state !== "HARD_THREAD_LIMIT" || evidence?.automaticRollover !== true) {
+    return { ok:false, reason:"THREAD_LIMIT_EVIDENCE_REJECTED", evidence };
+  }
+  const preSendAssistantText=String(msg?.preSendAssistantText||"").trim();
+  if(preSendAssistantText.length>200000) return {ok:false,reason:"THREAD_LIMIT_PROVIDER_SNAPSHOT_TOO_LARGE"};
+
+  let preSendAssistantObservedAt=null;
+  let preSendAssistantIdentity=null;
+  if(preSendAssistantText){
+    const snapshotObservedAt=Number(msg?.preSendAssistantObservedAt);
+    const limitObservedAt=Number(msg?.observedAt);
+    if(
+      !Number.isFinite(snapshotObservedAt) ||
+      snapshotObservedAt<=0 ||
+      !Number.isFinite(limitObservedAt) ||
+      limitObservedAt<=0 ||
+      snapshotObservedAt>limitObservedAt
+    ) return {ok:false,reason:"THREAD_LIMIT_PROVIDER_SNAPSHOT_TIMESTAMP_INVALID"};
+
+    try { preSendAssistantIdentity=reviewSanitizeIdentity(msg?.preSendAssistantIdentity); }
+    catch (_) { return {ok:false,reason:"THREAD_LIMIT_PROVIDER_SNAPSHOT_IDENTITY_MALFORMED"}; }
+    if(!reviewSameIdentity(preSendAssistantIdentity,authority.identity)){
+      return {ok:false,reason:"THREAD_LIMIT_PROVIDER_SNAPSHOT_IDENTITY_MISMATCH"};
+    }
+    preSendAssistantObservedAt=snapshotObservedAt;
+  }
+
+  return {
+    ok:true,side,tabId,provider:authority.provider,authority,dispatch,dispatchId,
+    observation,evidence,preSendAssistantText,preSendAssistantObservedAt,preSendAssistantIdentity
+  };
+}
+
+async function reviewCreateOrReuseContinuityDispatch(side) {
+  const tx = reviewRollover.get(side);
+  const context = reviewRolloverContexts[side];
+  if (!tx || tx.phase !== ROLLOVER_PHASE.NEW_IDENTITY_VERIFIED || !tx.candidateAuthority) {
+    throw new Error("ROLLOVER_NOT_READY_FOR_CONTINUITY_DISPATCH");
+  }
+  const continuityText = await reviewVerifyDurableRolloverContext(tx, context, { requireContinuity:true });
+
+  let dispatch = null;
+  const candidates = reviewLedger.snapshot().filter(record =>
+    record.side === side &&
+    record.purpose === "CONTINUITY" &&
+    String(record.continuationSourceDispatchId || "") === String(tx.triggeringDispatchId) &&
+    [DISPATCH_STATUS.CREATED, DISPATCH_STATUS.DISPATCHING, DISPATCH_STATUS.ACCEPTED, DISPATCH_STATUS.AWAITING_RESPONSE, DISPATCH_STATUS.DELIVERY_AMBIGUOUS].includes(record.status)
+  );
+  if (candidates.length > 1) throw new Error("ROLLOVER_MULTIPLE_CONTINUITY_DISPATCHES");
+  if (candidates.length === 1) dispatch = reviewLedger.get(candidates[0].dispatchId);
+
+  if (!dispatch) {
+    const payloadHash = await reviewPayloadHash(side, continuityText);
+    dispatch = reviewLedger.create({
+      dispatchId: crypto.randomUUID(),
+      side,
+      tabId: tx.candidateAuthority.tabId,
+      generationEpoch: tx.candidateAuthority.generationEpoch,
+      conversationIdentity: tx.candidateAuthority.identity,
+      purpose: "CONTINUITY",
+      payloadHash,
+      continuationSourceDispatchId: tx.triggeringDispatchId,
+      createdAt: Date.now()
+    });
+    await reviewPersistLedger();
+  }
+
+  const updated = reviewRollover.transition(side, ROLLOVER_PHASE.CONTINUITY_PENDING, {
+    continuityDispatchId: dispatch.dispatchId
+  }, Date.now());
+  await reviewPublishRolloverPhase(updated, "Continuity dispatch is durable and pending.");
+  return dispatch;
+}
+
+async function reviewSendContinuityDispatch(side) {
+  let tx = reviewRollover.get(side);
+  const context = reviewRolloverContexts[side];
+  if (!tx || tx.phase !== ROLLOVER_PHASE.CONTINUITY_PENDING) {
+    throw new Error("ROLLOVER_CONTINUITY_SEND_NOT_READY");
+  }
+  const continuityText = await reviewVerifyDurableRolloverContext(tx, context, { requireContinuity:true });
+  let dispatch = reviewLedger.get(tx.continuityDispatchId);
+  if (!dispatch) throw new Error("ROLLOVER_CONTINUITY_DISPATCH_MISSING");
+
+  if (dispatch.status === DISPATCH_STATUS.DELIVERY_AMBIGUOUS) {
+    if (dispatch.failureReason !== "MV3_WORKER_RESTART_DURING_DELIVERY") {
+      reviewRollover.markAmbiguous(side, dispatch.failureReason || "CONTINUITY_DELIVERY_AMBIGUOUS", Date.now());
+      await reviewPersistRollover();
+      throw new Error("ROLLOVER_CONTINUITY_DELIVERY_AMBIGUOUS");
+    }
+    const proof = await reviewReadContentActionProof(dispatch);
+    if (!proof) {
+      reviewRollover.markAmbiguous(side, "RESTART_CONTINUITY_SEND_UNPROVEN", Date.now());
+      await reviewPersistRollover();
+      throw new Error("RESTART_CONTINUITY_SEND_UNPROVEN");
+    }
+    dispatch = reviewLedger.recoverAcceptedAfterRestart(dispatch.dispatchId, { contentProof:proof, recoveredAt:Date.now() });
+    await reviewPersistLedger();
+  } else if (dispatch.status === DISPATCH_STATUS.ACCEPTED) {
+    dispatch = reviewLedger.recoverAcceptedAfterRestart(dispatch.dispatchId);
+    await reviewPersistLedger();
+  }
+
+  if (dispatch.status === DISPATCH_STATUS.AWAITING_RESPONSE) {
+    tx = reviewRollover.get(side);
+    if (tx.phase === ROLLOVER_PHASE.CONTINUITY_PENDING) {
+      tx = reviewRollover.transition(side, ROLLOVER_PHASE.CONTINUITY_SENT, {}, Date.now());
+      await reviewPublishRolloverPhase(tx, "Continuity send was already confirmed.");
+    }
+    if (tx.phase === ROLLOVER_PHASE.CONTINUITY_SENT) {
+      tx = reviewRollover.transition(side, ROLLOVER_PHASE.AWAITING_CONTINUITY_RESPONSE, {}, Date.now());
+      await reviewPublishRolloverPhase(tx, "Waiting for the continuation response.");
+    }
+    return { ok:true, awaitingResponse:true, rolloverId:tx.rolloverId, dispatchId:dispatch.dispatchId };
+  }
+
+  if (dispatch.status !== DISPATCH_STATUS.CREATED) {
+    throw new Error("ROLLOVER_CONTINUITY_DISPATCH_UNEXPECTED_STATUS:" + dispatch.status);
+  }
+
+  let live = reviewAuthorityBySide.get(side);
+  if (!live) live = await reviewRegisterSideAuthority(side);
+  tx = reviewRollover.get(side);
+  if (
+    Number(live.tabId) !== Number(dispatch.tabId) ||
+    Number(live.generationEpoch) !== Number(dispatch.generationEpoch) ||
+    !reviewSameIdentity(live.identity, dispatch.conversationIdentity)
+  ) {
+    throw new Error("ROLLOVER_CONTINUITY_AUTHORITY_CHANGED_BEFORE_SEND");
+  }
+
+  await reviewTransitionDispatch(dispatch.dispatchId, DISPATCH_STATUS.DISPATCHING);
+  state.runtimePhase = "THREAD_ROLLOVER_CONTINUITY_DISPATCHING";
+  await saveState();
+
+  const command = {
+    type:"AI_BRIDGE_ACTION",
+    action:"SEND",
+    commandId:crypto.randomUUID(),
+    dispatchId:dispatch.dispatchId,
+    rolloverId:tx.rolloverId,
+    side,
+    documentId:live.documentId,
+    authorityRegistrationId:live.authorityRegistrationId,
+    generationEpoch:live.generationEpoch,
+    expectedIdentity:live.identity,
+    payload:{text:continuityText,artifacts:[]}
+  };
+
+  let result;
+  try {
+    result = await chrome.tabs.sendMessage(Number(live.tabId), command, { documentId:live.documentId });
+  } catch (_) {
+    const proof = await reviewReadContentActionProof(dispatch);
+    if (!proof) {
+      await reviewTransitionDispatch(dispatch.dispatchId, DISPATCH_STATUS.DELIVERY_AMBIGUOUS, { failureReason:"MESSAGE_ACK_LOST" });
+      reviewRollover.markAmbiguous(side, "MESSAGE_ACK_LOST", Date.now());
+      await reviewPersistRollover();
+      throw new Error("ROLLOVER_CONTINUITY_DELIVERY_AMBIGUOUS");
+    }
+    await reviewTransitionDispatch(dispatch.dispatchId, DISPATCH_STATUS.ACCEPTED, { acceptedAt:Date.now() });
+    await reviewTransitionDispatch(dispatch.dispatchId, DISPATCH_STATUS.AWAITING_RESPONSE);
+    dispatch = reviewLedger.get(dispatch.dispatchId);
+  }
+
+  if (dispatch.status === DISPATCH_STATUS.DISPATCHING) {
+    if (result?.outcome === "REJECTED_PRE_ACTION") {
+      await reviewTransitionDispatch(dispatch.dispatchId, DISPATCH_STATUS.FAILED, {
+        failureReason:result.reason || "REJECTED_PRE_ACTION"
+      });
+      throw new Error((result.reason || result.error || "CONTINUITY_SEND_REJECTED") + (result.detail ? ":" + result.detail : ""));
+    }
+    if (result?.outcome !== "ACTION_CONFIRMED") {
+      const proof = await reviewReadContentActionProof(dispatch);
+      if (!proof) {
+        await reviewTransitionDispatch(dispatch.dispatchId, DISPATCH_STATUS.DELIVERY_AMBIGUOUS, {
+          failureReason:result?.reason || "ACTION_CONFIRMATION_NOT_PROVEN"
+        });
+        reviewRollover.markAmbiguous(side, result?.reason || "ACTION_CONFIRMATION_NOT_PROVEN", Date.now());
+        await reviewPersistRollover();
+        throw new Error("ROLLOVER_CONTINUITY_DELIVERY_AMBIGUOUS");
+      }
+    }
+    await reviewTransitionDispatch(dispatch.dispatchId, DISPATCH_STATUS.ACCEPTED, { acceptedAt:Date.now() });
+    await reviewTransitionDispatch(dispatch.dispatchId, DISPATCH_STATUS.AWAITING_RESPONSE);
+    dispatch = reviewLedger.get(dispatch.dispatchId);
+  }
+
+  delete state.lastResponseBySide[side];
+  state.lastSentBySide[side] = continuityText;
+
+  tx = reviewRollover.get(side);
+  if (tx.phase === ROLLOVER_PHASE.CONTINUITY_PENDING) {
+    tx = reviewRollover.transition(side, ROLLOVER_PHASE.CONTINUITY_SENT, {}, Date.now());
+    await reviewPublishRolloverPhase(tx, "Continuity prompt accepted by the new chat.");
+  }
+  if (tx.phase === ROLLOVER_PHASE.CONTINUITY_SENT) {
+    tx = reviewRollover.transition(side, ROLLOVER_PHASE.AWAITING_CONTINUITY_RESPONSE, {}, Date.now());
+    await reviewPublishRolloverPhase(tx, "Waiting for the continuation response.");
+  }
+  return { ok:true, awaitingResponse:true, rolloverId:tx.rolloverId, dispatchId:dispatch.dispatchId };
+}
+
+async function reviewResumeThreadRollover(side) {
+  for (let step = 0; step < 16; step += 1) {
+    let tx = reviewRollover.get(side);
+    const context = reviewRolloverContexts[side];
+    if (!tx) throw new Error("ROLLOVER_TRANSACTION_MISSING");
+    if (!context || String(context.rolloverId || "") !== String(tx.rolloverId)) throw new Error("ROLLOVER_CONTEXT_MISSING");
+
+    if (tx.phase === ROLLOVER_PHASE.LIMIT_DETECTED) {
+      if(context.finalResponseAnchorKind==="PROVIDER_SNAPSHOT"){
+        const snapshotHash=await reviewPayloadHash(side,context.lastAssistantMessage);
+        if(snapshotHash!==context.providerSnapshotHash) throw new Error("ROLLOVER_PROVIDER_SNAPSHOT_HASH_MISMATCH");
+        tx=reviewRolloverOrchestrator.anchorProviderSnapshot({
+          side,
+          contentHash:snapshotHash,
+          observedAt:context.providerSnapshotObservedAt,
+          conversationIdentity:context.providerSnapshotIdentity,
+          now:Date.now()
+        });
+        await reviewPublishRolloverPhase(tx,"Pre-send provider response snapshot anchored before rollover.");
+        continue;
+      }
+      const finalDispatch = reviewLedger.get(context.finalResponseDispatchId);
+      if (!finalDispatch || finalDispatch.status !== DISPATCH_STATUS.RESPONSE_COMMITTED) {
+        throw new Error("ROLLOVER_FINAL_RESPONSE_NOT_COMMITTED");
+      }
+      tx = reviewRolloverOrchestrator.markFinalResponseCommitted({
+        side,
+        dispatchId:finalDispatch.dispatchId,
+        completedAt:finalDispatch.completedAt,
+        now:Date.now()
+      });
+      await reviewPublishRolloverPhase(tx, "Final response saved before rollover.");
+      continue;
+    }
+
+    if (tx.phase === ROLLOVER_PHASE.FINAL_RESPONSE_COMMITTED) {
+      await reviewVerifyDurableRolloverContext(tx, context);
+      reviewRolloverOrchestrator.prepareContinuity({
+        side,
+        title:context.previousTitle,
+        messages:[{role:"assistant",kind:"assistant-response",text:context.lastAssistantMessage,completed:true}],
+        maxChars:200000,
+        now:Date.now()
+      });
+      tx = reviewRollover.get(side);
+      context.continuityText = reviewBuildContinuityText(tx, context);
+      reviewRolloverContexts[side] = context;
+      await reviewPublishRolloverPhase(tx, "Continuity context prepared before leaving the exhausted chat.");
+      continue;
+    }
+
+    if (tx.phase === ROLLOVER_PHASE.CONTINUITY_PREPARED) {
+      await reviewVerifyDurableRolloverContext(tx, context, { requireContinuity:true });
+      const trigger = reviewLedger.get(tx.triggeringDispatchId);
+      if (!trigger) throw new Error("ROLLOVER_TRIGGER_DISPATCH_MISSING");
+      if (trigger.status !== DISPATCH_STATUS.FAILED) {
+        if (![DISPATCH_STATUS.AWAITING_RESPONSE, DISPATCH_STATUS.DELIVERY_AMBIGUOUS, DISPATCH_STATUS.ACCEPTED, DISPATCH_STATUS.DISPATCHING].includes(trigger.status)) {
+          throw new Error("ROLLOVER_TRIGGER_DISPATCH_UNEXPECTED_STATUS:" + trigger.status);
+        }
+        await reviewTransitionDispatch(trigger.dispatchId, DISPATCH_STATUS.FAILED, {
+          failureReason:"HARD_THREAD_LIMIT_REJECTED_BY_PROVIDER"
+        });
+      }
+      const revoked = revokeAuthority(tx.oldAuthority);
+      tx = reviewRollover.transition(side, ROLLOVER_PHASE.OLD_AUTHORITY_REVOKED, { oldAuthority:revoked }, Date.now());
+      reviewInvalidateAuthorityForTab(tx.oldAuthority.tabId);
+      await reviewPublishRolloverPhase(tx, "Old conversation authority revoked after continuity became durable.");
+      continue;
+    }
+
+    if (tx.phase === ROLLOVER_PHASE.OLD_AUTHORITY_REVOKED) {
+      tx = reviewRollover.transition(side, ROLLOVER_PHASE.OPENING_NEW_CHAT, {}, Date.now());
+      await reviewPublishRolloverPhase(tx, "Opening a fresh provider chat.");
+      continue;
+    }
+
+    if (tx.phase === ROLLOVER_PHASE.OPENING_NEW_CHAT) {
+      const tabId = Number(tx.oldAuthority.tabId);
+      let tab = await chrome.tabs.get(tabId);
+      if (reviewProviderFromUrl(tab?.url) !== tx.provider) throw new Error("ROLLOVER_PROVIDER_ORIGIN_CHANGED");
+      let currentIdentity = null;
+      if (tab?.status === "complete") {
+        try {
+          const probe = await chrome.tabs.sendMessage(tabId, {type:"AI_BRIDGE_IDENTITY_PROBE"});
+          if (probe?.ok) currentIdentity = reviewSanitizeIdentity(probe.identity);
+        } catch (_) {}
+      }
+
+      if (!currentIdentity || reviewSameIdentity(currentIdentity, tx.oldAuthority.identity)) {
+        reviewInvalidateAuthorityForTab(tabId);
+        const targetUrl = reviewCanonicalRolloverFreshUrl(tx.provider);
+        const committedAtCanonicalTarget = String(tab?.url || "") === targetUrl;
+        const pendingAtCanonicalTarget = String(tab?.pendingUrl || "") === targetUrl;
+        const atCanonicalTarget = committedAtCanonicalTarget || pendingAtCanonicalTarget;
+        if (!atCanonicalTarget) {
+          await chrome.tabs.update(tabId, {url:targetUrl,active:true});
+        }
+        tab = await waitForTabReady(tabId, 20000, targetUrl);
+        if (String(tab?.url || "") !== targetUrl) throw new Error("ROLLOVER_FRESH_CHAT_CANONICAL_URL_MISMATCH");
+        if (reviewProviderFromUrl(tab?.url) !== tx.provider) throw new Error("ROLLOVER_FRESH_CHAT_PROVIDER_MISMATCH");
+        const probe = await chrome.tabs.sendMessage(tabId, {type:"AI_BRIDGE_IDENTITY_PROBE"});
+        if (!probe?.ok) throw new Error(probe?.error || "ROLLOVER_FRESH_CHAT_IDENTITY_UNAVAILABLE");
+        currentIdentity = reviewSanitizeIdentity(probe.identity);
+      }
+
+      if (
+        currentIdentity.provider !== tx.provider ||
+        currentIdentity.kind !== "surface" ||
+        currentIdentity.provisional !== true ||
+        currentIdentity.writable !== true
+      ) throw new Error("ROLLOVER_FRESH_CHAT_SURFACE_NOT_PROVEN");
+
+      tx = reviewRollover.transition(side, ROLLOVER_PHASE.AWAITING_NEW_IDENTITY, {}, Date.now());
+      await reviewPublishRolloverPhase(tx, "Fresh chat surface opened; verifying new authority.");
+      continue;
+    }
+
+    if (tx.phase === ROLLOVER_PHASE.AWAITING_NEW_IDENTITY) {
+      const record = await reviewRegisterSideAuthority(side);
+      await reviewApplyRegisteredRolloverAuthority(record);
+      tx = reviewRollover.get(side);
+      if (tx.phase !== ROLLOVER_PHASE.NEW_IDENTITY_VERIFIED) {
+        throw new Error("ROLLOVER_NEW_IDENTITY_NOT_VERIFIED");
+      }
+      await reviewPublishRolloverPhase(tx, "New chat identity verified.");
+      continue;
+    }
+
+    if (tx.phase === ROLLOVER_PHASE.NEW_IDENTITY_VERIFIED) {
+      await reviewCreateOrReuseContinuityDispatch(side);
+      continue;
+    }
+
+    if (tx.phase === ROLLOVER_PHASE.CONTINUITY_PENDING) {
+      return reviewSendContinuityDispatch(side);
+    }
+
+    if (tx.phase === ROLLOVER_PHASE.CONTINUITY_SENT) {
+      tx = reviewRollover.transition(side, ROLLOVER_PHASE.AWAITING_CONTINUITY_RESPONSE, {}, Date.now());
+      await reviewPublishRolloverPhase(tx, "Waiting for the continuation response.");
+      return {ok:true,awaitingResponse:true,rolloverId:tx.rolloverId,dispatchId:tx.continuityDispatchId};
+    }
+
+    if (tx.phase === ROLLOVER_PHASE.AWAITING_CONTINUITY_RESPONSE) {
+      try {
+        const record = await reviewRegisterSideAuthority(side);
+        await reviewApplyRegisteredRolloverAuthority(record);
+      } catch (_) {
+        // The content runtime may still be transitioning from the fresh surface
+        // to the real conversation. The route-change hook will register it.
+      }
+      tx = reviewRollover.get(side);
+      state.running = true;
+      state.paused = false;
+      state.pauseReason = "";
+      state.runtimePhase = "THREAD_ROLLOVER_AWAITING_CONTINUITY_RESPONSE";
+      await saveState();
+      return {ok:true,awaitingResponse:true,rolloverId:tx.rolloverId,dispatchId:tx.continuityDispatchId};
+    }
+
+    if (tx.phase === ROLLOVER_PHASE.COMPLETE) return {ok:true,complete:true,rolloverId:tx.rolloverId};
+    if (tx.phase === ROLLOVER_PHASE.DELIVERY_AMBIGUOUS || tx.phase === ROLLOVER_PHASE.FAILED) {
+      throw new Error("ROLLOVER_TERMINAL_FAILURE:" + tx.phase + ":" + (tx.failureReason || "unknown"));
+    }
+    throw new Error("ROLLOVER_UNKNOWN_PHASE:" + tx.phase);
+  }
+  throw new Error("ROLLOVER_STEP_LIMIT_EXCEEDED");
+}
+
+async function reviewHandleThreadLimit(msg, sender) {
+  await stateReady;
+  await reviewRuntimeReady;
+  if (!state.sessionActive) return {ok:false,ignored:true,reason:"NO_ACTIVE_SESSION"};
+  if (blocksDispatch(state.updateCheckpoint)) {
+    return reviewPauseForAmbiguity("Thread rollover cannot start while a live-update checkpoint blocks provider actions.");
+  }
+
+  const authorized = reviewAuthorizeThreadLimit(msg, sender);
+  if (!authorized.ok) return {...authorized,ignored:true};
+
+  const existing = reviewRollover.get(authorized.side);
+  if (existing && ![ROLLOVER_PHASE.COMPLETE, ROLLOVER_PHASE.FAILED].includes(existing.phase)) {
+    if (String(existing.triggeringDispatchId) !== String(authorized.dispatchId)) {
+      return reviewFailThreadRollover(authorized.side, "A different hard-limit dispatch arrived while rollover was already active.");
+    }
+    try { return await reviewResumeThreadRollover(authorized.side); }
+    catch (error) { return reviewFailThreadRollover(authorized.side, error); }
+  }
+
+  try {
+    const trigger = await reviewWaitForLimitDispatch(authorized.dispatchId);
+    const pendingPrompt = String(state.lastSentBySide?.[authorized.side] || "");
+    if (!pendingPrompt.trim()) throw new Error("ROLLOVER_PENDING_PROMPT_MISSING");
+    const pendingHash = await reviewPayloadHash(authorized.side, pendingPrompt);
+    if (pendingHash !== trigger.payloadHash) throw new Error("ROLLOVER_PENDING_PROMPT_HASH_MISMATCH");
+
+    const finalDispatch = reviewLatestCommittedDispatchBefore(authorized.side, trigger.createdAt);
+    let finalResponseAnchorKind="DISPATCH";
+    let lastAssistantMessage=reviewLastAssistantResponseForSide(authorized.side);
+    let providerSnapshotHash=null;
+    let providerSnapshotObservedAt=null;
+    let providerSnapshotIdentity=null;
+
+    if(!finalDispatch){
+      const snapshotText=String(authorized.preSendAssistantText||"").trim();
+      if(!snapshotText) throw new Error("ROLLOVER_NO_PRIOR_COMMITTED_RESPONSE_OR_PROVIDER_SNAPSHOT");
+      finalResponseAnchorKind="PROVIDER_SNAPSHOT";
+      lastAssistantMessage=snapshotText;
+      providerSnapshotHash=await reviewPayloadHash(authorized.side,snapshotText);
+      providerSnapshotObservedAt=authorized.preSendAssistantObservedAt;
+      providerSnapshotIdentity=authorized.preSendAssistantIdentity;
+      if(!Number.isFinite(providerSnapshotObservedAt) || !providerSnapshotIdentity){
+        throw new Error("ROLLOVER_PROVIDER_SNAPSHOT_PROVENANCE_MISSING");
+      }
+    }
+    if (!lastAssistantMessage) throw new Error("ROLLOVER_LAST_ASSISTANT_RESPONSE_MISSING");
+
+    const tab = await chrome.tabs.get(authorized.tabId);
+    const previousTitle = reviewRolloverTitle(tab?.title, authorized.side);
+    const oldAuthority = reviewConversationAuthority(authorized.authority);
+    if (!oldAuthority) throw new Error("ROLLOVER_OLD_AUTHORITY_NOT_CONFIRMED");
+
+    const rolloverId = crypto.randomUUID();
+    const tx = reviewRolloverOrchestrator.beginAuto({
+      rolloverId,
+      side:authorized.side,
+      provider:authorized.provider,
+      triggeringDispatchId:trigger.dispatchId,
+      oldAuthority,
+      limitObservation:authorized.observation,
+      startedAt:Date.now()
+    });
+    reviewRolloverContexts[authorized.side] = {
+      schema:1,
+      rolloverId,
+      triggeringDispatchId:trigger.dispatchId,
+      finalResponseDispatchId:finalDispatch?.dispatchId||null,
+      finalResponseAnchorKind,
+      providerSnapshotHash,
+      providerSnapshotObservedAt,
+      providerSnapshotIdentity,
+      pendingPrompt,
+      pendingPromptHash:trigger.payloadHash,
+      lastAssistantMessage,
+      previousTitle,
+      freshChatUrl:freshChatUrlFor(tab?.url),
+      createdAt:Date.now()
+    };
+    await reviewPublishRolloverPhase(tx, "Authoritative thread limit detected; preserving the final response before rollover.");
+    return await reviewResumeThreadRollover(authorized.side);
+  } catch (error) {
+    return reviewFailThreadRollover(authorized.side, error);
+  }
 }
 
 async function resetChatTab(tabId) {
@@ -2984,7 +4024,7 @@ async function resetChatTab(tabId) {
   const updated = await chrome.tabs.update(id, { url: targetUrl, active: true });
   if (!updated) throw new Error("Chrome did not return the updated AI tab.");
 
-  const ready = await waitForTabReady(id);
+  const ready = await waitForTabReady(id, 20000, targetUrl);
   const readyProvider = reviewProviderFromUrl(ready?.url);
   if (readyProvider !== provider) {
     throw new Error("Fresh-chat navigation changed to an unexpected provider origin.");
@@ -3012,6 +4052,30 @@ async function resetChatTab(tabId) {
   });
 }
 
+function reviewValidateManualFreshBindings(msg, activeSides = SIDES) {
+  const roster=[...new Set((Array.isArray(activeSides)?activeSides:SIDES)
+    .map(side=>String(side||"").toUpperCase()))]
+    .filter(side=>ALL_SIDES.includes(side));
+  if(!roster.length) throw new Error("Choose at least one active AI role.");
+
+  const bindings=roster.map(side=>({side,tabId:Number(msg?.[`tab${side}`])}));
+  if(bindings.some(binding=>!Number.isInteger(binding.tabId)||binding.tabId<=0)){
+    throw new Error("Choose an open supported AI tab for every active role.");
+  }
+  const byTab=new Map();
+  for(const binding of bindings){
+    const owners=byTab.get(binding.tabId)||[];
+    owners.push(binding.side);
+    byTab.set(binding.tabId,owners);
+  }
+  const duplicate=[...byTab.entries()].find(([,owners])=>owners.length>1);
+  if(duplicate){
+    const [tabId,owners]=duplicate;
+    throw new Error(`Each logical AI must use a different browser tab. Tab ${tabId} is selected for AI ${owners.join(" and AI ")}.`);
+  }
+  return bindings;
+}
+
 async function resetSelectedChats(msg, sides = SIDES, { allowActive = false } = {}) {
   if (state.sessionActive && !allowActive) throw new Error("Stop the current bridge session before opening fresh AI chats.");
   const allowedSides = state.sessionActive ? SIDES : ALL_SIDES;
@@ -3019,9 +4083,13 @@ async function resetSelectedChats(msg, sides = SIDES, { allowActive = false } = 
     .filter(side => allowedSides.includes(side));
   if (!chosen.length) throw new Error("Choose at least one AI role to reset.");
 
-  const ids = chosen.map(side => Number(msg?.[`tab${side}`]));
-  if (ids.some(id => !Number.isInteger(id) || id <= 0)) throw new Error("Choose an open supported AI tab for every requested role.");
-  if (new Set(ids).size !== ids.length) throw new Error("Each requested AI role must use a different tab.");
+  // Manual fresh-chat navigation mutates a real provider tab. Validate the
+  // entire active logical roster, not merely the requested subset, so a stale
+  // or custom extension page cannot navigate a tab another logical AI shares.
+  const rosterBindings=reviewValidateManualFreshBindings(msg,SIDES);
+  const bindingBySide=new Map(rosterBindings.map(binding=>[binding.side,binding.tabId]));
+  const ids=chosen.map(side=>bindingBySide.get(side));
+  if(ids.some(id=>!Number.isInteger(id)||id<=0)) throw new Error("Choose an open supported AI tab for every requested role.");
 
   const tabs = await Promise.all(ids.map(id => chrome.tabs.get(id)));
   for (const tab of tabs) freshChatUrlFor(tab?.url);
@@ -3423,6 +4491,10 @@ function reviewAuthorizeProviderEvent(msg, sender) {
 
 chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   (async () => {
+    if(!reviewUiControlSenderAllowed(msg,sender)){
+      sendResponse({ok:false,reason:"UI_CONTROL_UNTRUSTED_SENDER"});
+      return;
+    }
     if (msg.type === "AI_BRIDGE_POWER_SET") {
       await aiBridgeApplyKeepAwake(Boolean(msg.enabled));
       sendResponse({ ok: true, enabled: Boolean(msg.enabled) });
@@ -3451,6 +4523,18 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
       if(!reviewTrustedExtensionPage(sender)){sendResponse({ok:false,reason:"UPDATE_CONTROL_UNTRUSTED_SENDER"});return;}
       await stateReady;sendResponse({ok:true,checkpoint:state.updateCheckpoint?{...state.updateCheckpoint}:null,boundary:reviewUpdateBoundary()});return;
     }
+    if (msg.type === "AI_BRIDGE_UPDATE_NATIVE_PING") {
+      if(!reviewTrustedExtensionPage(sender)){sendResponse({ok:false,reason:"UPDATE_CONTROL_UNTRUSTED_SENDER"});return;}
+      sendResponse(await reviewSendNativeUpdater("PING"));return;
+    }
+    if (msg.type === "AI_BRIDGE_UPDATE_NATIVE_CHECK") {
+      if(!reviewTrustedExtensionPage(sender)){sendResponse({ok:false,reason:"UPDATE_CONTROL_UNTRUSTED_SENDER"});return;}
+      sendResponse(await reviewSendNativeUpdater("CHECK"));return;
+    }
+    if (msg.type === "AI_BRIDGE_UPDATE_NATIVE_APPLY") {
+      if(!reviewTrustedExtensionPage(sender)){sendResponse({ok:false,reason:"UPDATE_CONTROL_UNTRUSTED_SENDER"});return;}
+      await stateReady;sendResponse(await reviewNativeApplyCheckpoint());return;
+    }
 
     if (msg.type === "AI_BRIDGE_SETTINGS_OPEN") {
       const tab = await chrome.tabs.create({ url: chrome.runtime.getURL("settings.html") });
@@ -3469,7 +4553,17 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
     }
 
     if (msg.type === "AI_BRIDGE_DOCUMENT_ROUTE_CHANGED") {
-      if (sender?.tab?.id) reviewInvalidateAuthorityForTab(sender.tab.id);
+      const changedTabId = Number(sender?.tab?.id);
+      const changedSide = Number.isInteger(changedTabId) ? sideForTab(changedTabId) : null;
+      if (Number.isInteger(changedTabId)) reviewInvalidateAuthorityForTab(changedTabId);
+      if (changedSide) {
+        const tx = reviewRollover.get(changedSide);
+        if (tx && !["COMPLETE", "FAILED"].includes(tx.phase)) {
+          reviewRegisterSideAuthority(changedSide).catch(error => {
+            console.warn("AI Bridge rollover route re-registration failed", error);
+          });
+        }
+      }
       sendResponse({ ok: true });
       return;
     }
@@ -3481,12 +4575,8 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
     }
 
     if (msg.type === "AI_BRIDGE_THREAD_LIMIT") {
-      await stateReady;
-      const side = sender?.tab?.id ? sideForTab(sender.tab.id) : null;
-      if (side) {
-        await pauseBridge("AI " + side + " reached an authoritative conversation-length limit. Automatic New Chat is LIMITED until trusted provider New Chat authority is available.");
-      }
-      sendResponse({ ok: true, paused: Boolean(side) });
+      const result = await reviewQueueRollover(() => reviewHandleThreadLimit(msg, sender));
+      sendResponse(result);
       return;
     }
 
@@ -3527,7 +4617,9 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
         side: side || null,
         capabilities: {
           relay: providerBlocked ? "BLOCKED" : (relayReady ? "READY" : "WAITING"),
-          rollover: "LIMITED",
+          rollover: reviewRollover.get(side)?.phase && !["COMPLETE","FAILED"].includes(reviewRollover.get(side).phase)
+            ? "ACTIVE"
+            : (authority?.provider === "chatgpt" && relayReady ? "READY" : "LIMITED"),
           artifacts: "LIMITED",
           cancel: pong?.capabilities?.stop === "PASS" ? "READY" : "LIMITED"
         },
@@ -3792,6 +4884,22 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
       state.pauseReason = "";
       await clearAttention();
       await saveState();
+
+      const activeRollovers = reviewActiveRolloverSummaries();
+      if (activeRollovers.length) {
+        const resumed = [];
+        for (const rollover of activeRollovers) {
+          try {
+            const result = await reviewQueueRollover(() => reviewResumeThreadRollover(rollover.side));
+            resumed.push({ side: rollover.side, ...result });
+          } catch (error) {
+            await reviewFailThreadRollover(rollover.side, error);
+            throw error;
+          }
+        }
+        sendResponse({ ok:true, recoveredRollovers:resumed.length, rollovers:resumed });
+        return;
+      }
 
       if (state.nextTurnPending) {
         const recovered=await reviewRecoverNextTurnPending();

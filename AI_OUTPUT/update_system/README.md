@@ -170,16 +170,29 @@ outcome is ambiguous.
 - `../tests/update-system-atomic.mjs` — traversal, allowlist, hash, rollback,
   symlink, and success regressions.
 
-## Not implemented yet
+## Remaining promotion gates
 
-- native-messaging framing/host installer;
-- extension-side `nativeMessaging` permission;
-- durable update checkpoint stages and guarded `chrome.runtime.reload()`;
-- startup reinjection/rebind/reconciliation before relay resume;
-- production root `update-manifest.json`;
-- AI_INPUT promotion.
+The review slice now includes native-messaging framing, the current-user host
+installer, the extension-side `nativeMessaging` permission, durable update
+checkpoint stages, guarded `chrome.runtime.reload()`, and startup
+reinjection/rebind/reconciliation.
 
-Those remain gated on review and green CI.
+Still intentionally gated:
+
+- pin the human-approved production RSA release public key;
+- generate and sign the production root `update-manifest.json`;
+- promote the reviewed updater into AI_INPUT for human testing;
+- promote to the root extension only after human acceptance.
+
+The AI_OUTPUT Settings page now exposes the reviewed high-level updater flow:
+native-host PING, signed CHECK, durable PREPARE, CHECKPOINTED-only APPLY, and
+CANCEL. It renders host/trust/checkpoint readiness without collecting repository,
+ref, filesystem-path, release-key, or checkpoint authority from the user. The
+legacy ZIP download remains visually separated as a manual fallback.
+
+Until the production release public key is pinned, `CHECK` and `APPLY` fail
+closed. `PING` remains available so Settings can distinguish "native host not
+installed" from "host connected but release verification not configured".
 
 
 ## Crash-recoverable update checkpoint
@@ -193,3 +206,30 @@ During DRAINING no new provider action may start, but an already-running respons
 After reload, every bound provider tab is reinjected through the packaged version-aware `content.js` lifecycle without refreshing the provider page. The new document registration must prove the same tab, provider, documentId, generation epoch, and conversation identity captured before mutation. Only then may the checkpoint reach READY_TO_RESUME.
 
 If the service worker dies at any checkpoint phase, the next worker resumes from that same durable phase. A build mismatch, authority mismatch, ambiguous delivery, parked response, provider recovery, or rollover activity fails closed into UPDATE_RECOVERY_FAILED.
+
+
+## Round 62B — native messaging transport
+
+The review implementation now includes:
+
+- `native_host.py` — bounded Chrome stdio framing and fixed `PING/CHECK/APPLY`
+  operations;
+- `install_native_host.py` — current-user Windows/macOS/Linux installer;
+- exact extension-origin validation in both the generated Chrome host manifest
+  and host runtime;
+- no message-controlled repository, ref, URL, or filesystem path;
+- service-worker-only `chrome.runtime.sendNativeMessage()` calls;
+- `APPLY` allowed only after the durable update checkpoint reaches
+  `CHECKPOINTED`;
+- native APPLY is bound to the checkpointed expected version/build and rejects a
+  newly fetched signed manifest if that target changed after CHECK, before any
+  live extension file is replaced.
+
+Windows uses a generated `.bat` launcher, matching Chromium's documented
+native-messaging sample pattern. macOS/Linux use an executable shell launcher.
+The installer binds the host to one exact Chrome extension ID and one exact
+extension root.
+
+The production release RSA public modulus is still intentionally unset.
+Therefore CHECK/APPLY continue to fail closed until the human-approved public
+key is pinned. PING can be used to verify installation independently.
