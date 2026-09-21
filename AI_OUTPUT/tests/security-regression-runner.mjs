@@ -45,6 +45,7 @@ const tests=[
   'round65-settings-native-updater-ui.mjs',
   'round66-native-updater-rsa-floor.mjs',
   'round67-native-updater-response-contract.mjs',
+  'round68-settings-updater-trust-diagnostics.mjs',
   'round42-content-runtime-lifecycle.mjs',
   'round43-next-turn-adoption.mjs',
   'round44-restart-delivery-recovery.mjs',
