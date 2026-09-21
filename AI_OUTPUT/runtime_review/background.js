@@ -1105,10 +1105,101 @@ async function reviewContinueAfterCommittedResponse(sourceSide) {
     return { ok: false, error: error?.message || String(error) };
   }
 }
+function reviewResponseEnvelopeMatchesDispatch(dispatch,envelope){
+  if(!dispatch||!envelope)return false;
+  if(String(envelope.side||"").toUpperCase()!==String(dispatch.side||"").toUpperCase())return false;
+  if(Number(envelope.senderTabId)!==Number(dispatch.tabId))return false;
+  if(Number(envelope.generationEpoch)!==Number(dispatch.generationEpoch))return false;
+  let observed;
+  try{observed=reviewSanitizeIdentity(envelope.conversationIdentity);}catch(_){return false;}
+  const expected=dispatch.conversationIdentity;
+  if(observed.provider!==expected.provider||observed.writable!==true)return false;
+  if(expected.kind==="conversation")return reviewSameIdentity(observed,expected);
+  if(expected.kind==="surface")return observed.kind==="surface"||observed.kind==="conversation";
+  return false;
+}
+function reviewComparablePromptText(value){
+  return String(value||"").replace(/\r\n?/g,"\n").trim();
+}
+async function reviewRecoverAwaitingResponsesFromPages(){
+  const recovered=[];
+  const waiting=reviewLedger.snapshot().filter(record=>record.status===DISPATCH_STATUS.AWAITING_RESPONSE);
+  for(const record of waiting){
+    const side=String(record.side||"").toUpperCase();
+    if(!SIDES.includes(side))continue;
+    if(Number(tabForSide(side))!==Number(record.tabId))continue;
+    const expectedPrompt=String(state.lastSentBySide?.[side]||"");
+    if(!expectedPrompt.trim())continue;
+    if(await reviewPayloadHash(side,expectedPrompt)!==String(record.payloadHash||""))continue;
+
+    let authority;
+    try{authority=await reviewRegisterSideAuthority(side);}catch(_){continue;}
+    if(
+      Number(authority.tabId)!==Number(record.tabId)||
+      Number(authority.generationEpoch)!==Number(record.generationEpoch)
+    )continue;
+
+    const expectedIdentity=record.conversationIdentity;
+    const authorityCompatible=expectedIdentity?.kind==="surface"
+      ? authority.identity?.provider===expectedIdentity.provider&&authority.identity?.writable===true&&["surface","conversation"].includes(authority.identity?.kind)
+      : reviewSameIdentity(authority.identity,expectedIdentity);
+    if(!authorityCompatible)continue;
+
+    let proof;
+    try{
+      proof=await chrome.tabs.sendMessage(Number(record.tabId),{type:"AI_BRIDGE_READ_LATEST_EXCHANGE"},{documentId:authority.documentId});
+    }catch(_){continue;}
+    if(
+      proof?.ok!==true||
+      proof.active===true||
+      proof.assistantAfterUser!==true||
+      String(proof.provider||"")!==String(authority.provider||"")
+    )continue;
+
+    const userText=String(proof.userText||"");
+    const assistantText=String(proof.assistantText||"").trim();
+    if(!assistantText||assistantText.length>400000||userText.length>400000)continue;
+    if(reviewComparablePromptText(userText)!==reviewComparablePromptText(expectedPrompt))continue;
+
+    let proofIdentity;
+    try{proofIdentity=reviewSanitizeIdentity(proof.identity);}catch(_){continue;}
+    if(!reviewSameIdentity(proofIdentity,authority.identity))continue;
+
+    const result=await reviewProcessIncomingEnvelope({
+      dispatchId:String(record.dispatchId),
+      side,
+      senderTabId:Number(record.tabId),
+      generationEpoch:Number(record.generationEpoch),
+      conversationIdentity:proofIdentity,
+      rolloverId:null,
+      text:assistantText,
+      artifacts:[],
+      completedAt:Date.now()
+    });
+    if(result?.durableResponseAccepted===true){
+      recovered.push(record.dispatchId);
+      appendLog({
+        time:Date.now(),
+        type:"recovery",
+        side,
+        dispatchId:record.dispatchId,
+        text:"Recovered completed provider response from the exact latest ChatGPT exchange without replaying the prompt."
+      });
+    }
+  }
+  return {recovered:recovered.length,dispatchIds:recovered};
+}
+
 async function reviewProcessIncomingEnvelope(envelope, { fromParked = false } = {}) {
   await reviewRuntimeReady;
   const dispatch = reviewLedger.get(envelope.dispatchId);
   if (!dispatch) return { ok: false, ignored: true, reason: "UNKNOWN_DISPATCH" };
+  if (dispatch.status === DISPATCH_STATUS.RESPONSE_COMMITTED) {
+    if (reviewResponseEnvelopeMatchesDispatch(dispatch,envelope)) {
+      return {ok:true,durableResponseAccepted:true,responseCommitted:true,alreadyCommitted:true};
+    }
+    return {ok:false,ignored:true,reason:"COMMITTED_RESPONSE_AUTHORITY_MISMATCH"};
+  }
   if (dispatch.status === DISPATCH_STATUS.DELIVERY_AMBIGUOUS) {
     return reviewPauseForAmbiguity("Delivery is ambiguous for dispatch " + dispatch.dispatchId + "; response progression is paused.");
   }
@@ -1122,7 +1213,7 @@ async function reviewProcessIncomingEnvelope(envelope, { fromParked = false } = 
         return reviewPauseForAmbiguity("Could not durably park an inbound provider response: " + parked.reason);
       }
     }
-    return { ok: false, parked: true, reason: "DOCUMENT_AUTHORITY_PENDING" };
+    return { ok: false, parked: true, durableResponseAccepted:true, reason: "DOCUMENT_AUTHORITY_PENDING" };
   }
 
   const gate = validateIncomingResponse({
@@ -1151,7 +1242,7 @@ async function reviewProcessIncomingEnvelope(envelope, { fromParked = false } = 
         return reviewPauseForAmbiguity("Could not park provider response: " + parked.reason);
       }
     }
-    return { ok: false, parked: true, reason: gate.reason };
+    return { ok: false, parked: true, durableResponseAccepted:true, reason: gate.reason };
   }
 
   if (!fromParked) {
@@ -1257,7 +1348,7 @@ async function reviewProcessIncomingEnvelope(envelope, { fromParked = false } = 
 
     if(state.updateCheckpoint?.phase===UPDATE_PHASE.DRAINING){
       const ready=await reviewCheckpointAtSafeBoundary();
-      if(ready?.ok)return {ok:true,updateCheckpointed:true,pending:Boolean(pending),checkpoint:ready.checkpoint};
+      if(ready?.ok)return {ok:true,durableResponseAccepted:true,responseCommitted:true,updateCheckpointed:true,pending:Boolean(pending),checkpoint:ready.checkpoint};
       if(!ready?.draining)return reviewPauseForAmbiguity("Update drain could not reach a safe checkpoint: "+(ready?.reason||"UNKNOWN"));
     }
 
@@ -1268,16 +1359,20 @@ async function reviewProcessIncomingEnvelope(envelope, { fromParked = false } = 
       state.runtimePhase="PROVIDER_RESPONSE_RECOVERED";
       state.pauseReason="Provider response recovered for AI "+envelope.side+". The response is committed and the next relay turn is durable. Press Resume to continue.";
       await saveState();
-      return {ok:true,providerRecovered:true,paused:true,pending:true};
+      return {ok:true,durableResponseAccepted:true,responseCommitted:true,providerRecovered:true,paused:true,pending:true};
     }
-    if (pending) return reviewContinueAfterCommittedResponse(envelope.side);
+    if (pending) {
+      const continuation=await reviewContinueAfterCommittedResponse(envelope.side);
+      return {...(continuation||{}),durableResponseAccepted:true,responseCommitted:true};
+    }
     state.runtimePhase = state.sessionActive
       ? (state.awaitingHuman || state.paused ? "PAUSED" : "AWAITING_PROVIDER_RESPONSE")
       : "IDLE";
     await saveState();
-    return stateResult;
+    return {...(stateResult||{}),durableResponseAccepted:true,responseCommitted:true};
   } catch (error) {
-    return reviewPauseForAmbiguity("Response commit was interrupted and cannot be replayed automatically: " + (error?.message || error));
+    const paused=await reviewPauseForAmbiguity("Response commit was interrupted and cannot be replayed automatically: " + (error?.message || error));
+    return {...paused,durableResponseAccepted:true,responseParked:true};
   }
 }
 async function reviewDrainParkedResponses(side) {
@@ -2487,6 +2582,7 @@ async function loadState() {
   if (state.sessionActive && state.running && updateAllowsOrdinaryRecovery) {
     try {
       await Promise.all(SIDES.map(side => reviewRegisterSideAuthority(side)));
+      await reviewRecoverAwaitingResponsesFromPages();
       if (state.nextTurnPending) {
         const recovered = await reviewRecoverNextTurnPending();
         if (recovered?.paused) {
@@ -5070,6 +5166,12 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
       state.pauseReason = "";
       await clearAttention();
       await saveState();
+
+      const recoveredAwaiting=await reviewRecoverAwaitingResponsesFromPages();
+      if(recoveredAwaiting.recovered>0){
+        sendResponse({ok:true,recoveredAwaitingResponses:recoveredAwaiting.recovered,dispatchIds:recoveredAwaiting.dispatchIds});
+        return;
+      }
 
       const activeRollovers = reviewActiveRolloverSummaries();
       if (activeRollovers.length) {

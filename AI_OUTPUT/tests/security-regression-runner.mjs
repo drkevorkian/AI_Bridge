@@ -50,6 +50,7 @@ const tests=[
   'round68-settings-updater-trust-diagnostics.mjs',
   'round69-trusted-fresh-chat-bootstrap.mjs',
   'round70-bounded-composer-mount.mjs',
+  'round71-response-handoff-recovery.mjs',
   'round42-content-runtime-lifecycle.mjs',
   'round43-next-turn-adoption.mjs',
   'round44-restart-delivery-recovery.mjs',

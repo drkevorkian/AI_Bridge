@@ -11,7 +11,7 @@ assert.ok(
   "ChatGPT composer authority must remain pinned to #prompt-textarea"
 );
 assert.ok(
-  contentJs.includes('send: Object.freeze(["button[data-testid=\'send-button\']","button[aria-label=\'Send prompt\']"])'),
+  contentJs.includes('send: Object.freeze(["button[data-testid=\'send-button\']","button[aria-label=\'Send prompt\']","button#composer-submit-button"])'),
   "ChatGPT Send authority must remain pinned to reviewed selectors"
 );
 
