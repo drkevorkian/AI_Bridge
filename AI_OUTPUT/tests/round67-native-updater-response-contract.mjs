@@ -21,8 +21,13 @@ for(const token of [
 assert.ok(bg.includes('algorithm!=="RSA-PKCS1-v1_5-SHA256"'));
 assert.ok(bg.includes('bits<minimumBits'));
 assert.ok(bg.includes('result.files.length<1||result.files.length>100'));
-assert.ok(bg.includes('path.includes("..")'));
-assert.equal(manifest.version_name,"1.19.1.28-AI-B");
+assert.ok(bg.includes("REVIEW_NATIVE_UPDATER_ALLOWED_FILES=new Set(["),"runtime updater file allowlist missing");
+assert.ok(bg.includes("function reviewNativeUpdaterRuntimePath(value)"),"runtime updater path validator missing");
+assert.ok(bg.includes('parts.some(part=>!part||part==="."||part==="..")'),"unsafe relative path segments must be rejected");
+assert.ok(bg.includes('REVIEW_NATIVE_UPDATER_ALLOWED_FILES.has(path)'),"APPLY response files must stay inside the runtime allowlist");
+assert.ok(bg.includes('/^[A-Za-z]:/.test(path)'),"drive-relative path syntax must be rejected");
+assert.equal(manifest.name,"AI Bridge Review");
+assert.equal(manifest.version,"1.19.1");
 
 const applyStart=bg.indexOf('if(op==="APPLY"){');
 const sendStart=bg.indexOf('async function reviewSendNativeUpdater');
