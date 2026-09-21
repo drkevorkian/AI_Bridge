@@ -181,9 +181,14 @@ Still intentionally gated:
 
 - pin the human-approved production RSA release public key;
 - generate and sign the production root `update-manifest.json`;
-- expose the reviewed native updater state machine in Settings;
 - promote the reviewed updater into AI_INPUT for human testing;
 - promote to the root extension only after human acceptance.
+
+The AI_OUTPUT Settings page now exposes the reviewed high-level updater flow:
+native-host PING, signed CHECK, durable PREPARE, CHECKPOINTED-only APPLY, and
+CANCEL. It renders host/trust/checkpoint readiness without collecting repository,
+ref, filesystem-path, release-key, or checkpoint authority from the user. The
+legacy ZIP download remains visually separated as a manual fallback.
 
 Until the production release public key is pinned, `CHECK` and `APPLY` fail
 closed. `PING` remains available so Settings can distinguish "native host not
@@ -215,7 +220,10 @@ The review implementation now includes:
 - no message-controlled repository, ref, URL, or filesystem path;
 - service-worker-only `chrome.runtime.sendNativeMessage()` calls;
 - `APPLY` allowed only after the durable update checkpoint reaches
-  `CHECKPOINTED`.
+  `CHECKPOINTED`;
+- native APPLY is bound to the checkpointed expected version/build and rejects a
+  newly fetched signed manifest if that target changed after CHECK, before any
+  live extension file is replaced.
 
 Windows uses a generated `.bat` launcher, matching Chromium's documented
 native-messaging sample pattern. macOS/Linux use an executable shell launcher.

@@ -23,5 +23,8 @@ assert.ok(host.indexOf('"release_verification": _release_verification_status()')
 assert.doesNotMatch(host,/release_verification.*PINNED_RELEASE_RSA_N_HEX/s);
 assert.ok(readme.includes("host connected but release verification not configured"));
 assert.ok(readme.includes("CHECK")&&readme.includes("APPLY")&&readme.includes("fail"));
+assert.doesNotMatch(readme,/expose the reviewed native updater state machine in Settings/);
+assert.ok(readme.includes("native-host PING, signed CHECK, durable PREPARE, CHECKPOINTED-only APPLY"));
+assert.ok(readme.includes("native APPLY is bound to the checkpointed expected version/build"));
 assert.equal(manifest.name,"AI Bridge Review");\nassert.equal(manifest.version,"1.19.1");\nassert.ok(manifest.permissions.includes("nativeMessaging"));
 console.log("round63-native-updater-trust-status: PASS");
