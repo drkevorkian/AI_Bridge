@@ -8,20 +8,24 @@ const review=path.join(here,"../runtime_review");
 const dashboard=fs.readFileSync(path.join(review,"dashboard.js"),"utf8");
 const background=fs.readFileSync(path.join(review,"background.js"),"utf8");
 
-const summaryStart=dashboard.indexOf("function activeTabBindingSummary()");
-const validateStart=dashboard.indexOf("function validateActiveTabs",summaryStart);
+const statusStart=dashboard.indexOf("function activeBindingStatus()");
+const manualReadyStart=dashboard.indexOf("function manualFreshTabReady",statusStart);
+const validateStart=dashboard.indexOf("function validateActiveTabs",manualReadyStart);
 const relayStart=dashboard.indexOf("let manualRelaySource",validateStart);
-assert.ok(summaryStart>=0&&validateStart>summaryStart&&relayStart>validateStart,"shared active-tab binding helpers missing");
-const bindingHelpers=dashboard.slice(summaryStart,relayStart);
+assert.ok(statusStart>=0&&manualReadyStart>statusStart&&validateStart>manualReadyStart&&relayStart>validateStart,
+  "shared active-tab binding helpers missing");
+const bindingHelpers=dashboard.slice(statusStart,relayStart);
 
 for(const token of [
-  "tabsById.has(tabId)",
-  "const duplicateTabIds = new Set(",
-  "allOpen: bindings.every(binding => binding.open)",
-  "allDistinct: duplicateTabIds.size === 0",
-  "function manualFreshTabReady(side, summary = activeTabBindingSummary())",
-  "!summary.duplicateTabIds.has(binding.tabId)",
-  "function validateActiveTabs(summary = activeTabBindingSummary())"
+  "const missingSides = bindings",
+  "const ownersByTab = new Map();",
+  "const duplicateTabs = new Set(",
+  "const duplicateSides = new Set(",
+  "valid: missingSides.length === 0 && duplicateTabs.size === 0",
+  "function manualFreshTabReady(side, status = activeBindingStatus())",
+  "!status.missingSides.includes(side)",
+  "!status.duplicateSides.has(side)",
+  "function validateActiveTabs(status = activeBindingStatus())"
 ]) assert.ok(bindingHelpers.includes(token),"binding helper contract missing "+token);
 
 const freshStart=dashboard.indexOf("async function openFreshChats(rawSides)");
@@ -29,8 +33,9 @@ const freshEnd=dashboard.indexOf("async function clearHistory",freshStart);
 assert.ok(freshStart>=0&&freshEnd>freshStart,"manual fresh-chat implementation missing");
 const fresh=dashboard.slice(freshStart,freshEnd);
 for(const token of [
-  "const bindingSummary = activeTabBindingSummary();",
-  "const unavailable = requested.filter(side => !manualFreshTabReady(side, bindingSummary));",
+  "const bindingStatus = activeBindingStatus();",
+  "const unavailable = requested.filter(side => !manualFreshTabReady(side, bindingStatus));",
+  "bindingStatus.duplicateSides.has(side)",
   "Each logical AI must use a different browser tab before opening a fresh chat.",
   'type: "AI_BRIDGE_NEW_CHATS"',
   "sides: requested,",
@@ -42,11 +47,19 @@ const controlsEnd=dashboard.indexOf("function runtimePhaseLabel",controlsStart);
 assert.ok(controlsStart>=0&&controlsEnd>controlsStart,"control-state block missing");
 const controls=dashboard.slice(controlsStart,controlsEnd);
 for(const token of [
-  "const bindingSummary = activeTabBindingSummary();",
-  "const activeTabsValid = validateActiveTabs(bindingSummary) === null;",
-  "const manualTabReady = manualFreshTabReady(side, bindingSummary);",
+  "const bindingStatus = activeBindingStatus();",
+  "const activeTabsValid = bindingStatus.valid;",
+  "const manualTabReady = manualFreshTabReady(side, bindingStatus);",
+  '$("newAllChats").disabled = !manualFreshAllowed || !activeTabsValid;',
+  '$("freshOnStart").disabled = !manualFreshAllowed || !activeTabsValid;',
   '$(`newChat${side}`).disabled = !manualFreshAllowed || !manualTabReady;'
 ]) assert.ok(controls.includes(token),"manual fresh-chat control policy missing "+token);
+
+assert.doesNotMatch(
+  controls,
+  /newChat\$\{side\}.*!bindingStatus\.valid/,
+  "individual New Chat must not depend on whole-roster validity"
+);
 
 const listener=background.indexOf("chrome.runtime.onMessage.addListener");
 const gate=background.indexOf("reviewUiControlSenderAllowed(msg,sender)",listener);
