@@ -3491,7 +3491,7 @@ async function sendToSide(side, text, { record = true, deliveredSeq = null, deli
       tabId,
       generationEpoch: authority.generationEpoch,
       conversationIdentity: authority.identity,
-      purpose: initialSurfaceBootstrap ? "INITIAL" : (verifiedFreshSurfaceRelay ? "RECOVERY_RELAY" : "RELAY"),
+      purpose: initialSurfaceBootstrap ? "INITIAL" : "RELAY",
       payloadHash,
       continuationSourceDispatchId: continuationSourceDispatchId == null ? null : String(continuationSourceDispatchId),
       createdAt: Date.now()
