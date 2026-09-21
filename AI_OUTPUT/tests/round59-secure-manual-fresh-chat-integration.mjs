@@ -19,6 +19,9 @@ for(const token of [
   "sides: requested,",
   "...selectedBindings()",
   "latestState?.sessionActive",
+  "const bindingSummary = activeTabBindingSummary();",
+  "const unavailable = requested.filter(side => !manualFreshTabReady(side, bindingSummary));",
+  "Each logical AI must use a different browser tab before opening a fresh chat.",
   "Stop the current Bridge session before opening fresh AI chats manually.",
   "Fresh chat verified for"
 ]) assert.ok(openFresh.includes(token),"manual fresh-chat UI path missing "+token);
@@ -35,10 +38,11 @@ assert.ok(controlsStart>=0&&controlsEnd>controlsStart,"updateControls block miss
 const controls=dashboard.slice(controlsStart,controlsEnd);
 for(const token of [
   "const manualFreshAllowed = !s.sessionActive;",
-  "const activeTabsValid = validateActiveTabs() === null;",
+  "const bindingSummary = activeTabBindingSummary();",
+  "const activeTabsValid = validateActiveTabs(bindingSummary) === null;",
   '$("newAllChats").disabled = !manualFreshAllowed || !activeTabsValid;',
   '$("freshOnStart").disabled = !manualFreshAllowed || !activeTabsValid;',
-  "const manualTabReady = Number.isInteger(tabId) && tabId > 0 && tabsById.has(tabId);",
+  "const manualTabReady = manualFreshTabReady(side, bindingSummary);",
   '$(`newChat${side}`).disabled = !manualFreshAllowed || !manualTabReady;'
 ]) assert.ok(controls.includes(token),"manual fresh-chat control policy missing "+token);
 
