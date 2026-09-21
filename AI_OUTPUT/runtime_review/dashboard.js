@@ -1191,7 +1191,8 @@ $("readResponseStart").addEventListener("click", async () => {
     });
     if (!res?.ok) throw new Error(res?.error || "Recovery start failed");
     const routed = res.targetSide ? ` Next AI: ${res.targetSide}.` : "";
-    $("readResponseStartStatus").textContent = `Recovered AI ${sourceSide}'s completed response.${routed} Automatic Bridge operation has restarted.`;
+    const replayed = res.replayedCommitted ? " The response was already committed, so only its previously failed handoff was replayed." : "";
+    $("readResponseStartStatus").textContent = `Recovered AI ${sourceSide}'s completed response.${replayed}${routed} Automatic Bridge operation has restarted.`;
     await refreshState();
   } catch (err) {
     $("readResponseStartStatus").textContent = `Recovery start failed: ${err.message}`;
