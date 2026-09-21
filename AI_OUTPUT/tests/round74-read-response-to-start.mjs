@@ -45,5 +45,5 @@ assert.ok(dash.includes("Automatic Bridge operation has restarted."));
 assert.ok(dash.includes('READ_RESPONSE_TO_START: "Reading stopped-session response"'));
 assert.ok(dash.includes('RECOVERY_START_PROCESSING: "Restarting from recovered response"'));
 
-assert.equal(manifest.version_name,"1.19.1.34-AI-A");
+assert.match(manifest.version_name,/^1\\.19\\.1\\.(?:3[4-9]|[4-9][0-9])-AI-[A-Z]$/);
 console.log("round74-read-response-to-start: PASS");

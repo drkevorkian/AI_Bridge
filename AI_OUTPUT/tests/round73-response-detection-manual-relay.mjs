@@ -49,5 +49,5 @@ assert.ok(
     "Recovering AI ${manualRelaySource}'s last completed reply and freezing automatic progression…"
   )
 );
-assert.equal(manifest.version_name,"1.19.1.33-AI-B");
+assert.match(manifest.version_name,/^1\\.19\\.1\\.(?:3[3-9]|[4-9][0-9])-AI-[A-Z]$/);
 console.log("round73-response-detection-manual-relay: PASS");

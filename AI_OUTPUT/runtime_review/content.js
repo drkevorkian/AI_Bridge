@@ -64,9 +64,20 @@
       response: Object.freeze(["[data-message-author-role='assistant'] .markdown","[data-message-author-role='assistant']"])
     }),
     grok: Object.freeze({
-      composer: Object.freeze(["textarea[placeholder*='Ask']","div[contenteditable='true'][aria-label*='Grok']"]),
-      send: Object.freeze(["button[aria-label='Send message']"]),
-      response: Object.freeze(["[data-testid='message-text']"])
+      composer: Object.freeze([
+        "div.ProseMirror[data-testid='chat-input'][contenteditable='true'][role='textbox']",
+        "[data-testid='chat-input'] div.ProseMirror[contenteditable='true'][role='textbox']",
+        "div.ProseMirror[contenteditable='true'][role='textbox'][aria-label*='Grok']",
+        "textarea[placeholder*='Ask']",
+        "div[contenteditable='true'][aria-label*='Grok']"
+      ]),
+      send: Object.freeze([
+        "button[data-testid='send-button']",
+        "button[aria-label='Send message']",
+        "button[aria-label='Send']",
+        "button[aria-label='Submit']"
+      ]),
+      response: Object.freeze(["[data-testid='assistant-message']","[data-testid='message-text']"])
     }),
     gemini: Object.freeze({
       composer: Object.freeze(["rich-textarea div[contenteditable='true']"]),
@@ -141,6 +152,53 @@
       matched:matched.size,
       visible:visibleNodes.size,
       enabled:enabledNodes.size
+    });
+  }
+  function grokComposerSubmissionForm(composer){
+    if(provider!=="grok" || !composer?.isConnected) return null;
+    const chatInput=composer.closest?.("[data-testid='chat-input']")||null;
+    if(!chatInput || !chatInput.contains(composer)) return null;
+    const form=composer.closest?.("form")||null;
+    if(!form || !form.contains(chatInput)) return null;
+    return form;
+  }
+  function resolveTrustedSend(composer,{requireEnabled=false}={}){
+    const semantic=resolveTrusted(config.send,{requireEnabled});
+    if(semantic) return Object.freeze({kind:"button",node:semantic,form:null});
+
+    // Grok changes localized/accessible labels frequently. Permit one narrowly
+    // scoped structural fallback only inside the exact verified chat-input form.
+    // A generic page-wide submit button never gains SEND authority.
+    const form=grokComposerSubmissionForm(composer);
+    if(!form) return null;
+    let submits=[];
+    try{
+      submits=[...form.querySelectorAll("button[type='submit']")]
+        .filter(node=>requireEnabled?enabled(node):visible(node));
+    }catch(_){ submits=[]; }
+    if(submits.length===1) return Object.freeze({kind:"button",node:submits[0],form});
+    if(submits.length===0 && typeof form.requestSubmit==="function"){
+      return Object.freeze({kind:"requestSubmit",node:null,form});
+    }
+    return null;
+  }
+  function trustedSendStats(composer){
+    const semantic=trustedSelectorStats(config.send);
+    const form=grokComposerSubmissionForm(composer);
+    let scopedMatched=0,scopedVisible=0,scopedEnabled=0;
+    if(form){
+      let nodes=[];
+      try{nodes=[...form.querySelectorAll("button[type='submit']")];}catch(_){}
+      scopedMatched=nodes.length;
+      scopedVisible=nodes.filter(visible).length;
+      scopedEnabled=nodes.filter(enabled).length;
+    }
+    return Object.freeze({
+      ...semantic,
+      scopedSubmitMatched:scopedMatched,
+      scopedSubmitVisible:scopedVisible,
+      scopedSubmitEnabled:scopedEnabled,
+      requestSubmit:Boolean(form&&typeof form.requestSubmit==="function")
     });
   }
   function routeIdentity(){
@@ -287,23 +345,23 @@
     // Security boundary, phase 2: after draft insertion, require one unique,
     // visible, enabled Send element matching only the pinned trusted selectors.
     // This covers providers that create/enable Send asynchronously.
-    let send=null;
+    let sendAction=null;
     for(let i=0;i<80;i++){
       await sleep(i===0?120:100);
       const composerNow=resolveTrusted(config.composer);
       if(composerNow!==composer2 || !composer2?.isConnected) {
         return rememberCommand(command,reject(command,"DOM_AUTHORITY_CHANGED","COMPOSER"));
       }
-      const candidate=resolveTrusted(config.send,{requireEnabled:true});
+      const candidate=resolveTrustedSend(composer2,{requireEnabled:true});
       if(candidate){
-        send=candidate;
+        sendAction=candidate;
         break;
       }
     }
-    if(!send){
-      const stats=trustedSelectorStats(config.send);
+    if(!sendAction){
+      const stats=trustedSendStats(composer2);
       const composerChars=getComposerText(composer2).length;
-      const detail=`SEND provider=${provider}; composerChars=${composerChars}; matched=${stats.matched}; visible=${stats.visible}; enabled=${stats.enabled}`;
+      const detail=`SEND provider=${provider}; composerChars=${composerChars}; matched=${stats.matched}; visible=${stats.visible}; enabled=${stats.enabled}; scopedSubmitMatched=${stats.scopedSubmitMatched}; scopedSubmitVisible=${stats.scopedSubmitVisible}; scopedSubmitEnabled=${stats.scopedSubmitEnabled}; requestSubmit=${stats.requestSubmit?1:0}`;
       return rememberCommand(command,reject(command,"DOM_AUTHORITY_NOT_ACTIONABLE",detail));
     }
 
@@ -313,8 +371,15 @@
       return rememberCommand(command,reject(command,"STALE_CONVERSATION_AUTHORITY"));
     }
 
-    const sendAgain=resolveTrusted(config.send,{requireEnabled:true});
-    if(sendAgain!==send || !sendAgain?.isConnected) {
+    const sendAgain=resolveTrustedSend(composer2,{requireEnabled:true});
+    const sameSendAction=Boolean(
+      sendAgain &&
+      sendAgain.kind===sendAction.kind &&
+      sendAgain.node===sendAction.node &&
+      sendAgain.form===sendAction.form &&
+      (!sendAgain.node || sendAgain.node.isConnected)
+    );
+    if(!sameSendAction) {
       return rememberCommand(command,reject(command,"DOM_AUTHORITY_CHANGED","SEND"));
     }
 
@@ -329,7 +394,14 @@
     lastObserved="";
     lastObservedNode=null;
     lastChangedAt=Date.now();
-    sendAgain.click();
+    if(sendAgain.kind==="button"){
+      sendAgain.node.click();
+    }else{
+      // Current Grok can omit a stable Send-button identity while retaining the
+      // exact chat form. requestSubmit invokes that verified form's native
+      // submit path without broadening authority to unrelated page controls.
+      sendAgain.form.requestSubmit();
+    }
     awaitingDispatchId=command.authorityId;
     awaitingResponseContext=Object.freeze({
       dispatchId:String(command.authorityId),
