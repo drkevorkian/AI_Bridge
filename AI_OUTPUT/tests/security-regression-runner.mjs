@@ -31,6 +31,8 @@ const tests=[
   'round52-rollover-pre-navigation-integrity.mjs',
   'round57-manual-new-chat-sender-authority.mjs',
   'round58-ui-control-plane-authority.mjs',
+  'round59-manual-fresh-chat-binding-consistency.mjs',
+  'round60-chatgpt-prosemirror-send-actionability.mjs',
   'round59-secure-manual-fresh-chat-integration.mjs',
   'round60-manual-fresh-chat-full-roster-bindings.mjs',
   'round61-manual-fresh-chat-binding-parity.mjs',

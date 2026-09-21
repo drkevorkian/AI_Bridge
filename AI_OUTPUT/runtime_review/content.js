@@ -159,10 +159,45 @@
       return;
     }
     if(node.isContentEditable){
+      const value=String(text);
+      let inserted=false;
+
+      // ChatGPT's #prompt-textarea is a ProseMirror contenteditable editor.
+      // Direct DOM replacement can make text visible without advancing the
+      // editor's internal state, leaving Send disabled. Prefer Chromium's
+      // native editing pipeline so the provider receives a real edit
+      // transaction for the already-proven trusted composer.
+      try{
+        const selection=window.getSelection();
+        if(selection){
+          const range=document.createRange();
+          range.selectNodeContents(node);
+          selection.removeAllRanges();
+          selection.addRange(range);
+        }
+        const insertSupported=typeof document.queryCommandSupported!=="function" ||
+          document.queryCommandSupported("insertText");
+        if(insertSupported && typeof document.execCommand==="function"){
+          inserted=document.execCommand("insertText",false,value)===true;
+        }
+      }catch(_){ inserted=false; }
+
+      if(inserted && getComposerText(node).trim()===value.trim()) return;
+
+      // Bounded compatibility fallback for providers/browsers where the native
+      // editing command is unavailable. performSend still refuses to click
+      // until the pinned Send authority becomes uniquely actionable.
       node.replaceChildren();
-      const lines=String(text).split("\n");
+      const lines=value.split("\n");
       lines.forEach((line,index)=>{if(index)node.appendChild(document.createElement("br"));node.appendChild(document.createTextNode(line));});
-      node.dispatchEvent(new InputEvent("input",{bubbles:true,inputType:"insertText",data:text}));
+      node.dispatchEvent(new InputEvent("input",{
+        bubbles:true,
+        cancelable:true,
+        composed:true,
+        inputType:"insertText",
+        data:value
+      }));
+      node.dispatchEvent(new Event("change",{bubbles:true,composed:true}));
       return;
     }
     throw new Error("TRUSTED_COMPOSER_NOT_EDITABLE");

@@ -19,6 +19,9 @@ for(const token of [
   "sides: requested,",
   "...selectedBindings()",
   "latestState?.sessionActive",
+  "const bindingSummary = activeTabBindingSummary();",
+  "const unavailable = requested.filter(side => !manualFreshTabReady(side, bindingSummary));",
+  "Each logical AI must use a different browser tab before opening a fresh chat.",
   "Stop the current Bridge session before opening fresh AI chats manually.",
   "Fresh chat verified for"
 ]) assert.ok(openFresh.includes(token),"manual fresh-chat UI path missing "+token);
