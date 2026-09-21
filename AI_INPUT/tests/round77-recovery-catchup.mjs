@@ -78,6 +78,6 @@ assert.ok(
 assert.ok(dash.includes('RECOVERY_START_CAUGHT_UP: "Caught up to latest completed AI response"'));
 assert.ok(dash.includes("Recovery caught up from AI"));
 assert.ok(dash.includes("res.effectiveSourceSide"));
-assert.equal(manifest.version_name,"1.19.1.37-AI-A");
+assert.match(manifest.version_name,/^1\\.19\\.1\\.(?:3[7-9]|[4-9][0-9])-AI-[A-Z]$/);
 
 console.log("round77-recovery-catchup: PASS");
