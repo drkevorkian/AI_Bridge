@@ -32,6 +32,14 @@ assert.doesNotMatch(
 );
 assert.ok(bg.includes("recoveredDispatchId:recovered.dispatchId"));
 
+// Direct Mesh routing must remain downstream of the response commit path.
+assert.ok(bg.includes("function extractRegisteredLlmCommand(text, fromSide)"));
+assert.ok(bg.includes("const command = extractRegisteredLlmCommand(text, side);"));
+assert.ok(bg.includes("const targetSide = command?.targetSide || nextSide(side);"));
+assert.ok(bg.includes("directTurnMessage(side, targetSide, entry)"));
+assert.ok(bg.includes("DIRECT-MESH COMMAND PROTOCOL:"));
+assert.ok(bg.includes("SEND TO: AI "));
+
 assert.doesNotMatch(
   dash,
   /\$\("forceRelayBtn"\)\.disabled = !s\.sessionActive \|\| s\.running/
