@@ -816,6 +816,7 @@ function runtimePhaseLabel(raw) {
     PROVIDER_RESPONSE_RECOVERED: "Provider response recovered",
     READ_RESPONSE_TO_START: "Reading stopped-session response",
     RECOVERY_START_PROCESSING: "Restarting from recovered response",
+    RECOVERY_START_CAUGHT_UP: "Caught up to latest completed AI response",
     RECOVERY_START_REPLAYING_FAILED_HANDOFF: "Replaying previously failed recovery handoff",
     THREAD_ROLLOVER_CONTINUITY_DISPATCHING: "Sending continuation context",
     THREAD_ROLLOVER_AWAITING_CONTINUITY_RESPONSE: "Awaiting continuation response",
@@ -1192,8 +1193,11 @@ $("readResponseStart").addEventListener("click", async () => {
     });
     if (!res?.ok) throw new Error(res?.error || "Recovery start failed");
     const routed = res.targetSide ? ` Next AI: ${res.targetSide}.` : "";
-    const replayed = res.replayedCommitted ? " The response was already committed, so only its previously failed handoff was replayed." : "";
-    $("readResponseStartStatus").textContent = `Recovered AI ${sourceSide}'s completed response.${replayed}${routed} Automatic Bridge operation has restarted.`;
+    const effective = res.effectiveSourceSide && res.effectiveSourceSide !== sourceSide
+      ? ` Recovery caught up from AI ${sourceSide} to AI ${res.effectiveSourceSide} because downstream completed responses proved the earlier handoff(s) succeeded.`
+      : "";
+    const replayed = res.replayedCommitted ? " Only the unresolved downstream handoff was replayed; committed responses were not duplicated." : "";
+    $("readResponseStartStatus").textContent = `Recovered AI ${sourceSide}'s completed response.${effective}${replayed}${routed} Automatic Bridge operation has restarted.`;
     await refreshState();
   } catch (err) {
     $("readResponseStartStatus").textContent = `Recovery start failed: ${err.message}`;
