@@ -1518,6 +1518,90 @@ async function reviewInitialSurfaceBootstrapAllowed(side, authority) {
   return String(tab?.url || "") === canonical;
 }
 
+
+async function reviewVerifiedFreshSurfaceRelayAllowed(side, authority, {
+  continuationSourceDispatchId = null,
+  recoveryStart = false
+} = {}) {
+  const normalizedSide=String(side||"").toUpperCase();
+  if(
+    !state.sessionActive ||
+    !state.running ||
+    !SIDES.includes(normalizedSide) ||
+    !authority ||
+    String(authority.side||"").toUpperCase()!==normalizedSide ||
+    state.currentSide!==normalizedSide
+  ) return false;
+
+  if(
+    authority.identity?.kind!=="surface" ||
+    authority.identity?.provisional!==true ||
+    authority.identity?.writable!==true ||
+    Number(authority.tabId)!==Number(tabForSide(normalizedSide))
+  ) return false;
+
+  const activeRollover=reviewRollover.get(normalizedSide);
+  if(activeRollover && !["COMPLETE","FAILED"].includes(activeRollover.phase)) return false;
+
+  const activeTargetDispatch=reviewLedger.snapshot().find(record =>
+    record.side===normalizedSide &&
+    [
+      DISPATCH_STATUS.CREATED,
+      DISPATCH_STATUS.DISPATCHING,
+      DISPATCH_STATUS.ACCEPTED,
+      DISPATCH_STATUS.AWAITING_RESPONSE,
+      DISPATCH_STATUS.DELIVERY_AMBIGUOUS
+    ].includes(record.status)
+  );
+  if(activeTargetDispatch) return false;
+
+  const durable=reviewAuthorityEpochs[normalizedSide];
+  if(
+    !durable ||
+    Number(durable.tabId)!==Number(authority.tabId) ||
+    Number(durable.generationEpoch)!==Number(authority.generationEpoch) ||
+    String(durable.provider||"")!==String(authority.provider||"") ||
+    !reviewSameIdentity(durable.identity,authority.identity)
+  ) return false;
+
+  let tab;
+  try{tab=await chrome.tabs.get(Number(authority.tabId));}
+  catch(_){return false;}
+  if(reviewProviderFromUrl(tab?.url)!==authority.provider) return false;
+  if(String(tab?.pendingUrl||"")) return false;
+
+  let canonical;
+  try{canonical=reviewCanonicalRolloverFreshUrl(authority.provider);}
+  catch(_){return false;}
+  if(String(tab?.url||"")!==canonical) return false;
+
+  if(continuationSourceDispatchId!=null){
+    const sourceId=String(continuationSourceDispatchId);
+    const pending=state.nextTurnPending;
+    const source=reviewLedger.get(sourceId);
+    return Boolean(
+      pending &&
+      pending.kind==="SEQUENTIAL_SEND" &&
+      String(pending.sourceDispatchId||"")===sourceId &&
+      pending.targetSide===normalizedSide &&
+      source?.status===DISPATCH_STATUS.RESPONSE_COMMITTED
+    );
+  }
+
+  if(recoveryStart){
+    return Boolean(
+      state.nextTurnPending==null &&
+      [
+        "RECOVERY_START_PROCESSING",
+        "RECOVERY_START_CAUGHT_UP",
+        "RECOVERY_START_REPLAYING_FAILED_HANDOFF"
+      ].includes(String(state.runtimePhase||""))
+    );
+  }
+
+  return false;
+}
+
 async function reviewRegisterSideAuthority(side) {
   const tabId = Number(tabForSide(side));
   if (!Number.isInteger(tabId) || tabId <= 0) throw new Error("No tab is assigned to this AI.");
@@ -3351,7 +3435,7 @@ async function ensureTabListener(tabId) {
   throw new Error("The page listener could not be established after reinjection.");
 }
 
-async function sendToSide(side, text, { record = true, deliveredSeq = null, deliveredSources = false, artifactIds = [], artifacts = [], mainInterjectionIds = [], saveRecord = true, continuationSourceDispatchId = null } = {}) {
+async function sendToSide(side, text, { record = true, deliveredSeq = null, deliveredSources = false, artifactIds = [], artifacts = [], mainInterjectionIds = [], saveRecord = true, continuationSourceDispatchId = null, allowRecoverySurface = false } = {}) {
   await reviewRuntimeReady;
   if(blocksDispatch(state.updateCheckpoint))throw new Error("UPDATE_CHECKPOINT_BLOCKS_NEW_DISPATCH");
   const tabId = Number(tabForSide(side));
@@ -3368,8 +3452,14 @@ async function sendToSide(side, text, { record = true, deliveredSeq = null, deli
   const initialSurfaceBootstrap = confirmedConversation
     ? false
     : await reviewInitialSurfaceBootstrapAllowed(side, authority);
-  if (!confirmedConversation && !initialSurfaceBootstrap) {
-    throw new Error("Confirmed writable conversation authority is required before relay. A provisional surface is allowed only for a verified first-dispatch fresh-chat bootstrap.");
+  const verifiedFreshSurfaceRelay = (confirmedConversation || initialSurfaceBootstrap)
+    ? false
+    : await reviewVerifiedFreshSurfaceRelayAllowed(side, authority, {
+        continuationSourceDispatchId,
+        recoveryStart: Boolean(allowRecoverySurface)
+      });
+  if (!confirmedConversation && !initialSurfaceBootstrap && !verifiedFreshSurfaceRelay) {
+    throw new Error("Confirmed writable conversation authority is required before relay. A provisional surface is allowed only for a verified initial bootstrap or a re-proven recovery/continuation fresh-chat handoff.");
   }
 
   const payloadHash = await reviewPayloadHash(side, text);
@@ -4668,7 +4758,7 @@ async function handleBatchCompletedResponse(side, text, { relay = true, artifact
   return { ok: true, ...transition };
 }
 
-async function handleCompletedResponse(side, text, { relay = true, artifacts = [], completedAt = null } = {}) {
+async function handleCompletedResponse(side, text, { relay = true, artifacts = [], completedAt = null, allowRecoverySurface = false } = {}) {
   if (isBatchWorkMode()) return handleBatchCompletedResponse(side, text, { relay, artifacts, completedAt });
   if (!side || side !== state.currentSide) return { ok: false, ignored: true };
   if (!text) return { ok: false, ignored: true };
@@ -4742,7 +4832,7 @@ async function handleCompletedResponse(side, text, { relay = true, artifacts = [
     ? directTurnMessage(side, targetSide, entry)
     : normalTurnMessage(targetSide);
   try {
-    await sendToSide(targetSide, outgoing.text, { deliveredSeq: outgoing.deliveredSeq, deliveredSources: outgoing.deliveredSources, artifactIds: outgoing.artifactIds, artifacts: outgoing.artifacts, mainInterjectionIds: outgoing.mainInterjectionIds || [] });
+    await sendToSide(targetSide, outgoing.text, { deliveredSeq: outgoing.deliveredSeq, deliveredSources: outgoing.deliveredSources, artifactIds: outgoing.artifactIds, artifacts: outgoing.artifacts, mainInterjectionIds: outgoing.mainInterjectionIds || [], allowRecoverySurface });
     return { ok: true, direct: Boolean(command?.targetSide), targetSide };
   } catch (err) {
     await pauseBridge(`Could not send to AI ${targetSide}: ${err.message}`);
@@ -4953,6 +5043,10 @@ async function reviewResolveCommittedRecoveryStep(sourceSide,recoveredText){
     };
   }
 
+  const freshSurfaceNoDispatch=Boolean(
+    targetProbe.freshSurface &&
+    matching.length===0
+  );
   const ambiguousFreshSurface=Boolean(
     targetProbe.freshSurface &&
     unsafe.length>0 &&
@@ -4974,7 +5068,7 @@ async function reviewResolveCommittedRecoveryStep(sourceSide,recoveredText){
       String(record.failureReason||"")!=="HARD_THREAD_LIMIT_REJECTED_BY_PROVIDER") ||
     (ambiguousFreshSurface && record.status===DISPATCH_STATUS.DELIVERY_AMBIGUOUS)
   );
-  if(!retrySafe.length){
+  if(!retrySafe.length && !freshSurfaceNoDispatch){
     throw new Error("RECOVERY_START_DUPLICATE_RESPONSE_NO_PROVEN_FAILED_HANDOFF");
   }
 
@@ -4986,7 +5080,9 @@ async function reviewResolveCommittedRecoveryStep(sourceSide,recoveredText){
     entry,
     outgoing,
     payloadHash,
-    evidence:ambiguousFreshSurface?"TARGET_STILL_FRESH_SURFACE":"PRE_ACTION_FAILURE",
+    evidence:freshSurfaceNoDispatch
+      ? "TARGET_STILL_FRESH_NO_DISPATCH"
+      : (ambiguousFreshSurface?"TARGET_STILL_FRESH_SURFACE":"PRE_ACTION_FAILURE"),
     priorDispatchIds:retrySafe.map(record=>String(record.dispatchId)),
     priorFailureReasons:retrySafe.map(record=>String(record.failureReason||record.status))
   };
@@ -5559,7 +5655,8 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
               deliveredSources:replayPlan.outgoing.deliveredSources,
               artifactIds:replayPlan.outgoing.artifactIds||[],
               artifacts:replayPlan.outgoing.artifacts||[],
-              mainInterjectionIds:replayPlan.outgoing.mainInterjectionIds||[]
+              mainInterjectionIds:replayPlan.outgoing.mainInterjectionIds||[],
+              allowRecoverySurface:true
             });
             replayResult={ok:true};
           }catch(error){
@@ -5606,7 +5703,8 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
         const result=await handleCompletedResponse(effectiveSourceSide,recovered.text,{
           relay:true,
           artifacts:[],
-          completedAt:Date.now()
+          completedAt:Date.now(),
+          allowRecoverySurface:true
         });
 
         sendResponse({
