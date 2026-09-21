@@ -1336,7 +1336,6 @@ function reviewInvalidateAuthorityForTab(tabId) {
 function reviewPendingSurfaceDispatchForSide(side) {
   const normalizedSide = String(side || "").toUpperCase();
   const activeStatuses = new Set([
-    DISPATCH_STATUS.CREATED,
     DISPATCH_STATUS.DISPATCHING,
     DISPATCH_STATUS.ACCEPTED,
     DISPATCH_STATUS.AWAITING_RESPONSE
@@ -1365,6 +1364,9 @@ async function reviewInitialSurfaceBootstrapAllowed(side, authority) {
   const activeRollover = reviewRollover.get(normalizedSide);
   if (activeRollover && !["COMPLETE", "FAILED"].includes(activeRollover.phase)) return false;
   if (String(state.lastSentBySide?.[normalizedSide] || "").trim()) return false;
+  if (Array.isArray(state.transcript) && state.transcript.some(entry =>
+    entry?.type === "response" && String(entry?.side || "").toUpperCase() === normalizedSide
+  )) return false;
 
   const priorDispatches = reviewLedger.snapshot().filter(record => record.side === normalizedSide);
   if (priorDispatches.some(record =>
