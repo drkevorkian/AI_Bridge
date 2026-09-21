@@ -40,6 +40,7 @@ const tests=[
   'round56-pending-navigation-commit-barrier.mjs',
   'update-system-atomic.mjs',
   'round62-native-messaging-updater.mjs',
+  'round63-native-updater-trust-status.mjs',
   'round42-content-runtime-lifecycle.mjs',
   'round43-next-turn-adoption.mjs',
   'round44-restart-delivery-recovery.mjs',

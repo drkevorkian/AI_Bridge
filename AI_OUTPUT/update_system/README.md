@@ -170,16 +170,24 @@ outcome is ambiguous.
 - `../tests/update-system-atomic.mjs` — traversal, allowlist, hash, rollback,
   symlink, and success regressions.
 
-## Not implemented yet
+## Remaining promotion gates
 
-- native-messaging framing/host installer;
-- extension-side `nativeMessaging` permission;
-- durable update checkpoint stages and guarded `chrome.runtime.reload()`;
-- startup reinjection/rebind/reconciliation before relay resume;
-- production root `update-manifest.json`;
-- AI_INPUT promotion.
+The review slice now includes native-messaging framing, the current-user host
+installer, the extension-side `nativeMessaging` permission, durable update
+checkpoint stages, guarded `chrome.runtime.reload()`, and startup
+reinjection/rebind/reconciliation.
 
-Those remain gated on review and green CI.
+Still intentionally gated:
+
+- pin the human-approved production RSA release public key;
+- generate and sign the production root `update-manifest.json`;
+- expose the reviewed native updater state machine in Settings;
+- promote the reviewed updater into AI_INPUT for human testing;
+- promote to the root extension only after human acceptance.
+
+Until the production release public key is pinned, `CHECK` and `APPLY` fail
+closed. `PING` remains available so Settings can distinguish "native host not
+installed" from "host connected but release verification not configured".
 
 
 ## Crash-recoverable update checkpoint

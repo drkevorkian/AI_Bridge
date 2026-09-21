@@ -15,7 +15,13 @@ import sys
 from pathlib import Path
 from typing import BinaryIO
 
-from companion_updater import UpdateError, apply_update, fetch_manifest
+from companion_updater import (
+    PINNED_RELEASE_RSA_E,
+    PINNED_RELEASE_RSA_N_HEX,
+    UpdateError,
+    apply_update,
+    fetch_manifest,
+)
 
 HOST_NAME = "com.aibridge.updater"
 SCHEMA = 1
@@ -101,6 +107,31 @@ def _verify_origin(extension_id: str, argv: list[str]) -> str:
     return origin
 
 
+def _release_verification_status() -> dict[str, object]:
+    """Return non-secret release-trust readiness for extension UI diagnostics."""
+    modulus_hex = str(PINNED_RELEASE_RSA_N_HEX or "").strip().lower()
+    configured = bool(modulus_hex)
+    syntactically_valid = bool(
+        configured
+        and all(ch in "0123456789abcdef" for ch in modulus_hex)
+        and int(PINNED_RELEASE_RSA_E) >= 3
+        and int(PINNED_RELEASE_RSA_E) % 2 == 1
+    )
+    key_bits = 0
+    if syntactically_valid:
+        try:
+            key_bits = int(modulus_hex, 16).bit_length()
+        except ValueError:
+            syntactically_valid = False
+            key_bits = 0
+    return {
+        "configured": configured,
+        "ready": syntactically_valid,
+        "algorithm": "RSA-PKCS1-v1_5-SHA256",
+        "key_bits": key_bits,
+    }
+
+
 def _command_name(message: dict[str, object]) -> str:
     command = str(message.get("command") or "").strip().upper()
     if command not in {"PING", "CHECK", "APPLY"}:
@@ -115,7 +146,12 @@ def _command_name(message: dict[str, object]) -> str:
 def handle_message(message: dict[str, object], config: dict[str, object]) -> dict[str, object]:
     command = _command_name(message)
     if command == "PING":
-        return {"ok": True, "host": HOST_NAME, "schema": SCHEMA}
+        return {
+            "ok": True,
+            "host": HOST_NAME,
+            "schema": SCHEMA,
+            "release_verification": _release_verification_status(),
+        }
     if command == "CHECK":
         manifest = fetch_manifest()
         return {
