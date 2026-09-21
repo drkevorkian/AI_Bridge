@@ -4751,6 +4751,64 @@ async function handleCompletedResponse(side, text, { relay = true, artifacts = [
 }
 
 
+async function reviewPrepareCommittedRecoveryReplay(sourceSide,recoveredText){
+  if(String(state.lastResponseBySide?.[sourceSide]||"")!==String(recoveredText||"")) return null;
+
+  const entry=[...state.transcript].reverse().find(item =>
+    item?.type==="response" && String(item?.side||"").toUpperCase()===sourceSide
+  )||null;
+  if(!entry) throw new Error("RECOVERY_START_DUPLICATE_RESPONSE_WITHOUT_TRANSCRIPT_ENTRY");
+
+  const directTarget=SIDES.includes(String(entry.directToSide||"").toUpperCase())
+    ? String(entry.directToSide).toUpperCase()
+    : null;
+  const targetSide=directTarget||nextSide(sourceSide);
+  if(!SIDES.includes(targetSide) || targetSide===sourceSide){
+    throw new Error("RECOVERY_START_REPLAY_TARGET_INVALID");
+  }
+
+  const outgoing=directTarget
+    ? directTurnMessage(sourceSide,targetSide,entry)
+    : normalTurnMessage(targetSide);
+  const payloadHash=await reviewPayloadHash(targetSide,outgoing.text);
+  const matching=reviewLedger.snapshot().filter(record =>
+    String(record.side||"").toUpperCase()===targetSide &&
+    String(record.payloadHash||"")===payloadHash
+  );
+
+  const unsafeStatuses=new Set([
+    DISPATCH_STATUS.DISPATCHING,
+    DISPATCH_STATUS.ACCEPTED,
+    DISPATCH_STATUS.AWAITING_RESPONSE,
+    DISPATCH_STATUS.DELIVERY_AMBIGUOUS,
+    DISPATCH_STATUS.RESPONSE_COMMITTED
+  ]);
+  const unsafe=matching.find(record => unsafeStatuses.has(record.status));
+  if(unsafe){
+    throw new Error("RECOVERY_START_REPLAY_BLOCKED_BY_PRIOR_DELIVERY:"+String(unsafe.status)+":"+String(unsafe.dispatchId));
+  }
+
+  const retrySafe=matching.filter(record =>
+    record.status===DISPATCH_STATUS.CREATED ||
+    (record.status===DISPATCH_STATUS.FAILED &&
+      record.acceptedAt==null &&
+      String(record.failureReason||"")!=="HARD_THREAD_LIMIT_REJECTED_BY_PROVIDER")
+  );
+  if(!retrySafe.length){
+    throw new Error("RECOVERY_START_DUPLICATE_RESPONSE_NO_PROVEN_FAILED_HANDOFF");
+  }
+
+  return {
+    sourceSide,
+    targetSide,
+    direct:Boolean(directTarget),
+    entry,
+    outgoing,
+    payloadHash,
+    priorDispatchIds:retrySafe.map(record=>String(record.dispatchId)),
+    priorFailureReasons:retrySafe.map(record=>String(record.failureReason||record.status))
+  };
+}
 async function reviewReadResponseToStartSource(sourceSide){
   let record=reviewAuthorityBySide.get(sourceSide);
   if(!record) record=await reviewRegisterSideAuthority(sourceSide);
@@ -5277,14 +5335,60 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
         await bindTabsFromMessage(msg);
         const recovered=await reviewReadResponseToStartSource(sourceSide);
 
-        if(String(state.lastResponseBySide?.[sourceSide]||"")===recovered.text){
-          throw new Error("RECOVERY_START_DUPLICATE_RESPONSE: that visible response was already committed by AI Bridge.");
-        }
+        const replayPlan=await reviewPrepareCommittedRecoveryReplay(sourceSide,recovered.text);
+
 
         // A stopped session has no legitimate in-flight provider transaction.
         // After the operator has verified the visible recovery boundary, start a
         // fresh exactly-once dispatch domain while preserving transcript/roles.
         await reviewResetSessionDurability();
+
+        if(replayPlan){
+          state.running=true;
+          state.paused=false;
+          state.pauseReason="";
+          state.currentSide=replayPlan.targetSide;
+          state.runtimePhase="RECOVERY_START_REPLAYING_FAILED_HANDOFF";
+          appendLog({
+            time:Date.now(),
+            type:"recovery-replay",
+            side:sourceSide,
+            targetSide:replayPlan.targetSide,
+            text:"Replaying AI "+sourceSide+"'s already-committed response to AI "+replayPlan.targetSide+" because the prior handoff was proven unsent."
+          });
+          await clearAttention();
+          await saveState();
+          recoveryCommitted=true;
+
+          let replayResult;
+          try{
+            await new Promise(resolve=>setTimeout(resolve,state.delayMs));
+            if(!state.sessionActive||!state.running||state.awaitingHuman) throw new Error("RECOVERY_START_REPLAY_ABORTED");
+            await sendToSide(replayPlan.targetSide,replayPlan.outgoing.text,{
+              deliveredSeq:replayPlan.outgoing.deliveredSeq,
+              deliveredSources:replayPlan.outgoing.deliveredSources,
+              artifactIds:replayPlan.outgoing.artifactIds||[],
+              artifacts:replayPlan.outgoing.artifacts||[],
+              mainInterjectionIds:replayPlan.outgoing.mainInterjectionIds||[]
+            });
+            replayResult={ok:true};
+          }catch(error){
+            await pauseBridge("Could not replay recovered handoff to AI "+replayPlan.targetSide+": "+(error?.message||error));
+            replayResult={ok:false,error:error?.message||String(error)};
+          }
+
+          sendResponse({
+            ok:Boolean(replayResult.ok),
+            sourceSide,
+            recovered:true,
+            replayedCommitted:true,
+            priorDispatchIds:replayPlan.priorDispatchIds,
+            direct:replayPlan.direct,
+            targetSide:replayPlan.targetSide,
+            error:replayResult.error||null
+          });
+          return;
+        }
 
         state.running=true;
         state.paused=false;
