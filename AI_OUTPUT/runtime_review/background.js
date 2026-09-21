@@ -5043,6 +5043,10 @@ async function reviewResolveCommittedRecoveryStep(sourceSide,recoveredText){
     };
   }
 
+  const freshSurfaceNoDispatch=Boolean(
+    targetProbe.freshSurface &&
+    matching.length===0
+  );
   const ambiguousFreshSurface=Boolean(
     targetProbe.freshSurface &&
     unsafe.length>0 &&
@@ -5064,7 +5068,7 @@ async function reviewResolveCommittedRecoveryStep(sourceSide,recoveredText){
       String(record.failureReason||"")!=="HARD_THREAD_LIMIT_REJECTED_BY_PROVIDER") ||
     (ambiguousFreshSurface && record.status===DISPATCH_STATUS.DELIVERY_AMBIGUOUS)
   );
-  if(!retrySafe.length){
+  if(!retrySafe.length && !freshSurfaceNoDispatch){
     throw new Error("RECOVERY_START_DUPLICATE_RESPONSE_NO_PROVEN_FAILED_HANDOFF");
   }
 
@@ -5076,7 +5080,9 @@ async function reviewResolveCommittedRecoveryStep(sourceSide,recoveredText){
     entry,
     outgoing,
     payloadHash,
-    evidence:ambiguousFreshSurface?"TARGET_STILL_FRESH_SURFACE":"PRE_ACTION_FAILURE",
+    evidence:freshSurfaceNoDispatch
+      ? "TARGET_STILL_FRESH_NO_DISPATCH"
+      : (ambiguousFreshSurface?"TARGET_STILL_FRESH_SURFACE":"PRE_ACTION_FAILURE"),
     priorDispatchIds:retrySafe.map(record=>String(record.dispatchId)),
     priorFailureReasons:retrySafe.map(record=>String(record.failureReason||record.status))
   };
