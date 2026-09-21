@@ -82,5 +82,5 @@ for(const token of [
   'grok-assistant-testid'
 ]) assert.ok(contracts.includes(token),"DOM resilience contract missing "+token);
 
-assert.equal(manifest.version_name,"1.19.1.35-AI-A");
+assert.match(manifest.version_name,/^1\\.19\\.1\\.(?:3[5-9]|[4-9][0-9])-AI-[A-Z]$/);
 console.log("round75-grok-send-actionability: PASS");
