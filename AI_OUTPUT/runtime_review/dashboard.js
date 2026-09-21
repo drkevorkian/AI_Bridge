@@ -781,7 +781,8 @@ function updateControls(s) {
   updateWorkModeUI();
 
   for (const side of SIDES) {
-    $(`newChat${side}`).disabled = !manualFreshAllowed || !bindingStatus.valid;
+    const manualTabReady = manualFreshTabReady(side, bindingStatus);
+    $(`newChat${side}`).disabled = !manualFreshAllowed || !manualTabReady;
     const batchDone = ["compete", "parallel", "review"].includes(s.workMode) && Array.isArray(s.phaseCompletedSides) && s.phaseCompletedSides.includes(side);
     $(`resend${side}`).disabled = !s.sessionActive || !s.running || s.awaitingHuman || !s.lastSentBySide?.[side] || batchDone;
   }
@@ -964,8 +965,13 @@ function activeBindingStatus() {
   });
 }
 
-function validateActiveTabs() {
-  const status = activeBindingStatus();
+function manualFreshTabReady(side, status = activeBindingStatus()) {
+  return SIDES.includes(side) &&
+    !status.missingSides.includes(side) &&
+    !status.duplicateSides.has(side);
+}
+
+function validateActiveTabs(status = activeBindingStatus()) {
   if (status.missingSides.length) return `Choose ${SIDES.length} supported AI tab${SIDES.length === 1 ? "" : "s"}.`;
   if (status.duplicateTabs.size) return "Each logical AI must use a different browser tab. Multiple tabs from the same LLM are allowed.";
   return null;
@@ -1035,9 +1041,13 @@ async function openFreshChats(rawSides) {
     return;
   }
 
-  const bindingError = validateActiveTabs();
-  if (bindingError) {
-    $("status").textContent = bindingError;
+  const bindingStatus = activeBindingStatus();
+  const unavailable = requested.filter(side => !manualFreshTabReady(side, bindingStatus));
+  if (unavailable.length) {
+    const duplicated = unavailable.filter(side => bindingStatus.duplicateSides.has(side));
+    $("status").textContent = duplicated.length
+      ? "Each logical AI must use a different browser tab before opening a fresh chat."
+      : `Choose an open supported AI tab for ${unavailable.map(side => "AI " + side).join(", ")}.`;
     return;
   }
 
