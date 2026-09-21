@@ -4751,64 +4751,6 @@ async function handleCompletedResponse(side, text, { relay = true, artifacts = [
 }
 
 
-async function reviewPrepareCommittedRecoveryReplay(sourceSide,recoveredText){
-  if(String(state.lastResponseBySide?.[sourceSide]||"")!==String(recoveredText||"")) return null;
-
-  const entry=[...state.transcript].reverse().find(item =>
-    item?.type==="response" && String(item?.side||"").toUpperCase()===sourceSide
-  )||null;
-  if(!entry) throw new Error("RECOVERY_START_DUPLICATE_RESPONSE_WITHOUT_TRANSCRIPT_ENTRY");
-
-  const directTarget=SIDES.includes(String(entry.directToSide||"").toUpperCase())
-    ? String(entry.directToSide).toUpperCase()
-    : null;
-  const targetSide=directTarget||nextSide(sourceSide);
-  if(!SIDES.includes(targetSide) || targetSide===sourceSide){
-    throw new Error("RECOVERY_START_REPLAY_TARGET_INVALID");
-  }
-
-  const outgoing=directTarget
-    ? directTurnMessage(sourceSide,targetSide,entry)
-    : normalTurnMessage(targetSide);
-  const payloadHash=await reviewPayloadHash(targetSide,outgoing.text);
-  const matching=reviewLedger.snapshot().filter(record =>
-    String(record.side||"").toUpperCase()===targetSide &&
-    String(record.payloadHash||"")===payloadHash
-  );
-
-  const unsafeStatuses=new Set([
-    DISPATCH_STATUS.DISPATCHING,
-    DISPATCH_STATUS.ACCEPTED,
-    DISPATCH_STATUS.AWAITING_RESPONSE,
-    DISPATCH_STATUS.DELIVERY_AMBIGUOUS,
-    DISPATCH_STATUS.RESPONSE_COMMITTED
-  ]);
-  const unsafe=matching.find(record => unsafeStatuses.has(record.status));
-  if(unsafe){
-    throw new Error("RECOVERY_START_REPLAY_BLOCKED_BY_PRIOR_DELIVERY:"+String(unsafe.status)+":"+String(unsafe.dispatchId));
-  }
-
-  const retrySafe=matching.filter(record =>
-    record.status===DISPATCH_STATUS.CREATED ||
-    (record.status===DISPATCH_STATUS.FAILED &&
-      record.acceptedAt==null &&
-      String(record.failureReason||"")!=="HARD_THREAD_LIMIT_REJECTED_BY_PROVIDER")
-  );
-  if(!retrySafe.length){
-    throw new Error("RECOVERY_START_DUPLICATE_RESPONSE_NO_PROVEN_FAILED_HANDOFF");
-  }
-
-  return {
-    sourceSide,
-    targetSide,
-    direct:Boolean(directTarget),
-    entry,
-    outgoing,
-    payloadHash,
-    priorDispatchIds:retrySafe.map(record=>String(record.dispatchId)),
-    priorFailureReasons:retrySafe.map(record=>String(record.failureReason||record.status))
-  };
-}
 async function reviewReadResponseToStartSource(sourceSide){
   let record=reviewAuthorityBySide.get(sourceSide);
   if(!record) record=await reviewRegisterSideAuthority(sourceSide);
@@ -4830,7 +4772,7 @@ async function reviewReadResponseToStartSource(sourceSide){
   if(!recovered?.ok||!recoveredText){
     throw new Error(recovered?.error||"RECOVERY_START_NO_VISIBLE_RESPONSE");
   }
-  if(recovered.active) throw new Error(`AI ${sourceSide} still appears to be generating.`);
+  if(recovered.active) throw new Error("AI "+sourceSide+" still appears to be generating.");
   if(recoveredText.length>400000) throw new Error("RECOVERY_START_RESPONSE_TOO_LARGE");
 
   let observedIdentity;
@@ -4852,6 +4794,251 @@ async function reviewReadResponseToStartSource(sourceSide){
     generationEpoch:Number(authority.generationEpoch),
     identity:observedIdentity
   };
+}
+
+async function reviewProbeRecoveryTarget(targetSide){
+  let record=reviewAuthorityBySide.get(targetSide);
+  if(!record) record=await reviewRegisterSideAuthority(targetSide);
+
+  const identity=record?.identity;
+  if(
+    identity?.kind==="surface" &&
+    identity?.provisional===true &&
+    identity?.writable===true
+  ){
+    return {
+      side:targetSide,
+      kind:"surface",
+      freshSurface:true,
+      response:null,
+      identity
+    };
+  }
+
+  const authority=reviewConversationAuthority(record);
+  if(!authority){
+    return {
+      side:targetSide,
+      kind:String(identity?.kind||"unknown"),
+      freshSurface:false,
+      response:null,
+      identity:identity||null
+    };
+  }
+
+  let recovered;
+  try{
+    recovered=await chrome.tabs.sendMessage(
+      Number(authority.tabId),
+      {type:"AI_BRIDGE_READ_LAST_RESPONSE"},
+      {documentId:String(record.documentId)}
+    );
+  }catch(error){
+    throw new Error("RECOVERY_START_DOWNSTREAM_READ_FAILED:"+targetSide+":"+(error?.message||error));
+  }
+
+  const text=String(recovered?.text||"").trim();
+  if(recovered?.active) throw new Error("AI "+targetSide+" still appears to be generating.");
+
+  if(!recovered?.ok||!text){
+    return {
+      side:targetSide,
+      kind:"conversation",
+      freshSurface:false,
+      response:null,
+      identity:authority.identity
+    };
+  }
+
+  if(text.length>400000) throw new Error("RECOVERY_START_DOWNSTREAM_RESPONSE_TOO_LARGE");
+
+  let observedIdentity;
+  try{observedIdentity=reviewSanitizeIdentity(recovered.identity);}
+  catch(_){throw new Error("RECOVERY_START_DOWNSTREAM_IDENTITY_INVALID:"+targetSide);}
+
+  if(
+    String(recovered.provider||"")!==String(record.provider||"") ||
+    !reviewSameIdentity(observedIdentity,authority.identity)
+  ){
+    throw new Error("RECOVERY_START_DOWNSTREAM_AUTHORITY_MISMATCH:"+targetSide);
+  }
+
+  return {
+    side:targetSide,
+    kind:"conversation",
+    freshSurface:false,
+    response:{
+      text,
+      provider:String(record.provider||""),
+      tabId:Number(authority.tabId),
+      documentId:String(record.documentId),
+      generationEpoch:Number(authority.generationEpoch),
+      identity:observedIdentity
+    },
+    identity:observedIdentity
+  };
+}
+
+function reviewRecoveryResponseAdvancedPast(sourceEntry,targetSide,targetResponse){
+  if(!targetResponse?.text) return false;
+  const visibleText=String(targetResponse.text);
+  const committedText=String(state.lastResponseBySide?.[targetSide]||"");
+
+  if(visibleText!==committedText) return true;
+
+  const targetEntry=[...state.transcript].reverse().find(item =>
+    item?.type==="response" && String(item?.side||"").toUpperCase()===targetSide
+  )||null;
+  return Boolean(
+    targetEntry &&
+    Number(targetEntry.seq)>Number(sourceEntry?.seq||0)
+  );
+}
+
+async function reviewResolveCommittedRecoveryStep(sourceSide,recoveredText){
+  if(String(state.lastResponseBySide?.[sourceSide]||"")!==String(recoveredText||"")){
+    return {kind:"PROCESS",sourceSide,recoveredText};
+  }
+
+  const entry=[...state.transcript].reverse().find(item =>
+    item?.type==="response" && String(item?.side||"").toUpperCase()===sourceSide
+  )||null;
+  if(!entry) throw new Error("RECOVERY_START_DUPLICATE_RESPONSE_WITHOUT_TRANSCRIPT_ENTRY");
+
+  const command=extractRegisteredLlmCommand(recoveredText,sourceSide);
+  if(command && !command.valid){
+    throw new Error("RECOVERY_START_COMMITTED_COMMAND_INVALID:"+String(command.targetRaw||""));
+  }
+
+  const directTarget=command?.targetSide ||
+    (SIDES.includes(String(entry.directToSide||"").toUpperCase())
+      ? String(entry.directToSide).toUpperCase()
+      : null);
+  const targetSide=directTarget||nextSide(sourceSide);
+  if(!SIDES.includes(targetSide) || targetSide===sourceSide){
+    throw new Error("RECOVERY_START_REPLAY_TARGET_INVALID");
+  }
+
+  const outgoing=directTarget
+    ? directTurnMessage(sourceSide,targetSide,entry)
+    : normalTurnMessage(targetSide);
+  const payloadHash=await reviewPayloadHash(targetSide,outgoing.text);
+  const matching=reviewLedger.snapshot().filter(record =>
+    String(record.side||"").toUpperCase()===targetSide &&
+    String(record.payloadHash||"")===payloadHash
+  );
+
+  const unsafeStatuses=new Set([
+    DISPATCH_STATUS.DISPATCHING,
+    DISPATCH_STATUS.ACCEPTED,
+    DISPATCH_STATUS.AWAITING_RESPONSE,
+    DISPATCH_STATUS.DELIVERY_AMBIGUOUS,
+    DISPATCH_STATUS.RESPONSE_COMMITTED
+  ]);
+  const unsafe=matching.filter(record=>unsafeStatuses.has(record.status));
+
+  const targetProbe=await reviewProbeRecoveryTarget(targetSide);
+  if(
+    unsafe.length>0 &&
+    reviewRecoveryResponseAdvancedPast(entry,targetSide,targetProbe.response)
+  ){
+    return {
+      kind:"ADVANCE",
+      sourceSide,
+      targetSide,
+      direct:Boolean(directTarget),
+      recovered:targetProbe.response,
+      evidence:"VISIBLE_DOWNSTREAM_RESPONSE",
+      priorDispatchIds:unsafe.map(record=>String(record.dispatchId))
+    };
+  }
+
+  const ambiguousFreshSurface=Boolean(
+    targetProbe.freshSurface &&
+    unsafe.length>0 &&
+    unsafe.every(record=>record.status===DISPATCH_STATUS.DELIVERY_AMBIGUOUS)
+  );
+
+  if(unsafe.length && !ambiguousFreshSurface){
+    const blocker=unsafe[0];
+    throw new Error(
+      "RECOVERY_START_REPLAY_BLOCKED_BY_PRIOR_DELIVERY:"+
+      String(blocker.status)+":"+String(blocker.dispatchId)
+    );
+  }
+
+  const retrySafe=matching.filter(record =>
+    record.status===DISPATCH_STATUS.CREATED ||
+    (record.status===DISPATCH_STATUS.FAILED &&
+      record.acceptedAt==null &&
+      String(record.failureReason||"")!=="HARD_THREAD_LIMIT_REJECTED_BY_PROVIDER") ||
+    (ambiguousFreshSurface && record.status===DISPATCH_STATUS.DELIVERY_AMBIGUOUS)
+  );
+  if(!retrySafe.length){
+    throw new Error("RECOVERY_START_DUPLICATE_RESPONSE_NO_PROVEN_FAILED_HANDOFF");
+  }
+
+  return {
+    kind:"REPLAY",
+    sourceSide,
+    targetSide,
+    direct:Boolean(directTarget),
+    entry,
+    outgoing,
+    payloadHash,
+    evidence:ambiguousFreshSurface?"TARGET_STILL_FRESH_SURFACE":"PRE_ACTION_FAILURE",
+    priorDispatchIds:retrySafe.map(record=>String(record.dispatchId)),
+    priorFailureReasons:retrySafe.map(record=>String(record.failureReason||record.status))
+  };
+}
+
+async function reviewResolveRecoveryBoundary(startSide,startRecovered){
+  let sourceSide=startSide;
+  let recovered=startRecovered;
+  const caughtUpSides=[];
+  const visited=new Set();
+
+  for(let hop=0;hop<SIDES.length;hop++){
+    if(visited.has(sourceSide)){
+      throw new Error("RECOVERY_START_CATCHUP_CYCLE:"+sourceSide);
+    }
+    visited.add(sourceSide);
+
+    const step=await reviewResolveCommittedRecoveryStep(sourceSide,recovered.text);
+    if(step.kind==="PROCESS"){
+      return {
+        sourceSide,
+        recovered,
+        replayPlan:null,
+        caughtUpSides
+      };
+    }
+    if(step.kind==="REPLAY"){
+      return {
+        sourceSide,
+        recovered,
+        replayPlan:step,
+        caughtUpSides
+      };
+    }
+    if(step.kind!=="ADVANCE"||!step.recovered){
+      throw new Error("RECOVERY_START_CATCHUP_INVALID_STEP");
+    }
+
+    caughtUpSides.push(step.targetSide);
+    appendLog({
+      time:Date.now(),
+      type:"recovery-catchup",
+      side:sourceSide,
+      targetSide:step.targetSide,
+      dispatchIds:step.priorDispatchIds||[],
+      text:"AI "+step.targetSide+" already has a newer completed response, proving the prior "+sourceSide+" to "+step.targetSide+" handoff advanced. Recovery boundary moved forward."
+    });
+    sourceSide=step.targetSide;
+    recovered=step.recovered;
+  }
+
+  throw new Error("RECOVERY_START_CATCHUP_HOP_LIMIT");
 }
 
 function reviewManualRelayAwaitingDispatch(sourceSide, authority){
@@ -5333,10 +5520,12 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
         state.suppressedHumanRequests=[];
 
         await bindTabsFromMessage(msg);
-        const recovered=await reviewReadResponseToStartSource(sourceSide);
-
-        const replayPlan=await reviewPrepareCommittedRecoveryReplay(sourceSide,recovered.text);
-
+        const initiallyRecovered=await reviewReadResponseToStartSource(sourceSide);
+        const boundary=await reviewResolveRecoveryBoundary(sourceSide,initiallyRecovered);
+        const effectiveSourceSide=boundary.sourceSide;
+        const recovered=boundary.recovered;
+        const replayPlan=boundary.replayPlan;
+        const caughtUpSides=boundary.caughtUpSides||[];
 
         // A stopped session has no legitimate in-flight provider transaction.
         // After the operator has verified the visible recovery boundary, start a
@@ -5352,9 +5541,10 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
           appendLog({
             time:Date.now(),
             type:"recovery-replay",
-            side:sourceSide,
+            side:effectiveSourceSide,
             targetSide:replayPlan.targetSide,
-            text:"Replaying AI "+sourceSide+"'s already-committed response to AI "+replayPlan.targetSide+" because the prior handoff was proven unsent."
+            text:"Replaying AI "+effectiveSourceSide+"'s already-committed response to AI "+replayPlan.targetSide+
+              " after stopped-session recovery caught up through "+caughtUpSides.length+" completed downstream response(s). Evidence: "+replayPlan.evidence+"."
           });
           await clearAttention();
           await saveState();
@@ -5380,8 +5570,11 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
           sendResponse({
             ok:Boolean(replayResult.ok),
             sourceSide,
+            effectiveSourceSide,
+            caughtUpSides,
             recovered:true,
             replayedCommitted:true,
+            replayEvidence:replayPlan.evidence||null,
             priorDispatchIds:replayPlan.priorDispatchIds,
             direct:replayPlan.direct,
             targetSide:replayPlan.targetSide,
@@ -5393,13 +5586,15 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
         state.running=true;
         state.paused=false;
         state.pauseReason="";
-        state.currentSide=sourceSide;
-        state.runtimePhase="RECOVERY_START_PROCESSING";
+        state.currentSide=effectiveSourceSide;
+        state.runtimePhase=caughtUpSides.length?"RECOVERY_START_CAUGHT_UP":"RECOVERY_START_PROCESSING";
         appendLog({
           time:Date.now(),
-          type:"recovery-start",
-          side:sourceSide,
-          text:`Read AI ${sourceSide}'s verified completed response and restarted automatic routing from that boundary.`
+          type:caughtUpSides.length?"recovery-catchup-start":"recovery-start",
+          side:effectiveSourceSide,
+          text:caughtUpSides.length
+            ? "Recovery started at AI "+sourceSide+" and advanced to AI "+effectiveSourceSide+" because downstream completed responses proved the earlier handoff(s) succeeded."
+            : "Read AI "+effectiveSourceSide+"'s verified completed response and restarted automatic routing from that boundary."
         });
         await clearAttention();
         await saveState();
@@ -5408,7 +5603,7 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
         // Deliberately reuse the normal completed-response pipeline. Direct
         // Mesh therefore reads the existing final SEND TO command and uses the
         // same target resolution, transcript, delay, and durable send path.
-        const result=await handleCompletedResponse(sourceSide,recovered.text,{
+        const result=await handleCompletedResponse(effectiveSourceSide,recovered.text,{
           relay:true,
           artifacts:[],
           completedAt:Date.now()
@@ -5417,6 +5612,8 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
         sendResponse({
           ok:Boolean(result?.ok),
           sourceSide,
+          effectiveSourceSide,
+          caughtUpSides,
           recovered:true,
           direct:Boolean(result?.direct),
           targetSide:result?.targetSide||state.currentSide||null,
