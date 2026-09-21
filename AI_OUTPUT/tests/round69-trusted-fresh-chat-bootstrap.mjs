@@ -12,6 +12,10 @@ const registerStart=background.indexOf("async function reviewRegisterSideAuthori
 assert.ok(pendingStart>=0&&bootstrapStart>pendingStart&&registerStart>bootstrapStart,
   "trusted fresh-chat bootstrap helpers missing");
 
+const pending=background.slice(pendingStart,bootstrapStart);
+assert.doesNotMatch(pending,/DISPATCH_STATUS\.CREATED/,
+  "unexecuted CREATED dispatches must not authorize a surface-to-conversation promotion");
+
 const bootstrap=background.slice(bootstrapStart,registerStart);
 for(const token of [
   "!state.sessionActive",
@@ -21,6 +25,7 @@ for(const token of [
   "Number(authority.tabId) !== Number(tabForSide(normalizedSide))",
   'activeRollover && !["COMPLETE", "FAILED"].includes(activeRollover.phase)',
   'String(state.lastSentBySide?.[normalizedSide] || "").trim()',
+  'entry?.type === "response"',
   'record.status !== DISPATCH_STATUS.FAILED',
   'record.purpose !== "INITIAL"',
   "record.acceptedAt != null",
