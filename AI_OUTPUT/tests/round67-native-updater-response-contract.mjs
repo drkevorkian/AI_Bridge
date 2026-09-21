@@ -26,6 +26,8 @@ assert.ok(bg.includes("function reviewNativeUpdaterRuntimePath(value)"),"runtime
 assert.ok(bg.includes('parts.some(part=>!part||part==="."||part==="..")'),"unsafe relative path segments must be rejected");
 assert.ok(bg.includes('REVIEW_NATIVE_UPDATER_ALLOWED_FILES.has(path)'),"APPLY response files must stay inside the runtime allowlist");
 assert.ok(bg.includes('/^[A-Za-z]:/.test(path)'),"drive-relative path syntax must be rejected");
+assert.ok(bg.includes('files>REVIEW_NATIVE_UPDATER_ALLOWED_FILES.size'),"CHECK file count must be bounded by the runtime allowlist");
+assert.ok(bg.includes('result.files.length>REVIEW_NATIVE_UPDATER_ALLOWED_FILES.size'),"APPLY file count must be bounded by the runtime allowlist");
 assert.equal(manifest.name,"AI Bridge Review");
 assert.equal(manifest.version,"1.19.1");
 
