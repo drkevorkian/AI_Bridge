@@ -55,6 +55,7 @@ const tests=[
   'round73-response-detection-manual-relay.mjs',
   'round74-read-response-to-start.mjs',
   'round75-grok-send-actionability.mjs',
+  'round76-replay-failed-recovery-handoff.mjs',
   'round42-content-runtime-lifecycle.mjs',
   'round43-next-turn-adoption.mjs',
   'round44-restart-delivery-recovery.mjs',
