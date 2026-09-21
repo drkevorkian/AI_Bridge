@@ -53,6 +53,7 @@ const tests=[
   'round71-response-handoff-recovery.mjs',
   'round72-solo-recovery-hardening.mjs',
   'round73-response-detection-manual-relay.mjs',
+  'round74-read-response-to-start.mjs',
   'round42-content-runtime-lifecycle.mjs',
   'round43-next-turn-adoption.mjs',
   'round44-restart-delivery-recovery.mjs',
