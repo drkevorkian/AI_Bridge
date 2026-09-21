@@ -136,7 +136,7 @@ def _command_name(message: dict[str, object]) -> str:
     command = str(message.get("command") or "").strip().upper()
     if command not in {"PING", "CHECK", "APPLY"}:
         raise NativeHostError("Unsupported native updater command.")
-    allowed = {"command"} if command != "APPLY" else {"command", "checkpointId"}
+    allowed = {"command"} if command != "APPLY" else {"command", "checkpointId", "expectedVersion", "expectedBuild"}
     extra = set(message) - allowed
     if extra:
         raise NativeHostError("Native updater message contains unsupported fields.")
@@ -164,9 +164,19 @@ def handle_message(message: dict[str, object], config: dict[str, object]) -> dic
         }
 
     checkpoint_id = str(message.get("checkpointId") or "").strip()
+    expected_version = str(message.get("expectedVersion") or "").strip()
+    expected_build = str(message.get("expectedBuild") or "").strip()
     if not checkpoint_id or len(checkpoint_id) > 128:
         raise NativeHostError("APPLY requires a bounded checkpointId.")
-    result = apply_update(Path(config["extension_root"]))
+    if not expected_version or len(expected_version) > 128:
+        raise NativeHostError("APPLY requires a bounded expectedVersion.")
+    if not expected_build or len(expected_build) > 128:
+        raise NativeHostError("APPLY requires a bounded expectedBuild.")
+    result = apply_update(
+        Path(config["extension_root"]),
+        expected_version=expected_version,
+        expected_build=expected_build,
+    )
     return {
         "ok": True,
         "checkpointId": checkpoint_id,

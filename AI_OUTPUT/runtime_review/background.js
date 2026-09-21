@@ -547,9 +547,15 @@ async function reviewSendNativeUpdater(command,payload={}){
   const op=String(command||"").toUpperCase();
   if(!["PING","CHECK","APPLY"].includes(op))return {ok:false,reason:"NATIVE_UPDATE_COMMAND_REJECTED"};
   const message=op==="APPLY"
-    ? {command:op,checkpointId:String(payload.checkpointId||"")}
+    ? {
+        command:op,
+        checkpointId:String(payload.checkpointId||""),
+        expectedVersion:String(payload.expectedVersion||""),
+        expectedBuild:String(payload.expectedBuild||"")
+      }
     : {command:op};
   if(op==="APPLY"&&!message.checkpointId)return {ok:false,reason:"NATIVE_UPDATE_CHECKPOINT_REQUIRED"};
+  if(op==="APPLY"&&(!message.expectedVersion||!message.expectedBuild))return {ok:false,reason:"NATIVE_UPDATE_TARGET_REQUIRED"};
   try{
     const result=await chrome.runtime.sendNativeMessage(REVIEW_NATIVE_UPDATER_HOST,message);
     if(!result||typeof result!=="object")return {ok:false,reason:"NATIVE_UPDATE_RESPONSE_INVALID"};
@@ -561,7 +567,11 @@ async function reviewSendNativeUpdater(command,payload={}){
 async function reviewNativeApplyCheckpoint(){
   const cp=state.updateCheckpoint;
   if(!cp||cp.phase!==UPDATE_PHASE.CHECKPOINTED)return {ok:false,reason:"UPDATE_NOT_CHECKPOINTED"};
-  const result=await reviewSendNativeUpdater("APPLY",{checkpointId:cp.checkpointId});
+  const result=await reviewSendNativeUpdater("APPLY",{
+    checkpointId:cp.checkpointId,
+    expectedVersion:cp.targetVersion,
+    expectedBuild:cp.targetBuild
+  });
   if(result?.ok!==true)return result;
   if(String(result.checkpointId||"")!==String(cp.checkpointId))return {ok:false,reason:"NATIVE_UPDATE_CHECKPOINT_MISMATCH"};
   if(String(result.version||"")!==String(cp.targetVersion)||String(result.build||"")!==String(cp.targetBuild)){
