@@ -65,6 +65,7 @@
     }),
     grok: Object.freeze({
       composer: Object.freeze([
+        "div.ProseMirror[data-testid='chat-input'][contenteditable='true'][role='textbox']",
         "[data-testid='chat-input'] div.ProseMirror[contenteditable='true'][role='textbox']",
         "div.ProseMirror[contenteditable='true'][role='textbox'][aria-label*='Grok']",
         "textarea[placeholder*='Ask']",
