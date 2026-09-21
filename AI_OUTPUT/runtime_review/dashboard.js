@@ -816,6 +816,7 @@ function runtimePhaseLabel(raw) {
     PROVIDER_RESPONSE_RECOVERED: "Provider response recovered",
     READ_RESPONSE_TO_START: "Reading stopped-session response",
     RECOVERY_START_PROCESSING: "Restarting from recovered response",
+    RECOVERY_START_REPLAYING_FAILED_HANDOFF: "Replaying previously failed recovery handoff",
     THREAD_ROLLOVER_CONTINUITY_DISPATCHING: "Sending continuation context",
     THREAD_ROLLOVER_AWAITING_CONTINUITY_RESPONSE: "Awaiting continuation response",
     PAUSED: "Paused"
