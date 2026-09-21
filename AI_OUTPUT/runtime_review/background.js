@@ -5517,10 +5517,12 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
         state.suppressedHumanRequests=[];
 
         await bindTabsFromMessage(msg);
-        const recovered=await reviewReadResponseToStartSource(sourceSide);
-
-        const replayPlan=await reviewPrepareCommittedRecoveryReplay(sourceSide,recovered.text);
-
+        const initiallyRecovered=await reviewReadResponseToStartSource(sourceSide);
+        const boundary=await reviewResolveRecoveryBoundary(sourceSide,initiallyRecovered);
+        const effectiveSourceSide=boundary.sourceSide;
+        const recovered=boundary.recovered;
+        const replayPlan=boundary.replayPlan;
+        const caughtUpSides=boundary.caughtUpSides||[];
 
         // A stopped session has no legitimate in-flight provider transaction.
         // After the operator has verified the visible recovery boundary, start a
@@ -5536,9 +5538,10 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
           appendLog({
             time:Date.now(),
             type:"recovery-replay",
-            side:sourceSide,
+            side:effectiveSourceSide,
             targetSide:replayPlan.targetSide,
-            text:"Replaying AI "+sourceSide+"'s already-committed response to AI "+replayPlan.targetSide+" because the prior handoff was proven unsent."
+            text:"Replaying AI "+effectiveSourceSide+"'s already-committed response to AI "+replayPlan.targetSide+
+              " after stopped-session recovery caught up through "+caughtUpSides.length+" completed downstream response(s). Evidence: "+replayPlan.evidence+"."
           });
           await clearAttention();
           await saveState();
@@ -5564,8 +5567,11 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
           sendResponse({
             ok:Boolean(replayResult.ok),
             sourceSide,
+            effectiveSourceSide,
+            caughtUpSides,
             recovered:true,
             replayedCommitted:true,
+            replayEvidence:replayPlan.evidence||null,
             priorDispatchIds:replayPlan.priorDispatchIds,
             direct:replayPlan.direct,
             targetSide:replayPlan.targetSide,
@@ -5577,13 +5583,15 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
         state.running=true;
         state.paused=false;
         state.pauseReason="";
-        state.currentSide=sourceSide;
-        state.runtimePhase="RECOVERY_START_PROCESSING";
+        state.currentSide=effectiveSourceSide;
+        state.runtimePhase=caughtUpSides.length?"RECOVERY_START_CAUGHT_UP":"RECOVERY_START_PROCESSING";
         appendLog({
           time:Date.now(),
-          type:"recovery-start",
-          side:sourceSide,
-          text:`Read AI ${sourceSide}'s verified completed response and restarted automatic routing from that boundary.`
+          type:caughtUpSides.length?"recovery-catchup-start":"recovery-start",
+          side:effectiveSourceSide,
+          text:caughtUpSides.length
+            ? "Recovery started at AI "+sourceSide+" and advanced to AI "+effectiveSourceSide+" because downstream completed responses proved the earlier handoff(s) succeeded."
+            : "Read AI "+effectiveSourceSide+"'s verified completed response and restarted automatic routing from that boundary."
         });
         await clearAttention();
         await saveState();
@@ -5592,7 +5600,7 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
         // Deliberately reuse the normal completed-response pipeline. Direct
         // Mesh therefore reads the existing final SEND TO command and uses the
         // same target resolution, transcript, delay, and durable send path.
-        const result=await handleCompletedResponse(sourceSide,recovered.text,{
+        const result=await handleCompletedResponse(effectiveSourceSide,recovered.text,{
           relay:true,
           artifacts:[],
           completedAt:Date.now()
@@ -5601,6 +5609,8 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
         sendResponse({
           ok:Boolean(result?.ok),
           sourceSide,
+          effectiveSourceSide,
+          caughtUpSides,
           recovered:true,
           direct:Boolean(result?.direct),
           targetSide:result?.targetSide||state.currentSide||null,
