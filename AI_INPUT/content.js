@@ -1,8 +1,54 @@
 (() => {
-  if (globalThis.__AI_BRIDGE_REVIEW_CONTENT__) return;
-  globalThis.__AI_BRIDGE_REVIEW_CONTENT__ = true;
+  "use strict";
 
-  const VERSION = "1.18.0-review.4";
+  const manifest = chrome.runtime.getManifest();
+  const CONTENT_BUILD = String(manifest.version_name || manifest.version || "unknown");
+  const CONTENT_RUNTIME_SCHEMA = 1;
+  const resident = globalThis.__AI_BRIDGE_CONTENT_RUNTIME__;
+
+  if (resident) {
+    if (
+      resident.schema === CONTENT_RUNTIME_SCHEMA &&
+      resident.build === CONTENT_BUILD &&
+      resident.active === true
+    ) return;
+
+    if (
+      resident.schema !== CONTENT_RUNTIME_SCHEMA ||
+      typeof resident.dispose !== "function"
+    ) {
+      chrome.runtime.sendMessage({
+        type: "AI_BRIDGE_CONTENT_RUNTIME_INCOMPATIBLE",
+        residentBuild: String(resident.build || "unknown"),
+        requestedBuild: CONTENT_BUILD
+      }).catch(() => {});
+      return;
+    }
+
+    try {
+      resident.dispose("superseded");
+    } catch (_) {
+      chrome.runtime.sendMessage({
+        type: "AI_BRIDGE_CONTENT_RUNTIME_INCOMPATIBLE",
+        residentBuild: String(resident.build || "unknown"),
+        requestedBuild: CONTENT_BUILD,
+        reason: "DISPOSE_FAILED"
+      }).catch(() => {});
+      return;
+    }
+  } else if (globalThis.__AI_BRIDGE_REVIEW_CONTENT__ === true) {
+    // The legacy boolean-only runtime did not retain observer/timer/listener
+    // handles, so it cannot be safely replaced without reloading the host page.
+    chrome.runtime.sendMessage({
+      type: "AI_BRIDGE_CONTENT_RUNTIME_INCOMPATIBLE",
+      residentBuild: "legacy-boolean-runtime",
+      requestedBuild: CONTENT_BUILD,
+      reason: "LEGACY_RUNTIME_NOT_DISPOSABLE"
+    }).catch(() => {});
+    return;
+  }
+
+  const VERSION = CONTENT_BUILD;
   const host = location.hostname.toLowerCase();
   const provider = host === "chatgpt.com" || host === "chat.openai.com" ? "chatgpt"
     : host === "grok.com" ? "grok"
@@ -38,11 +84,18 @@
   let registration = null;
   let lastHref = location.href;
   let awaitingDispatchId = null;
+  let awaitingResponseContext = null;
+  let awaitingResponseBaselineNode = null;
+  let awaitingResponseBaselineText = "";
   let lastResponseSignature = "";
   let lastObserved = "";
   let lastChangedAt = 0;
   let monitorTimer = null;
   let lastLimitSignature = "";
+  let providerEventBaseline = new Set();
+  const providerEventSignatures = new Map();
+  let routeTimer = null;
+  let disposed = false;
 
   function trim(map){ while(map.size > MAX_CACHE) map.delete(map.keys().next().value); }
   function rememberCommand(command,result){ byCommand.set(command.commandId,result); trim(byCommand); return result; }
@@ -65,6 +118,25 @@
       if(!nodes.includes(matches[0])) nodes.push(matches[0]);
     }
     return nodes.length===1 ? nodes[0] : null;
+  }
+  function trustedSelectorStats(selectors){
+    const matched=new Set();
+    const visibleNodes=new Set();
+    const enabledNodes=new Set();
+    for(const selector of selectors||[]){
+      let nodes=[];
+      try{ nodes=[...document.querySelectorAll(selector)]; }catch(_){}
+      for(const node of nodes){
+        matched.add(node);
+        if(visible(node)) visibleNodes.add(node);
+        if(enabled(node)) enabledNodes.add(node);
+      }
+    }
+    return Object.freeze({
+      matched:matched.size,
+      visible:visibleNodes.size,
+      enabled:enabledNodes.size
+    });
   }
   function routeIdentity(){
     const path=location.pathname;
@@ -106,10 +178,45 @@
       return;
     }
     if(node.isContentEditable){
+      const value=String(text);
+      let inserted=false;
+
+      // ChatGPT's #prompt-textarea is a ProseMirror contenteditable editor.
+      // Direct DOM replacement can make text visible without advancing the
+      // editor's internal state, leaving Send disabled. Prefer Chromium's
+      // native editing pipeline so the provider receives a real edit
+      // transaction for the already-proven trusted composer.
+      try{
+        const selection=window.getSelection();
+        if(selection){
+          const range=document.createRange();
+          range.selectNodeContents(node);
+          selection.removeAllRanges();
+          selection.addRange(range);
+        }
+        const insertSupported=typeof document.queryCommandSupported!=="function" ||
+          document.queryCommandSupported("insertText");
+        if(insertSupported && typeof document.execCommand==="function"){
+          inserted=document.execCommand("insertText",false,value)===true;
+        }
+      }catch(_){ inserted=false; }
+
+      if(inserted && getComposerText(node).trim()===value.trim()) return;
+
+      // Bounded compatibility fallback for providers/browsers where the native
+      // editing command is unavailable. performSend still refuses to click
+      // until the pinned Send authority becomes uniquely actionable.
       node.replaceChildren();
-      const lines=String(text).split("\n");
+      const lines=value.split("\n");
       lines.forEach((line,index)=>{if(index)node.appendChild(document.createElement("br"));node.appendChild(document.createTextNode(line));});
-      node.dispatchEvent(new InputEvent("input",{bubbles:true,inputType:"insertText",data:text}));
+      node.dispatchEvent(new InputEvent("input",{
+        bubbles:true,
+        cancelable:true,
+        composed:true,
+        inputType:"insertText",
+        data:value
+      }));
+      node.dispatchEvent(new Event("change",{bubbles:true,composed:true}));
       return;
     }
     throw new Error("TRUSTED_COMPOSER_NOT_EDITABLE");
@@ -168,7 +275,12 @@
         break;
       }
     }
-    if(!send) return rememberCommand(command,reject(command,"DOM_AUTHORITY_NOT_ACTIONABLE","SEND"));
+    if(!send){
+      const stats=trustedSelectorStats(config.send);
+      const composerChars=getComposerText(composer2).length;
+      const detail=`SEND provider=${provider}; composerChars=${composerChars}; matched=${stats.matched}; visible=${stats.visible}; enabled=${stats.enabled}`;
+      return rememberCommand(command,reject(command,"DOM_AUTHORITY_NOT_ACTIONABLE",detail));
+    }
 
     // Re-prove identity after provider React/SPA DOM updates caused by typing.
     const identityAfterDraft=routeIdentity();
@@ -184,11 +296,38 @@
     const attempted=Object.freeze({ok:false,outcome:"ACTION_ATTEMPTED",reason:"ACTION_CONFIRMATION_NOT_PROVEN",commandId:command.commandId,authorityId:command.authorityId});
     consumeAuthority(command,attempted);
     captureProviderEventBaseline();
+    const responseBaseline=responseObservation();
+    const responseBaselineObservedAt=Date.now();
+    const responseBaselineIdentity=identityAfterDraft;
+    awaitingResponseBaselineNode=responseBaseline.node;
+    awaitingResponseBaselineText=responseBaseline.text;
     sendAgain.click();
     awaitingDispatchId=command.authorityId;
+    awaitingResponseContext=Object.freeze({
+      dispatchId:String(command.authorityId),
+      side:String(command.side||registration.side||"").toUpperCase(),
+      generationEpoch:Number(command.generationEpoch),
+      provider,
+      authorityRegistrationId:String(command.authorityRegistrationId||""),
+      rolloverId:command.rolloverId==null?null:String(command.rolloverId),
+      preSendAssistantText:String(responseBaseline.text||"").slice(0,200000),
+      preSendAssistantObservedAt:responseBaselineObservedAt,
+      preSendAssistantIdentity:responseBaselineIdentity
+    });
     const confirmation=await confirmSend(composer2,text);
     if(!confirmation.confirmed) return attempted;
-    return consumeAuthority(command,Object.freeze({ok:true,outcome:"ACTION_CONFIRMED",reason:null,commandId:command.commandId,authorityId:command.authorityId,evidence:confirmation.evidence}));
+    return consumeAuthority(command,Object.freeze({
+      ok:true,
+      outcome:"ACTION_CONFIRMED",
+      reason:null,
+      commandId:command.commandId,
+      authorityId:command.authorityId,
+      evidence:confirmation.evidence,
+      side:String(command.side||registration?.side||"").toUpperCase(),
+      generationEpoch:Number(command.generationEpoch),
+      conversationIdentity:identityAfterDraft,
+      rolloverId:command.rolloverId==null?null:String(command.rolloverId)
+    }));
   }
 
   async function handleAction(raw){
@@ -274,14 +413,16 @@
     return null;
   }
 
-  function responseText(){
+  function responseObservation(){
     const nodes=[];
     for(const selector of config.response||[]){
       try{ for(const node of document.querySelectorAll(selector)) if(visible(node)&&!nodes.includes(node)) nodes.push(node); }catch(_){}
     }
-    const node=nodes[nodes.length-1]; if(!node) return "";
-    return String(node.innerText||node.textContent||"").replace(/\u00a0/g," ").trim();
+    const node=nodes[nodes.length-1]||null;
+    const text=node?String(node.innerText||node.textContent||"").replace(/\u00a0/g," ").trim():"";
+    return {node,text};
   }
+  function responseText(){ return responseObservation().text; }
   function generationActive(){
     const stopSelectors=provider==="chatgpt"?["button[data-testid='stop-button']","button[aria-label='Stop generating']"]
       :provider==="grok"?["button[aria-label='Stop']"]
@@ -292,30 +433,71 @@
     monitorTimer=null;
     if(!awaitingDispatchId) return;
     if(await inspectProviderEvent()){scheduleMonitor(750);return;}
-    const text=responseText();
+    const observation=responseObservation();
+    const text=observation.text;
     if(!text) return;
-    if(text!==lastObserved){lastObserved=text;lastChangedAt=Date.now();scheduleMonitor(350);return;}
+    if(
+      observation.node===awaitingResponseBaselineNode &&
+      text===awaitingResponseBaselineText
+    ){
+      scheduleMonitor(350);
+      return;
+    }
+    if(text!==lastObserved || observation.node!==awaitingResponseBaselineNode){
+      lastObserved=text;
+      lastChangedAt=Date.now();
+      // Once a different response node/text exists, the old-response baseline
+      // has served its purpose. Do not suppress a legitimate identical reply
+      // rendered as a new assistant message.
+      awaitingResponseBaselineNode=null;
+      awaitingResponseBaselineText="";
+      scheduleMonitor(350);
+      return;
+    }
     if(generationActive() || Date.now()-lastChangedAt<1600){scheduleMonitor(350);return;}
     const signature=awaitingDispatchId+"::"+text;
     if(signature===lastResponseSignature) return;
     lastResponseSignature=signature;
     const dispatchId=awaitingDispatchId;
+    const responseContext=awaitingResponseContext && awaitingResponseContext.dispatchId===dispatchId
+      ? awaitingResponseContext
+      : (registration ? Object.freeze({
+          dispatchId,
+          side:registration.side,
+          generationEpoch:registration.generationEpoch,
+          provider:registration.provider,
+          authorityRegistrationId:registration.authorityRegistrationId,
+          rolloverId:null
+        }) : null);
     awaitingDispatchId=null;
+    awaitingResponseContext=null;
+    awaitingResponseBaselineNode=null;
+    awaitingResponseBaselineText="";
     try{
-      if(!registration) return;
+      if(!responseContext) return;
+      const liveIdentity=routeIdentity();
+      if(liveIdentity.provider!==responseContext.provider || liveIdentity.writable!==true) return;
       await chrome.runtime.sendMessage({
         type:"AI_BRIDGE_RESPONSE",
         text,
         completedAt:Date.now(),
         dispatchId,
-        generationEpoch:registration.generationEpoch,
-        conversationIdentity:registration.identity,
-        side:registration.side,
+        generationEpoch:responseContext.generationEpoch,
+        conversationIdentity:liveIdentity,
+        side:responseContext.side,
+        rolloverId:responseContext.rolloverId,
         artifacts:[]
       });
     }catch(_){}
   }
-  function scheduleMonitor(ms=250){ if(monitorTimer) return; monitorTimer=setTimeout(()=>monitor().catch(()=>{}),ms); }
+  function scheduleMonitor(ms=250){
+    if(disposed || monitorTimer) return;
+    monitorTimer=setTimeout(()=>{
+      monitorTimer=null;
+      if(disposed) return;
+      monitor().catch(()=>{});
+    },ms);
+  }
 
 
   function inspectThreadLimit(){
@@ -327,25 +509,53 @@
       if(/usage limit|rate limit|try again in|upload limit|network error|something went wrong/i.test(text)) continue;
       if(!/maximum length for this conversation|you(?:'|’)ve reached the maximum length for this conversation/i.test(text)) continue;
       const signature=text.slice(0,500);
-      if(signature===lastLimitSignature) return;
-      lastLimitSignature=signature;
-      chrome.runtime.sendMessage({type:"AI_BRIDGE_THREAD_LIMIT",provider,text:signature}).catch(()=>{});
+      const limitSignatureKey=String(awaitingDispatchId||"none")+"::"+signature;
+      if(limitSignatureKey===lastLimitSignature) return;
+      if(!registration) return;
+      const liveIdentity=routeIdentity();
+      if(!sameIdentity(liveIdentity,registration.identity)) return;
+      const composer=resolveTrusted(config.composer);
+      lastLimitSignature=limitSignatureKey;
+      chrome.runtime.sendMessage({
+        type:"AI_BRIDGE_THREAD_LIMIT",
+        provider,
+        text:signature,
+        regions:[{kind:"provider-notice",text:signature,visible:true}],
+        composer:{present:Boolean(composer),disabled:Boolean(composer&&!enabled(composer))},
+        dispatchId:awaitingDispatchId,
+        side:registration.side,
+        generationEpoch:registration.generationEpoch,
+        authorityRegistrationId:registration.authorityRegistrationId,
+        conversationIdentity:liveIdentity,
+        observedAt:Date.now(),
+        preSendAssistantText:String(awaitingResponseContext?.preSendAssistantText||"").slice(0,200000),
+        preSendAssistantObservedAt:Number(awaitingResponseContext?.preSendAssistantObservedAt)||null,
+        preSendAssistantIdentity:awaitingResponseContext?.preSendAssistantIdentity||null
+      }).catch(()=>{});
       return;
     }
   }
 
-  const observer=new MutationObserver(()=>{scheduleMonitor();inspectThreadLimit();inspectProviderEvent().catch(()=>{});});
+  const observer=new MutationObserver(()=>{
+    if(disposed) return;
+    scheduleMonitor();
+    inspectThreadLimit();
+    inspectProviderEvent().catch(()=>{});
+  });
   observer.observe(document.documentElement,{childList:true,subtree:true,characterData:true,attributes:true,attributeFilter:["disabled","aria-disabled","data-state","aria-label","data-testid"]});
 
-  setInterval(()=>{
+  routeTimer=setInterval(()=>{
     if(location.href!==lastHref){
       lastHref=location.href;
       registration=null;
-      awaitingDispatchId=null;
+      if(!awaitingResponseContext) awaitingDispatchId=null;
+      lastLimitSignature="";
       providerEventBaseline=new Set();
       providerEventSignatures.clear();
-      byCommand.clear();
-      byAuthority.clear();
+      // Keep the bounded UUID-keyed action cache across same-document SPA route
+      // changes. Registration is still revoked above, so cached results cannot
+      // authorize a new action; they only prove/deduplicate an action that was
+      // already executed before a worker restart.
       chrome.runtime.sendMessage({type:"AI_BRIDGE_DOCUMENT_ROUTE_CHANGED"}).catch(()=>{});
     }
     scheduleMonitor();
@@ -353,7 +563,7 @@
     inspectProviderEvent().catch(()=>{});
   },750);
 
-  chrome.runtime.onMessage.addListener((msg,_sender,sendResponse)=>{
+  const onRuntimeMessage=(msg,_sender,sendResponse)=>{
     if(msg.type==="AI_BRIDGE_PING"){
       sendResponse({ok:true,host,provider,ready:true,version:VERSION,capabilities:capabilities(),identity:routeIdentity()});
       return false;
@@ -402,9 +612,9 @@
           action,
           authorityId,
           result:cached?{...cached}:null,
-          side:registration?.side||null,
-          generationEpoch:registration?.generationEpoch??null,
-          conversationIdentity:routeIdentity()
+          side:cached?.side||registration?.side||null,
+          generationEpoch:cached?.generationEpoch??registration?.generationEpoch??null,
+          conversationIdentity:cached?.conversationIdentity||routeIdentity()
         });
       }catch(error){
         sendResponse({ok:false,error:error.message||String(error)});
@@ -433,5 +643,39 @@
       sendResponse({ok:Boolean(text),text,active:generationActive(),host});
       return false;
     }
-  });
+  };
+
+  chrome.runtime.onMessage.addListener(onRuntimeMessage);
+
+  function disposeContentRuntime(reason="disposed"){
+    if(disposed) return;
+    disposed=true;
+    try{ observer.disconnect(); }catch(_){}
+    if(routeTimer!==null){ clearInterval(routeTimer); routeTimer=null; }
+    if(monitorTimer!==null){ clearTimeout(monitorTimer); monitorTimer=null; }
+    try{ chrome.runtime.onMessage.removeListener(onRuntimeMessage); }catch(_){}
+    registration=null;
+    awaitingDispatchId=null;
+    awaitingResponseContext=null;
+    awaitingResponseBaselineNode=null;
+    awaitingResponseBaselineText="";
+    providerEventBaseline.clear();
+    providerEventSignatures.clear();
+    byCommand.clear();
+    byAuthority.clear();
+    const current=globalThis.__AI_BRIDGE_CONTENT_RUNTIME__;
+    if(current && current.dispose===disposeContentRuntime){
+      current.active=false;
+      current.disposedReason=String(reason||"disposed").slice(0,80);
+    }
+  }
+
+  globalThis.__AI_BRIDGE_CONTENT_RUNTIME__={
+    schema:CONTENT_RUNTIME_SCHEMA,
+    build:CONTENT_BUILD,
+    active:true,
+    installedAt:Date.now(),
+    dispose:disposeContentRuntime
+  };
+  globalThis.__AI_BRIDGE_REVIEW_CONTENT__=true;
 })();

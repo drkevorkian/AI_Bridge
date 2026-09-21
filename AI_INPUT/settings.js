@@ -19,6 +19,23 @@ const PROVIDERS = [
   { name:"Copilot", re:/^https:\/\/copilot\.microsoft\.com\// }
 ];
 let latestZipUrl = "";
+const UPDATE_TERMINAL_PHASES=new Set(["COMPLETE","FAILED","CANCELLED"]);
+const UPDATE_CANCELLABLE_PHASES=new Set(["DRAINING","CHECKPOINTED"]);
+const UPDATE_PHASE_TEXT=Object.freeze({
+  DRAINING:"Waiting for the current AI action to finish safely…",
+  CHECKPOINTED:"Safe update point reached.",
+  APPLIED_NOT_RELOADED:"Update applied. Restarting AI Bridge…",
+  RELOADED_NOT_REBOUND:"AI Bridge restarted. Reconnecting AI tabs…",
+  READY_TO_RESUME:"Update verified. Restoring the session…",
+  COMPLETE:"Update complete.",
+  FAILED:"Update failed safely. Existing session was not resumed automatically.",
+  CANCELLED:"Update cancelled."
+});
+const secureUpdater={
+  busy:false,pinged:false,hostConnected:false,hostName:"",schema:null,
+  releaseConfigured:null,releaseReady:false,algorithm:"",keyBits:0,minimumKeyBits:0,releaseReason:"",
+  checkedTarget:null,checkpoint:null,boundary:null
+};
 
 function show(id,text,error=false){const el=$(id);el.textContent=text;el.classList.remove("hidden");el.classList.toggle("error",error)}
 function versionParts(v){return String(v||"0").split(".").map(x=>Number(x)||0)}
@@ -147,6 +164,239 @@ async function health(){
   $("healthSummary").textContent=supported.length?verified+"/"+supported.length+" verified":"No supported AI tabs open";
 }
 
+function secureUpdateError(response,fallback){
+  return String(response?.error||response?.reason||fallback||"Updater operation failed.");
+}
+function setSecureUpdateNotice(text,error=false){
+  const el=$("secureUpdateNotice");
+  el.textContent=String(text||"");
+  el.classList.toggle("error",Boolean(error));
+}
+function installedTarget(){
+  const m=chrome.runtime.getManifest();
+  return {version:String(m.version||""),build:String(m.version_name||m.version||"")};
+}
+function checkpointIsActive(checkpoint){
+  return Boolean(checkpoint?.phase&&!UPDATE_TERMINAL_PHASES.has(String(checkpoint.phase)));
+}
+function targetMatchesInstalled(target){
+  if(!target)return false;
+  const current=installedTarget();
+  return String(target.version)===current.version&&String(target.build)===current.build;
+}
+function renderSecureUpdater(){
+  const cp=secureUpdater.checkpoint;
+  $("nativeHostStatus").textContent=secureUpdater.hostConnected
+    ? "Connected"+(secureUpdater.schema!=null?" · schema "+secureUpdater.schema:"")
+    : (secureUpdater.pinged?"Not installed / unavailable":"Not tested");
+
+  if(!secureUpdater.hostConnected){
+    $("releaseTrustStatus").textContent="Unknown";
+    $("verificationStatus").textContent="Unknown";
+  }else if(secureUpdater.releaseConfigured===false){
+    $("releaseTrustStatus").textContent="Not configured";
+    $("verificationStatus").textContent="Not configured";
+  }else if(!secureUpdater.releaseReady){
+    $("releaseTrustStatus").textContent="Invalid configuration";
+    const parts=[];
+    if(secureUpdater.algorithm)parts.push(secureUpdater.algorithm);
+    if(secureUpdater.keyBits>0)parts.push(secureUpdater.keyBits+"-bit");
+    let detail=parts.join(" · ")||"Invalid configuration";
+    if(secureUpdater.minimumKeyBits>0&&secureUpdater.keyBits>0&&secureUpdater.keyBits<secureUpdater.minimumKeyBits){
+      detail+=" — requires ≥"+secureUpdater.minimumKeyBits+"-bit";
+    }else if(secureUpdater.releaseReason){
+      detail+=" · "+secureUpdater.releaseReason;
+    }
+    $("verificationStatus").textContent=detail;
+  }else{
+    $("releaseTrustStatus").textContent="Ready";
+    $("verificationStatus").textContent=secureUpdater.algorithm+
+      (secureUpdater.keyBits>0?" · "+secureUpdater.keyBits+"-bit":"");
+  }
+
+  if(!secureUpdater.hostConnected||!secureUpdater.releaseReady){
+    $("automaticApplyStatus").textContent="Disabled";
+  }else if(checkpointIsActive(cp)){
+    $("automaticApplyStatus").textContent=cp.phase==="CHECKPOINTED"?"Ready to apply":"In progress";
+  }else{
+    $("automaticApplyStatus").textContent="Available";
+  }
+
+  if(cp?.phase){
+    const detail=UPDATE_PHASE_TEXT[cp.phase]||String(cp.phase);
+    $("checkpointStatus").textContent=String(cp.phase)+" · "+detail;
+  }else{
+    $("checkpointStatus").textContent="None";
+  }
+
+  const target=secureUpdater.checkedTarget;
+  $("availableSignedUpdate").textContent=target
+    ? "v"+target.version+" · "+target.build+" · "+target.files+" file"+(target.files===1?"":"s")+
+      (targetMatchesInstalled(target)?" · already installed":"")
+    : "Not checked";
+
+  const active=checkpointIsActive(cp);
+  $("testNativeUpdater").disabled=secureUpdater.busy;
+  $("checkSignedUpdate").disabled=secureUpdater.busy||!secureUpdater.hostConnected||!secureUpdater.releaseReady||active;
+  $("prepareNativeUpdate").disabled=secureUpdater.busy||!secureUpdater.hostConnected||!secureUpdater.releaseReady||
+    !target||targetMatchesInstalled(target)||active;
+  $("applyNativeUpdate").disabled=secureUpdater.busy||!secureUpdater.hostConnected||!secureUpdater.releaseReady||
+    cp?.phase!=="CHECKPOINTED";
+  $("cancelNativeUpdate").disabled=secureUpdater.busy||!UPDATE_CANCELLABLE_PHASES.has(String(cp?.phase||""));
+}
+async function refreshNativeUpdateStatus({quiet=false}={}){
+  const response=await chrome.runtime.sendMessage({type:"AI_BRIDGE_UPDATE_STATUS"});
+  if(!response?.ok)throw new Error(secureUpdateError(response,"Could not read update checkpoint status."));
+  secureUpdater.checkpoint=response.checkpoint||null;
+  secureUpdater.boundary=response.boundary||null;
+  renderSecureUpdater();
+  if(!quiet&&secureUpdater.checkpoint?.phase){
+    const cp=secureUpdater.checkpoint;
+    const detail=UPDATE_PHASE_TEXT[cp.phase]||String(cp.phase);
+    setSecureUpdateNotice(detail,cp.phase==="FAILED");
+  }
+  return response;
+}
+async function testNativeUpdater({quiet=false}={}){
+  secureUpdater.busy=true;renderSecureUpdater();
+  try{
+    const response=await chrome.runtime.sendMessage({type:"AI_BRIDGE_UPDATE_NATIVE_PING"});
+    secureUpdater.pinged=true;
+    if(response?.ok!==true){
+      secureUpdater.hostConnected=false;
+      secureUpdater.hostName="";
+      secureUpdater.schema=null;
+      secureUpdater.releaseConfigured=null;
+      secureUpdater.releaseReady=false;
+      secureUpdater.algorithm="";
+      secureUpdater.keyBits=0;
+      secureUpdater.minimumKeyBits=0;
+      secureUpdater.releaseReason="";
+      secureUpdater.checkedTarget=null;
+      if(!quiet)setSecureUpdateNotice("Updater host unavailable: "+secureUpdateError(response,"Native updater is not installed or unavailable."),true);
+      return response;
+    }
+    const verification=response.release_verification&&typeof response.release_verification==="object"
+      ? response.release_verification:{};
+    secureUpdater.hostConnected=true;
+    secureUpdater.hostName=String(response.host||"");
+    secureUpdater.schema=response.schema??null;
+    secureUpdater.releaseConfigured=verification.configured===true;
+    secureUpdater.releaseReady=verification.ready===true;
+    secureUpdater.algorithm=String(verification.algorithm||"");
+    secureUpdater.keyBits=Number(verification.key_bits)||0;
+    secureUpdater.minimumKeyBits=Number(verification.minimum_key_bits)||0;
+    secureUpdater.releaseReason=String(verification.reason||"");
+    if(!quiet){
+      if(secureUpdater.releaseConfigured===false){
+        setSecureUpdateNotice("Updater host connected. Release verification is not configured, so signed CHECK/APPLY remain disabled.");
+      }else if(!secureUpdater.releaseReady){
+        setSecureUpdateNotice("Updater host connected, but the release verification configuration is invalid.",true);
+      }else{
+        setSecureUpdateNotice("Updater host connected. Release verification is ready.");
+      }
+    }
+    return response;
+  }finally{
+    secureUpdater.busy=false;renderSecureUpdater();
+  }
+}
+async function checkSignedUpdate(){
+  if(!secureUpdater.hostConnected||!secureUpdater.releaseReady)throw new Error("Release verification must be ready before checking a signed update.");
+  secureUpdater.busy=true;renderSecureUpdater();
+  try{
+    setSecureUpdateNotice("Checking the signed update manifest…");
+    const response=await chrome.runtime.sendMessage({type:"AI_BRIDGE_UPDATE_NATIVE_CHECK"});
+    if(response?.ok!==true)throw new Error(secureUpdateError(response,"Signed update check failed."));
+    const available=response.available;
+    const version=String(available?.version||"").trim();
+    const build=String(available?.build||"").trim();
+    const files=Number(available?.files);
+    if(!version||version.length>128||!build||build.length>128||!Number.isInteger(files)||files<1||files>10000){
+      throw new Error("Native updater returned an invalid signed update target.");
+    }
+    secureUpdater.checkedTarget=Object.freeze({version,build,files});
+    setSecureUpdateNotice(targetMatchesInstalled(secureUpdater.checkedTarget)
+      ?"The signed update target matches the installed build."
+      :"Signed update verified and ready to prepare.");
+    return response;
+  }finally{
+    secureUpdater.busy=false;renderSecureUpdater();
+  }
+}
+async function prepareNativeUpdate(){
+  const target=secureUpdater.checkedTarget;
+  if(!target)throw new Error("Check a signed update before preparing it.");
+  if(targetMatchesInstalled(target))throw new Error("The signed target is already installed.");
+  await refreshNativeUpdateStatus({quiet:true});
+  if(checkpointIsActive(secureUpdater.checkpoint))throw new Error("An update transaction is already active.");
+  secureUpdater.busy=true;renderSecureUpdater();
+  try{
+    const response=await chrome.runtime.sendMessage({
+      type:"AI_BRIDGE_UPDATE_PREPARE",
+      targetVersion:target.version,
+      targetBuild:target.build
+    });
+    if(response?.ok!==true)throw new Error(secureUpdateError(response,"Could not prepare the update checkpoint."));
+    secureUpdater.checkpoint=response.checkpoint||secureUpdater.checkpoint;
+    setSecureUpdateNotice(response.ready
+      ?"Safe update point reached."
+      :"Update prepared. Waiting for the current AI action to finish safely…");
+    return response;
+  }finally{
+    secureUpdater.busy=false;
+    await refreshNativeUpdateStatus({quiet:true}).catch(()=>{});
+    renderSecureUpdater();
+  }
+}
+async function applyNativeUpdate(){
+  await refreshNativeUpdateStatus({quiet:true});
+  if(secureUpdater.checkpoint?.phase!=="CHECKPOINTED")throw new Error("Apply is allowed only after a durable CHECKPOINTED update state.");
+  secureUpdater.busy=true;renderSecureUpdater();
+  setSecureUpdateNotice("Applying the signed update. AI Bridge will restart and rebind its AI tabs…");
+  const response=await chrome.runtime.sendMessage({type:"AI_BRIDGE_UPDATE_NATIVE_APPLY"});
+  if(response?.ok!==true){
+    secureUpdater.busy=false;renderSecureUpdater();
+    throw new Error(secureUpdateError(response,"Native update apply failed."));
+  }
+  return response;
+}
+async function cancelNativeUpdate(){
+  await refreshNativeUpdateStatus({quiet:true});
+  const cp=secureUpdater.checkpoint;
+  if(!UPDATE_CANCELLABLE_PHASES.has(String(cp?.phase||"")))throw new Error("This update phase cannot be cancelled.");
+  secureUpdater.busy=true;renderSecureUpdater();
+  try{
+    const response=await chrome.runtime.sendMessage({type:"AI_BRIDGE_UPDATE_CANCEL",checkpointId:String(cp.checkpointId||"")});
+    if(response?.ok!==true)throw new Error(secureUpdateError(response,"Update cancellation failed."));
+    secureUpdater.checkpoint=response.checkpoint||null;
+    setSecureUpdateNotice("Update cancelled.");
+    return response;
+  }finally{
+    secureUpdater.busy=false;
+    await refreshNativeUpdateStatus({quiet:true}).catch(()=>{});
+    renderSecureUpdater();
+  }
+}
+async function initializeSecureUpdater(){
+  renderSecureUpdater();
+  await testNativeUpdater({quiet:true});
+  await refreshNativeUpdateStatus({quiet:true});
+  if(!secureUpdater.hostConnected){
+    setSecureUpdateNotice("Native updater is not installed or unavailable. Manual ZIP fallback remains available.",true);
+  }else if(secureUpdater.releaseConfigured===false){
+    setSecureUpdateNotice("Updater host connected. Release verification is not configured; automatic update application remains securely disabled.");
+  }else if(!secureUpdater.releaseReady){
+    setSecureUpdateNotice("Updater host connected, but release verification is invalid; automatic update application remains disabled.",true);
+  }else if(secureUpdater.checkpoint?.phase){
+    const cp=secureUpdater.checkpoint;
+    setSecureUpdateNotice(UPDATE_PHASE_TEXT[cp.phase]||String(cp.phase),cp.phase==="FAILED");
+  }else{
+    setSecureUpdateNotice("Updater host and release verification are ready.");
+  }
+  renderSecureUpdater();
+}
+
 async function checkUpdates(){
   $("updateStatus").textContent="Checking GitHub…";
   const res=await fetch("https://raw.githubusercontent.com/drkevorkian/AI_Bridge/main/manifest.json",{cache:"no-store"});if(!res.ok)throw new Error("GitHub manifest check failed.");
@@ -177,7 +427,20 @@ $("googleLink").addEventListener("click",guarded(linkGoogle,"googleNotice"));$("
 $("copyExtensionId").addEventListener("click",()=>navigator.clipboard.writeText($("extensionId").textContent));$("copyRedirectUri").addEventListener("click",()=>navigator.clipboard.writeText($("redirectUri").textContent));
 $("refreshHealth").addEventListener("click",guarded(health,"syncNotice"));
 $("keepAwake").addEventListener("change",guarded(async()=>{const enabled=$("keepAwake").checked;const r=await chrome.runtime.sendMessage({type:"AI_BRIDGE_POWER_SET",enabled});if(!r?.ok)throw new Error(r?.error||"Power setting failed.");$("powerStatus").textContent=enabled?"System awake":"Released";},"syncNotice"));
+$("testNativeUpdater").addEventListener("click",guarded(()=>testNativeUpdater(),"secureUpdateNotice"));
+$("checkSignedUpdate").addEventListener("click",guarded(checkSignedUpdate,"secureUpdateNotice"));
+$("prepareNativeUpdate").addEventListener("click",guarded(prepareNativeUpdate,"secureUpdateNotice"));
+$("applyNativeUpdate").addEventListener("click",guarded(applyNativeUpdate,"secureUpdateNotice"));
+$("cancelNativeUpdate").addEventListener("click",guarded(cancelNativeUpdate,"secureUpdateNotice"));
 $("checkUpdates").addEventListener("click",guarded(checkUpdates,"syncNotice"));$("downloadUpdate").addEventListener("click",guarded(async()=>{if(!latestZipUrl)await checkUpdates();await chrome.downloads.download({url:latestZipUrl,filename:"AI_Bridge-main.zip",saveAs:true});},"syncNotice"));
 $("autoCheckUpdates").addEventListener("change",guarded(async()=>{const enabled=$("autoCheckUpdates").checked;await chrome.storage.local.set({[AUTO_UPDATE_KEY]:enabled});await chrome.runtime.sendMessage({type:"AI_BRIDGE_AUTO_UPDATE_SET",enabled});},"syncNotice"));
 chrome.storage.onChanged.addListener((changes,area)=>{if(area==="local"&&changes[THEME_KEY])applyTheme(changes[THEME_KEY].newValue)});
-init().then(health).catch(e=>show("syncNotice",e.message,true));
+init().then(async()=>{
+  await health();
+  await initializeSecureUpdater();
+  window.setInterval(()=>{
+    if(checkpointIsActive(secureUpdater.checkpoint)){
+      refreshNativeUpdateStatus({quiet:true}).catch(()=>{});
+    }
+  },2000);
+}).catch(e=>show("syncNotice",e.message,true));
