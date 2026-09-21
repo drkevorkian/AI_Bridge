@@ -60,7 +60,7 @@ const send=contentJs.slice(sendStartMarker,handleStart);
 
 for(const token of [
   "setComposerText(composer2,text);",
-  "for(let i=0;i<20;i++)",
+  "for(let i=0;i<80;i++)",
   "resolveTrusted(config.send,{requireEnabled:true})",
   "const stats=trustedSelectorStats(config.send);",
   "const composerChars=getComposerText(composer2).length;",
