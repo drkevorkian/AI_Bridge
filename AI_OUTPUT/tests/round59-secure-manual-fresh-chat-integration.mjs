@@ -32,18 +32,32 @@ assert.ok(
 );
 assert.doesNotMatch(openFresh,/New Chat is LIMITED/,"Dashboard must not retain the old New Chat stub");
 
+const bindingHelper=dashboard.indexOf("function activeBindingStatus()");
+const validateTabs=dashboard.indexOf("function validateActiveTabs()",bindingHelper);
+assert.ok(bindingHelper>=0&&validateTabs>bindingHelper,"shared active-binding helper missing");
+const bindingBlock=dashboard.slice(bindingHelper,validateTabs);
+for(const token of [
+  "const missingSides = bindings",
+  "const ownersByTab = new Map();",
+  "const duplicateTabs = new Set(",
+  "valid: missingSides.length === 0 && duplicateTabs.size === 0"
+]) assert.ok(bindingBlock.includes(token),"shared active-binding policy missing "+token);
+assert.ok(
+  dashboard.slice(validateTabs,openStart).includes("const status = activeBindingStatus();"),
+  "Start/manual validation must consume shared active-binding status"
+);
+
 const controlsStart=dashboard.indexOf("function updateControls(s)");
 const controlsEnd=dashboard.indexOf("function runtimePhaseLabel",controlsStart);
 assert.ok(controlsStart>=0&&controlsEnd>controlsStart,"updateControls block missing");
 const controls=dashboard.slice(controlsStart,controlsEnd);
 for(const token of [
   "const manualFreshAllowed = !s.sessionActive;",
-  "const bindingSummary = activeTabBindingSummary();",
-  "const activeTabsValid = validateActiveTabs(bindingSummary) === null;",
+  "const bindingStatus = activeBindingStatus();",
+  "const activeTabsValid = bindingStatus.valid;",
   '$("newAllChats").disabled = !manualFreshAllowed || !activeTabsValid;',
   '$("freshOnStart").disabled = !manualFreshAllowed || !activeTabsValid;',
-  "const manualTabReady = manualFreshTabReady(side, bindingSummary);",
-  '$(`newChat${side}`).disabled = !manualFreshAllowed || !manualTabReady;'
+  '$(`newChat${side}`).disabled = !manualFreshAllowed || !bindingStatus.valid;'
 ]) assert.ok(controls.includes(token),"manual fresh-chat control policy missing "+token);
 
 assert.doesNotMatch(

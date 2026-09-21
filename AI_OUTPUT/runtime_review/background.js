@@ -542,6 +542,47 @@ function reviewTrustedExtensionPage(sender){
   if(sender?.documentLifecycle!=null&&String(sender.documentLifecycle)!=="active")return false;
   return true;
 }
+const REVIEW_NATIVE_UPDATER_HOST="com.aibridge.updater";
+async function reviewSendNativeUpdater(command,payload={}){
+  const op=String(command||"").toUpperCase();
+  if(!["PING","CHECK","APPLY"].includes(op))return {ok:false,reason:"NATIVE_UPDATE_COMMAND_REJECTED"};
+  const message=op==="APPLY"
+    ? {
+        command:op,
+        checkpointId:String(payload.checkpointId||""),
+        expectedVersion:String(payload.expectedVersion||""),
+        expectedBuild:String(payload.expectedBuild||"")
+      }
+    : {command:op};
+  if(op==="APPLY"&&!message.checkpointId)return {ok:false,reason:"NATIVE_UPDATE_CHECKPOINT_REQUIRED"};
+  if(op==="APPLY"&&(!message.expectedVersion||!message.expectedBuild))return {ok:false,reason:"NATIVE_UPDATE_TARGET_REQUIRED"};
+  try{
+    const result=await chrome.runtime.sendNativeMessage(REVIEW_NATIVE_UPDATER_HOST,message);
+    if(!result||typeof result!=="object")return {ok:false,reason:"NATIVE_UPDATE_RESPONSE_INVALID"};
+    return result;
+  }catch(error){
+    return {ok:false,reason:"NATIVE_UPDATE_HOST_UNAVAILABLE",error:error?.message||String(error)};
+  }
+}
+async function reviewNativeApplyCheckpoint(){
+  const cp=state.updateCheckpoint;
+  if(!cp||cp.phase!==UPDATE_PHASE.CHECKPOINTED)return {ok:false,reason:"UPDATE_NOT_CHECKPOINTED"};
+  const result=await reviewSendNativeUpdater("APPLY",{
+    checkpointId:cp.checkpointId,
+    expectedVersion:cp.targetVersion,
+    expectedBuild:cp.targetBuild
+  });
+  if(result?.ok!==true)return result;
+  if(String(result.checkpointId||"")!==String(cp.checkpointId))return {ok:false,reason:"NATIVE_UPDATE_CHECKPOINT_MISMATCH"};
+  if(String(result.version||"")!==String(cp.targetVersion)||String(result.build||"")!==String(cp.targetBuild)){
+    return {ok:false,reason:"NATIVE_UPDATE_TARGET_MISMATCH"};
+  }
+  return reviewMarkUpdateApplied({
+    checkpointId:cp.checkpointId,
+    version:result.version,
+    build:result.build
+  });
+}
 const REVIEW_UI_CONTROL_TYPES=new Set([
   "AI_BRIDGE_POWER_SET",
   "AI_BRIDGE_AUTO_UPDATE_SET",
@@ -555,6 +596,9 @@ const REVIEW_UI_CONTROL_TYPES=new Set([
   "AI_BRIDGE_NEW_CHATS",
   "AI_BRIDGE_START",
   "AI_BRIDGE_UPDATE_RULES",
+  "AI_BRIDGE_UPDATE_NATIVE_PING",
+  "AI_BRIDGE_UPDATE_NATIVE_CHECK",
+  "AI_BRIDGE_UPDATE_NATIVE_APPLY",
   "AI_BRIDGE_MANUAL_RELAY",
   "AI_BRIDGE_PAUSE",
   "AI_BRIDGE_RESUME",
@@ -4008,6 +4052,30 @@ async function resetChatTab(tabId) {
   });
 }
 
+function reviewValidateManualFreshBindings(msg, activeSides = SIDES) {
+  const roster=[...new Set((Array.isArray(activeSides)?activeSides:SIDES)
+    .map(side=>String(side||"").toUpperCase()))]
+    .filter(side=>ALL_SIDES.includes(side));
+  if(!roster.length) throw new Error("Choose at least one active AI role.");
+
+  const bindings=roster.map(side=>({side,tabId:Number(msg?.[`tab${side}`])}));
+  if(bindings.some(binding=>!Number.isInteger(binding.tabId)||binding.tabId<=0)){
+    throw new Error("Choose an open supported AI tab for every active role.");
+  }
+  const byTab=new Map();
+  for(const binding of bindings){
+    const owners=byTab.get(binding.tabId)||[];
+    owners.push(binding.side);
+    byTab.set(binding.tabId,owners);
+  }
+  const duplicate=[...byTab.entries()].find(([,owners])=>owners.length>1);
+  if(duplicate){
+    const [tabId,owners]=duplicate;
+    throw new Error(`Each logical AI must use a different browser tab. Tab ${tabId} is selected for AI ${owners.join(" and AI ")}.`);
+  }
+  return bindings;
+}
+
 async function resetSelectedChats(msg, sides = SIDES, { allowActive = false } = {}) {
   if (state.sessionActive && !allowActive) throw new Error("Stop the current bridge session before opening fresh AI chats.");
   const allowedSides = state.sessionActive ? SIDES : ALL_SIDES;
@@ -4015,9 +4083,13 @@ async function resetSelectedChats(msg, sides = SIDES, { allowActive = false } = 
     .filter(side => allowedSides.includes(side));
   if (!chosen.length) throw new Error("Choose at least one AI role to reset.");
 
-  const ids = chosen.map(side => Number(msg?.[`tab${side}`]));
-  if (ids.some(id => !Number.isInteger(id) || id <= 0)) throw new Error("Choose an open supported AI tab for every requested role.");
-  if (new Set(ids).size !== ids.length) throw new Error("Each requested AI role must use a different tab.");
+  // Manual fresh-chat navigation mutates a real provider tab. Validate the
+  // entire active logical roster, not merely the requested subset, so a stale
+  // or custom extension page cannot navigate a tab another logical AI shares.
+  const rosterBindings=reviewValidateManualFreshBindings(msg,SIDES);
+  const bindingBySide=new Map(rosterBindings.map(binding=>[binding.side,binding.tabId]));
+  const ids=chosen.map(side=>bindingBySide.get(side));
+  if(ids.some(id=>!Number.isInteger(id)||id<=0)) throw new Error("Choose an open supported AI tab for every requested role.");
 
   const tabs = await Promise.all(ids.map(id => chrome.tabs.get(id)));
   for (const tab of tabs) freshChatUrlFor(tab?.url);
@@ -4450,6 +4522,18 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
     if (msg.type === "AI_BRIDGE_UPDATE_STATUS") {
       if(!reviewTrustedExtensionPage(sender)){sendResponse({ok:false,reason:"UPDATE_CONTROL_UNTRUSTED_SENDER"});return;}
       await stateReady;sendResponse({ok:true,checkpoint:state.updateCheckpoint?{...state.updateCheckpoint}:null,boundary:reviewUpdateBoundary()});return;
+    }
+    if (msg.type === "AI_BRIDGE_UPDATE_NATIVE_PING") {
+      if(!reviewTrustedExtensionPage(sender)){sendResponse({ok:false,reason:"UPDATE_CONTROL_UNTRUSTED_SENDER"});return;}
+      sendResponse(await reviewSendNativeUpdater("PING"));return;
+    }
+    if (msg.type === "AI_BRIDGE_UPDATE_NATIVE_CHECK") {
+      if(!reviewTrustedExtensionPage(sender)){sendResponse({ok:false,reason:"UPDATE_CONTROL_UNTRUSTED_SENDER"});return;}
+      sendResponse(await reviewSendNativeUpdater("CHECK"));return;
+    }
+    if (msg.type === "AI_BRIDGE_UPDATE_NATIVE_APPLY") {
+      if(!reviewTrustedExtensionPage(sender)){sendResponse({ok:false,reason:"UPDATE_CONTROL_UNTRUSTED_SENDER"});return;}
+      await stateReady;sendResponse(await reviewNativeApplyCheckpoint());return;
     }
 
     if (msg.type === "AI_BRIDGE_SETTINGS_OPEN") {

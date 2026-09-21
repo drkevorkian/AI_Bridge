@@ -766,8 +766,8 @@ function updateControls(s) {
   $("resume").disabled = !s.sessionActive || s.running || s.awaitingHuman;
   $("stop").disabled = !s.sessionActive;
   const manualFreshAllowed = !s.sessionActive;
-  const bindingSummary = activeTabBindingSummary();
-  const activeTabsValid = validateActiveTabs(bindingSummary) === null;
+  const bindingStatus = activeBindingStatus();
+  const activeTabsValid = bindingStatus.valid;
   $("newAllChats").disabled = !manualFreshAllowed || !activeTabsValid;
   $("freshOnStart").disabled = !manualFreshAllowed || !activeTabsValid;
   $("agentCount").disabled = Boolean(s.sessionActive);
@@ -781,8 +781,7 @@ function updateControls(s) {
   updateWorkModeUI();
 
   for (const side of SIDES) {
-    const manualTabReady = manualFreshTabReady(side, bindingSummary);
-    $(`newChat${side}`).disabled = !manualFreshAllowed || !manualTabReady;
+    $(`newChat${side}`).disabled = !manualFreshAllowed || !bindingStatus.valid;
     const batchDone = ["compete", "parallel", "review"].includes(s.workMode) && Array.isArray(s.phaseCompletedSides) && s.phaseCompletedSides.includes(side);
     $(`resend${side}`).disabled = !s.sessionActive || !s.running || s.awaitingHuman || !s.lastSentBySide?.[side] || batchDone;
   }
@@ -932,36 +931,43 @@ function selectedBindings() {
   return data;
 }
 
-function activeTabBindingSummary() {
-  const bindings = SIDES.map(side => {
-    const tabId = selectedTab(side);
-    const open = Number.isInteger(tabId) && tabId > 0 && tabsById.has(tabId);
-    return { side, tabId, open };
-  });
-  const counts = new Map();
-  for (const binding of bindings) {
-    if (!binding.open) continue;
-    counts.set(binding.tabId, (counts.get(binding.tabId) || 0) + 1);
+function activeBindingStatus() {
+  const bindings = SIDES.map(side => ({ side, tabId: selectedTab(side) }));
+  const missingSides = bindings
+    .filter(({ tabId }) => !Number.isInteger(tabId) || tabId <= 0 || !tabsById.has(tabId))
+    .map(({ side }) => side);
+
+  const ownersByTab = new Map();
+  for (const { side, tabId } of bindings) {
+    if (!Number.isInteger(tabId) || tabId <= 0 || !tabsById.has(tabId)) continue;
+    const owners = ownersByTab.get(tabId) || [];
+    owners.push(side);
+    ownersByTab.set(tabId, owners);
   }
-  const duplicateTabIds = new Set(
-    [...counts.entries()].filter(([, count]) => count > 1).map(([tabId]) => tabId)
+
+  const duplicateTabs = new Set(
+    [...ownersByTab.entries()]
+      .filter(([, owners]) => owners.length > 1)
+      .map(([tabId]) => tabId)
   );
-  return {
-    bindings,
-    duplicateTabIds,
-    allOpen: bindings.every(binding => binding.open),
-    allDistinct: duplicateTabIds.size === 0
-  };
+  const duplicateSides = new Set(
+    bindings
+      .filter(({ tabId }) => duplicateTabs.has(tabId))
+      .map(({ side }) => side)
+  );
+
+  return Object.freeze({
+    valid: missingSides.length === 0 && duplicateTabs.size === 0,
+    missingSides: Object.freeze(missingSides),
+    duplicateTabs,
+    duplicateSides
+  });
 }
 
-function manualFreshTabReady(side, summary = activeTabBindingSummary()) {
-  const binding = summary.bindings.find(item => item.side === side);
-  return Boolean(binding?.open && !summary.duplicateTabIds.has(binding.tabId));
-}
-
-function validateActiveTabs(summary = activeTabBindingSummary()) {
-  if (!summary.allOpen) return `Choose ${SIDES.length} supported AI tab${SIDES.length === 1 ? "" : "s"}.`;
-  if (!summary.allDistinct) return "Each logical AI must use a different browser tab. Multiple tabs from the same LLM are allowed.";
+function validateActiveTabs() {
+  const status = activeBindingStatus();
+  if (status.missingSides.length) return `Choose ${SIDES.length} supported AI tab${SIDES.length === 1 ? "" : "s"}.`;
+  if (status.duplicateTabs.size) return "Each logical AI must use a different browser tab. Multiple tabs from the same LLM are allowed.";
   return null;
 }
 
@@ -1029,16 +1035,9 @@ async function openFreshChats(rawSides) {
     return;
   }
 
-  const bindingSummary = activeTabBindingSummary();
-  const unavailable = requested.filter(side => !manualFreshTabReady(side, bindingSummary));
-  if (unavailable.length) {
-    const duplicated = unavailable.filter(side => {
-      const binding = bindingSummary.bindings.find(item => item.side === side);
-      return binding?.open && bindingSummary.duplicateTabIds.has(binding.tabId);
-    });
-    $("status").textContent = duplicated.length
-      ? "Each logical AI must use a different browser tab before opening a fresh chat."
-      : `Choose an open supported AI tab for ${unavailable.map(side => "AI " + side).join(", ")}.`;
+  const bindingError = validateActiveTabs();
+  if (bindingError) {
+    $("status").textContent = bindingError;
     return;
   }
 

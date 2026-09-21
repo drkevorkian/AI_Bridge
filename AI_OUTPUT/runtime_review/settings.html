@@ -89,13 +89,35 @@
 
     <section class="settings-card">
       <div class="section-heading"><span>Updates</span><span id="updateVersion" class="muted"></span></div>
-      <p class="help">Checks this repository's <code>main/manifest.json</code>. AI Bridge never overwrites an unpacked extension automatically.</p>
-      <div id="updateStatus" class="notice">Not checked yet.</div>
-      <div class="actions">
-        <button id="checkUpdates" type="button">Check for updates</button>
-        <button id="downloadUpdate" type="button" disabled>Download latest ZIP</button>
+      <p class="help">AI Bridge can check signed updates and apply them through the local native updater when release verification is configured. Until the approved release key is installed, automatic update application remains securely disabled.</p>
+
+      <div class="update-status-grid" aria-live="polite">
+        <div class="update-status-row"><span>Updater host</span><strong id="nativeHostStatus">Not tested</strong></div>
+        <div class="update-status-row"><span>Release trust</span><strong id="releaseTrustStatus">Unknown</strong></div>
+        <div class="update-status-row"><span>Automatic apply</span><strong id="automaticApplyStatus">Disabled</strong></div>
+        <div class="update-status-row"><span>Verification</span><strong id="verificationStatus">Unknown</strong></div>
+        <div class="update-status-row"><span>Update checkpoint</span><strong id="checkpointStatus">None</strong></div>
+        <div class="update-status-row"><span>Available update</span><strong id="availableSignedUpdate">Not checked</strong></div>
       </div>
-      <label class="check-line"><input id="autoCheckUpdates" type="checkbox"> Check once a day and notify when a newer version exists</label>
+      <div id="secureUpdateNotice" class="notice">Test the updater to verify the local host and release-trust configuration.</div>
+      <div class="actions">
+        <button id="testNativeUpdater" type="button">Test updater</button>
+        <button id="checkSignedUpdate" type="button" disabled>Check signed update</button>
+        <button id="prepareNativeUpdate" type="button" disabled>Prepare update</button>
+        <button id="applyNativeUpdate" type="button" disabled>Apply update</button>
+        <button id="cancelNativeUpdate" type="button" disabled>Cancel update</button>
+      </div>
+
+      <div class="update-subsection">
+        <div class="subheading">Manual fallback</div>
+        <p class="help">The ZIP path is a review/manual fallback. It does not use the durable checkpoint, native apply, reload, and AI-tab rebind workflow above.</p>
+        <div id="updateStatus" class="notice">Not checked yet.</div>
+        <div class="actions">
+          <button id="checkUpdates" type="button">Check GitHub manifest</button>
+          <button id="downloadUpdate" type="button" disabled>Download latest ZIP</button>
+        </div>
+        <label class="check-line"><input id="autoCheckUpdates" type="checkbox"> Check once a day and notify when a newer version exists</label>
+      </div>
     </section>
   </main>
   <script src="settings.js"></script>
