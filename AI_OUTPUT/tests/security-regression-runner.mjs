@@ -52,6 +52,7 @@ const tests=[
   'round70-bounded-composer-mount.mjs',
   'round71-response-handoff-recovery.mjs',
   'round72-solo-recovery-hardening.mjs',
+  'round73-response-detection-manual-relay.mjs',
   'round42-content-runtime-lifecycle.mjs',
   'round43-next-turn-adoption.mjs',
   'round44-restart-delivery-recovery.mjs',
