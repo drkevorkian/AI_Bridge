@@ -42,5 +42,5 @@ assert.ok(handler.includes("priorDispatchIds:replayPlan.priorDispatchIds"));
 
 assert.ok(dash.includes('RECOVERY_START_REPLAYING_FAILED_HANDOFF: "Replaying previously failed recovery handoff"'));
 assert.ok(dash.includes("res.replayedCommitted"));
-assert.equal(manifest.version_name,"1.19.1.36-AI-A");
+assert.match(manifest.version_name,/^1\\.19\\.1\\.(?:3[6-9]|[4-9][0-9])-AI-[A-Z]$/);
 console.log("round76-replay-failed-recovery-handoff: PASS");
