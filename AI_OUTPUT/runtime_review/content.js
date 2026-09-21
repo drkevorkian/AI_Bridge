@@ -119,6 +119,25 @@
     }
     return nodes.length===1 ? nodes[0] : null;
   }
+  function trustedSelectorStats(selectors){
+    const matched=new Set();
+    const visibleNodes=new Set();
+    const enabledNodes=new Set();
+    for(const selector of selectors||[]){
+      let nodes=[];
+      try{ nodes=[...document.querySelectorAll(selector)]; }catch(_){}
+      for(const node of nodes){
+        matched.add(node);
+        if(visible(node)) visibleNodes.add(node);
+        if(enabled(node)) enabledNodes.add(node);
+      }
+    }
+    return Object.freeze({
+      matched:matched.size,
+      visible:visibleNodes.size,
+      enabled:enabledNodes.size
+    });
+  }
   function routeIdentity(){
     const path=location.pathname;
     let threadKey=null;
@@ -256,7 +275,12 @@
         break;
       }
     }
-    if(!send) return rememberCommand(command,reject(command,"DOM_AUTHORITY_NOT_ACTIONABLE","SEND"));
+    if(!send){
+      const stats=trustedSelectorStats(config.send);
+      const composerChars=getComposerText(composer2).length;
+      const detail=`SEND provider=${provider}; composerChars=${composerChars}; matched=${stats.matched}; visible=${stats.visible}; enabled=${stats.enabled}`;
+      return rememberCommand(command,reject(command,"DOM_AUTHORITY_NOT_ACTIONABLE",detail));
+    }
 
     // Re-prove identity after provider React/SPA DOM updates caused by typing.
     const identityAfterDraft=routeIdentity();

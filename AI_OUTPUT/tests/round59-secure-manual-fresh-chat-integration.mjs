@@ -19,8 +19,9 @@ for(const token of [
   "sides: requested,",
   "...selectedBindings()",
   "latestState?.sessionActive",
-  "const bindingSummary = activeTabBindingSummary();",
-  "const unavailable = requested.filter(side => !manualFreshTabReady(side, bindingSummary));",
+  "const bindingStatus = activeBindingStatus();",
+  "const unavailable = requested.filter(side => !manualFreshTabReady(side, bindingStatus));",
+  "bindingStatus.duplicateSides.has(side)",
   "Each logical AI must use a different browser tab before opening a fresh chat.",
   "Stop the current Bridge session before opening fresh AI chats manually.",
   "Fresh chat verified for"
@@ -33,8 +34,9 @@ assert.ok(
 assert.doesNotMatch(openFresh,/New Chat is LIMITED/,"Dashboard must not retain the old New Chat stub");
 
 const bindingHelper=dashboard.indexOf("function activeBindingStatus()");
-const validateTabs=dashboard.indexOf("function validateActiveTabs()",bindingHelper);
-assert.ok(bindingHelper>=0&&validateTabs>bindingHelper,"shared active-binding helper missing");
+const manualReady=dashboard.indexOf("function manualFreshTabReady",bindingHelper);
+const validateTabs=dashboard.indexOf("function validateActiveTabs",manualReady);
+assert.ok(bindingHelper>=0&&manualReady>bindingHelper&&validateTabs>manualReady,"shared active-binding helper missing");
 const bindingBlock=dashboard.slice(bindingHelper,validateTabs);
 for(const token of [
   "const missingSides = bindings",
@@ -43,8 +45,8 @@ for(const token of [
   "valid: missingSides.length === 0 && duplicateTabs.size === 0"
 ]) assert.ok(bindingBlock.includes(token),"shared active-binding policy missing "+token);
 assert.ok(
-  dashboard.slice(validateTabs,openStart).includes("const status = activeBindingStatus();"),
-  "Start/manual validation must consume shared active-binding status"
+  dashboard.slice(bindingHelper,validateTabs).includes("function manualFreshTabReady(side, status = activeBindingStatus())"),
+  "individual manual reset must consume shared active-binding status"
 );
 
 const controlsStart=dashboard.indexOf("function updateControls(s)");
@@ -57,7 +59,8 @@ for(const token of [
   "const activeTabsValid = bindingStatus.valid;",
   '$("newAllChats").disabled = !manualFreshAllowed || !activeTabsValid;',
   '$("freshOnStart").disabled = !manualFreshAllowed || !activeTabsValid;',
-  '$(`newChat${side}`).disabled = !manualFreshAllowed || !bindingStatus.valid;'
+  "const manualTabReady = manualFreshTabReady(side, bindingStatus);",
+  '$(`newChat${side}`).disabled = !manualFreshAllowed || !manualTabReady;'
 ]) assert.ok(controls.includes(token),"manual fresh-chat control policy missing "+token);
 
 assert.doesNotMatch(
