@@ -4928,19 +4928,6 @@ async function reviewResolveCommittedRecoveryStep(sourceSide,recoveredText){
     String(record.payloadHash||"")===payloadHash
   );
 
-  const targetProbe=await reviewProbeRecoveryTarget(targetSide);
-  if(reviewRecoveryResponseAdvancedPast(entry,targetSide,targetProbe.response)){
-    return {
-      kind:"ADVANCE",
-      sourceSide,
-      targetSide,
-      direct:Boolean(directTarget),
-      recovered:targetProbe.response,
-      evidence:"VISIBLE_DOWNSTREAM_RESPONSE",
-      priorDispatchIds:matching.map(record=>String(record.dispatchId))
-    };
-  }
-
   const unsafeStatuses=new Set([
     DISPATCH_STATUS.DISPATCHING,
     DISPATCH_STATUS.ACCEPTED,
@@ -4949,6 +4936,22 @@ async function reviewResolveCommittedRecoveryStep(sourceSide,recoveredText){
     DISPATCH_STATUS.RESPONSE_COMMITTED
   ]);
   const unsafe=matching.filter(record=>unsafeStatuses.has(record.status));
+
+  const targetProbe=await reviewProbeRecoveryTarget(targetSide);
+  if(
+    unsafe.length>0 &&
+    reviewRecoveryResponseAdvancedPast(entry,targetSide,targetProbe.response)
+  ){
+    return {
+      kind:"ADVANCE",
+      sourceSide,
+      targetSide,
+      direct:Boolean(directTarget),
+      recovered:targetProbe.response,
+      evidence:"VISIBLE_DOWNSTREAM_RESPONSE",
+      priorDispatchIds:unsafe.map(record=>String(record.dispatchId))
+    };
+  }
 
   const ambiguousFreshSurface=Boolean(
     targetProbe.freshSurface &&
