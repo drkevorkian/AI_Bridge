@@ -35,16 +35,39 @@ for(const token of [
   'node.dispatchEvent(new Event("change",{bubbles:true,composed:true}));'
 ]) assert.ok(setter.includes(token),"contenteditable insertion contract missing "+token);
 
+const statsStart=contentJs.indexOf("function trustedSelectorStats(selectors)");
 const sendStart=contentJs.indexOf("async function performSend");
-const handleStart=contentJs.indexOf("async function handleAction",sendStart);
-assert.ok(sendStart>=0&&handleStart>sendStart,"performSend boundary missing");
-const send=contentJs.slice(sendStart,handleStart);
+assert.ok(statsStart>=0&&statsStart<sendStart,"safe Send-selector diagnostics helper missing");
+const statsBlock=contentJs.slice(statsStart,sendStart);
+for(const token of [
+  "const matched=new Set();",
+  "const visibleNodes=new Set();",
+  "const enabledNodes=new Set();",
+  "matched:matched.size",
+  "visible:visibleNodes.size",
+  "enabled:enabledNodes.size"
+]) assert.ok(statsBlock.includes(token),"Send-selector diagnostic contract missing "+token);
+assert.doesNotMatch(
+  statsBlock,
+  /innerText|textContent|composerText=|promptText=/,
+  "Send diagnostics must not expose composer or provider text"
+);
+
+const sendStartMarker=sendStart;
+const handleStart=contentJs.indexOf("async function handleAction",sendStartMarker);
+assert.ok(sendStartMarker>=0&&handleStart>sendStartMarker,"performSend boundary missing");
+const send=contentJs.slice(sendStartMarker,handleStart);
 
 for(const token of [
   "setComposerText(composer2,text);",
   "for(let i=0;i<20;i++)",
   "resolveTrusted(config.send,{requireEnabled:true})",
-  'reject(command,"DOM_AUTHORITY_NOT_ACTIONABLE","SEND")',
+  "const stats=trustedSelectorStats(config.send);",
+  "const composerChars=getComposerText(composer2).length;",
+  'reject(command,"DOM_AUTHORITY_NOT_ACTIONABLE",detail)',
+  'matched=${stats.matched}',
+  'visible=${stats.visible}',
+  'enabled=${stats.enabled}',
   "const identityAfterDraft=routeIdentity()",
   "const sendAgain=resolveTrusted(config.send,{requireEnabled:true})",
   "sendAgain.click();"
