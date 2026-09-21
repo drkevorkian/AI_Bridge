@@ -1333,6 +1333,69 @@ function reviewInvalidateAuthorityForTab(tabId) {
   }
 }
 
+function reviewPendingSurfaceDispatchForSide(side) {
+  const normalizedSide = String(side || "").toUpperCase();
+  const activeStatuses = new Set([
+    DISPATCH_STATUS.DISPATCHING,
+    DISPATCH_STATUS.ACCEPTED,
+    DISPATCH_STATUS.AWAITING_RESPONSE
+  ]);
+  const matches = reviewLedger.snapshot().filter(record =>
+    record.side === normalizedSide &&
+    activeStatuses.has(record.status) &&
+    record.conversationIdentity?.kind === "surface" &&
+    record.conversationIdentity?.provisional === true &&
+    record.conversationIdentity?.writable === true
+  );
+  return matches.length === 1 ? matches[0] : null;
+}
+
+async function reviewInitialSurfaceBootstrapAllowed(side, authority) {
+  const normalizedSide = String(side || "").toUpperCase();
+  if (!state.sessionActive || !SIDES.includes(normalizedSide)) return false;
+  if (!authority || String(authority.side || "").toUpperCase() !== normalizedSide) return false;
+  if (
+    authority.identity?.kind !== "surface" ||
+    authority.identity?.provisional !== true ||
+    authority.identity?.writable !== true
+  ) return false;
+  if (Number(authority.tabId) !== Number(tabForSide(normalizedSide))) return false;
+
+  const activeRollover = reviewRollover.get(normalizedSide);
+  if (activeRollover && !["COMPLETE", "FAILED"].includes(activeRollover.phase)) return false;
+  if (String(state.lastSentBySide?.[normalizedSide] || "").trim()) return false;
+  if (Array.isArray(state.transcript) && state.transcript.some(entry =>
+    entry?.type === "response" && String(entry?.side || "").toUpperCase() === normalizedSide
+  )) return false;
+
+  const priorDispatches = reviewLedger.snapshot().filter(record => record.side === normalizedSide);
+  if (priorDispatches.some(record =>
+    record.status !== DISPATCH_STATUS.FAILED ||
+    record.purpose !== "INITIAL" ||
+    record.acceptedAt != null
+  )) return false;
+
+  const durable = reviewAuthorityEpochs[normalizedSide];
+  if (
+    !durable ||
+    Number(durable.tabId) !== Number(authority.tabId) ||
+    Number(durable.generationEpoch) !== Number(authority.generationEpoch) ||
+    String(durable.provider || "") !== String(authority.provider || "") ||
+    !reviewSameIdentity(durable.identity, authority.identity)
+  ) return false;
+
+  let tab;
+  try { tab = await chrome.tabs.get(Number(authority.tabId)); }
+  catch (_) { return false; }
+  if (reviewProviderFromUrl(tab?.url) !== authority.provider) return false;
+  if (String(tab?.pendingUrl || "")) return false;
+
+  let canonical;
+  try { canonical = reviewCanonicalRolloverFreshUrl(authority.provider); }
+  catch (_) { return false; }
+  return String(tab?.url || "") === canonical;
+}
+
 async function reviewRegisterSideAuthority(side) {
   const tabId = Number(tabForSide(side));
   if (!Number.isInteger(tabId) || tabId <= 0) throw new Error("No tab is assigned to this AI.");
@@ -1369,7 +1432,23 @@ async function reviewRegisterSideAuthority(side) {
     expectedIdentity.writable === true &&
     Number(prior.generationEpoch) === Number(activeRollover.oldAuthority?.generationEpoch || -1) + 1
   );
-  const generationEpoch = (equivalent || rolloverSurfacePromotion)
+  const pendingSurfaceDispatch = reviewPendingSurfaceDispatchForSide(side);
+  const dispatchSurfacePromotion = Boolean(
+    pendingSurfaceDispatch &&
+    prior &&
+    Number(prior.tabId) === tabId &&
+    String(prior.provider || "") === provider &&
+    prior.identity?.kind === "surface" &&
+    prior.identity?.provisional === true &&
+    expectedIdentity.kind === "conversation" &&
+    expectedIdentity.provisional === false &&
+    expectedIdentity.provider === prior.identity.provider &&
+    expectedIdentity.writable === true &&
+    Number(prior.generationEpoch) === Number(pendingSurfaceDispatch.generationEpoch) &&
+    Number(pendingSurfaceDispatch.tabId) === tabId &&
+    reviewSameIdentity(pendingSurfaceDispatch.conversationIdentity, prior.identity)
+  );
+  const generationEpoch = (equivalent || rolloverSurfacePromotion || dispatchSurfacePromotion)
     ? Number(prior.generationEpoch)
     : Number(prior?.generationEpoch || 0) + 1;
   const nonce = crypto.randomUUID();
@@ -3158,8 +3237,16 @@ async function sendToSide(side, text, { record = true, deliveredSeq = null, deli
   }
 
   const authority = await reviewRegisterSideAuthority(side);
-  if (authority.identity.kind !== "conversation" || authority.identity.provisional || !authority.identity.writable) {
-    throw new Error("Confirmed writable conversation authority is required before relay. Blank/new-chat surfaces remain fail-closed until trusted New Chat allocation is implemented.");
+  const confirmedConversation = Boolean(
+    authority.identity.kind === "conversation" &&
+    authority.identity.provisional !== true &&
+    authority.identity.writable === true
+  );
+  const initialSurfaceBootstrap = confirmedConversation
+    ? false
+    : await reviewInitialSurfaceBootstrapAllowed(side, authority);
+  if (!confirmedConversation && !initialSurfaceBootstrap) {
+    throw new Error("Confirmed writable conversation authority is required before relay. A provisional surface is allowed only for a verified first-dispatch fresh-chat bootstrap.");
   }
 
   const payloadHash = await reviewPayloadHash(side, text);
@@ -3190,7 +3277,7 @@ async function sendToSide(side, text, { record = true, deliveredSeq = null, deli
       tabId,
       generationEpoch: authority.generationEpoch,
       conversationIdentity: authority.identity,
-      purpose: "RELAY",
+      purpose: initialSurfaceBootstrap ? "INITIAL" : "RELAY",
       payloadHash,
       continuationSourceDispatchId: continuationSourceDispatchId == null ? null : String(continuationSourceDispatchId),
       createdAt: Date.now()
@@ -4653,9 +4740,13 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
       if (Number.isInteger(changedTabId)) reviewInvalidateAuthorityForTab(changedTabId);
       if (changedSide) {
         const tx = reviewRollover.get(changedSide);
-        if (tx && !["COMPLETE", "FAILED"].includes(tx.phase)) {
+        const pendingSurfaceDispatch = reviewPendingSurfaceDispatchForSide(changedSide);
+        if (
+          (tx && !["COMPLETE", "FAILED"].includes(tx.phase)) ||
+          pendingSurfaceDispatch
+        ) {
           reviewRegisterSideAuthority(changedSide).catch(error => {
-            console.warn("AI Bridge rollover route re-registration failed", error);
+            console.warn("AI Bridge route re-registration failed", error);
           });
         }
       }
