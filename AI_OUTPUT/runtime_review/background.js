@@ -543,6 +543,102 @@ function reviewTrustedExtensionPage(sender){
   return true;
 }
 const REVIEW_NATIVE_UPDATER_HOST="com.aibridge.updater";
+const REVIEW_NATIVE_UPDATER_SCHEMA=1;
+const REVIEW_NATIVE_UPDATER_ALLOWED_FILES=new Set([
+  "manifest.json","update-checkpoint.js","background.js","content.js",
+  "dashboard.html","dashboard.js","dashboard.css","dashboard-layouts.js","dashboard-layouts.css",
+  "popup.html","popup.js","popup.css","settings.html","settings.js","settings.css","icon128.png"
+]);
+function reviewBoundedNativeString(value,{required=true,max=128}={}){
+  const text=String(value??"").trim();
+  if(required&&!text)return null;
+  if(text.length>max)return null;
+  return text;
+}
+function reviewNativeUpdaterRuntimePath(value){
+  const path=reviewBoundedNativeString(value,{max:128});
+  if(!path||path.startsWith("/")||path.includes("\\")||/^[A-Za-z]:/.test(path))return null;
+  const parts=path.split("/");
+  if(parts.some(part=>!part||part==="."||part===".."))return null;
+  if(!REVIEW_NATIVE_UPDATER_ALLOWED_FILES.has(path))return null;
+  return path;
+}
+function reviewValidateNativeUpdaterResponse(op,result){
+  if(!result||typeof result!=="object"||Array.isArray(result))return {ok:false,reason:"NATIVE_UPDATE_RESPONSE_INVALID"};
+  if(result.ok!==true){
+    return {
+      ok:false,
+      reason:reviewBoundedNativeString(result.reason,{required:false,max:128})||"NATIVE_UPDATE_HOST_REJECTED",
+      error:reviewBoundedNativeString(result.error,{required:false,max:512})||undefined
+    };
+  }
+  if(op==="PING"){
+    if(result.host!==REVIEW_NATIVE_UPDATER_HOST||Number(result.schema)!==REVIEW_NATIVE_UPDATER_SCHEMA){
+      return {ok:false,reason:"NATIVE_UPDATE_HOST_IDENTITY_MISMATCH"};
+    }
+    const v=result.release_verification;
+    if(!v||typeof v!=="object"||Array.isArray(v))return {ok:false,reason:"NATIVE_UPDATE_RELEASE_TRUST_INVALID"};
+    const algorithm=reviewBoundedNativeString(v.algorithm,{max:64});
+    const reason=reviewBoundedNativeString(v.reason,{required:false,max:256})||"";
+    const bits=Number(v.key_bits),minimumBits=Number(v.minimum_key_bits);
+    if(
+      typeof v.configured!=="boolean"||
+      typeof v.ready!=="boolean"||
+      algorithm!=="RSA-PKCS1-v1_5-SHA256"||
+      !Number.isInteger(bits)||bits<0||bits>32768||
+      !Number.isInteger(minimumBits)||minimumBits<2048||minimumBits>32768
+    ) return {ok:false,reason:"NATIVE_UPDATE_RELEASE_TRUST_INVALID"};
+    if(v.ready===true&&(v.configured!==true||bits<minimumBits)){
+      return {ok:false,reason:"NATIVE_UPDATE_RELEASE_TRUST_CONTRADICTORY"};
+    }
+    return {
+      ok:true,
+      host:REVIEW_NATIVE_UPDATER_HOST,
+      schema:REVIEW_NATIVE_UPDATER_SCHEMA,
+      release_verification:{
+        configured:v.configured,
+        ready:v.ready,
+        algorithm,
+        key_bits:bits,
+        minimum_key_bits:minimumBits,
+        reason
+      }
+    };
+  }
+  if(op==="CHECK"){
+    const available=result.available;
+    if(!available||typeof available!=="object"||Array.isArray(available))return {ok:false,reason:"NATIVE_UPDATE_CHECK_RESPONSE_INVALID"};
+    const version=reviewBoundedNativeString(available.version,{max:128});
+    const build=reviewBoundedNativeString(available.build,{max:128});
+    const files=Number(available.files);
+    if(!version||!build||!Number.isInteger(files)||files<1||files>REVIEW_NATIVE_UPDATER_ALLOWED_FILES.size){
+      return {ok:false,reason:"NATIVE_UPDATE_CHECK_RESPONSE_INVALID"};
+    }
+    return {ok:true,available:{version,build,files}};
+  }
+  if(op==="APPLY"){
+    const checkpointId=reviewBoundedNativeString(result.checkpointId,{max:128});
+    const version=reviewBoundedNativeString(result.version,{max:128});
+    const build=reviewBoundedNativeString(result.build,{max:128});
+    if(!checkpointId||!version||!build||result.reload_required!==true){
+      return {ok:false,reason:"NATIVE_UPDATE_APPLY_RESPONSE_INVALID"};
+    }
+    if(!Array.isArray(result.files)||result.files.length<1||result.files.length>REVIEW_NATIVE_UPDATER_ALLOWED_FILES.size){
+      return {ok:false,reason:"NATIVE_UPDATE_APPLY_RESPONSE_INVALID"};
+    }
+    const files=[];
+    const seen=new Set();
+    for(const raw of result.files){
+      const path=reviewNativeUpdaterRuntimePath(raw);
+      if(!path||seen.has(path)){
+        return {ok:false,reason:"NATIVE_UPDATE_APPLY_RESPONSE_INVALID"};
+      }
+      seen.add(path);files.push(path);
+    }
+    return {ok:true,checkpointId,version,build,files,reload_required:true};
+  }
+  return {ok:false,reason:"NATIVE_UPDATE_RESPONSE_INVALID"};
+}
 async function reviewSendNativeUpdater(command,payload={}){
   const op=String(command||"").toUpperCase();
   if(!["PING","CHECK","APPLY"].includes(op))return {ok:false,reason:"NATIVE_UPDATE_COMMAND_REJECTED"};
@@ -558,8 +654,7 @@ async function reviewSendNativeUpdater(command,payload={}){
   if(op==="APPLY"&&(!message.expectedVersion||!message.expectedBuild))return {ok:false,reason:"NATIVE_UPDATE_TARGET_REQUIRED"};
   try{
     const result=await chrome.runtime.sendNativeMessage(REVIEW_NATIVE_UPDATER_HOST,message);
-    if(!result||typeof result!=="object")return {ok:false,reason:"NATIVE_UPDATE_RESPONSE_INVALID"};
-    return result;
+    return reviewValidateNativeUpdaterResponse(op,result);
   }catch(error){
     return {ok:false,reason:"NATIVE_UPDATE_HOST_UNAVAILABLE",error:error?.message||String(error)};
   }
