@@ -367,9 +367,34 @@ async function reviewRetireStaleCreatedDispatches(side, {
   return changed;
 }
 
+function reviewDispatchMatchesAuthority(record, authority) {
+  if (!record || !authority) return false;
+  if (
+    Number(record.tabId) !== Number(authority.tabId) ||
+    Number(record.generationEpoch) !== Number(authority.generationEpoch)
+  ) return false;
+  if (reviewSameIdentity(record.conversationIdentity, authority.identity)) return true;
+
+  // First-send/new-chat promotion keeps the same tab + generation while the
+  // provider upgrades a verified writable surface into its conversation URL.
+  // Treat only that one-way promotion as the same authority domain.
+  const from = record.conversationIdentity;
+  const to = authority.identity;
+  return Boolean(
+    from?.kind === "surface" &&
+    from?.provisional === true &&
+    from?.writable === true &&
+    to?.kind === "conversation" &&
+    to?.provisional !== true &&
+    to?.writable === true &&
+    String(from.provider || "") === String(to.provider || "")
+  );
+}
+
 function reviewFindUnresolvedDispatch(side, payloadHash, {
   continuationSourceDispatchId = null,
-  continuationCreatedAt = 0
+  continuationCreatedAt = 0,
+  authority = null
 } = {}) {
   const active = new Set([
     DISPATCH_STATUS.CREATED, DISPATCH_STATUS.DISPATCHING, DISPATCH_STATUS.ACCEPTED,
@@ -390,6 +415,7 @@ function reviewFindUnresolvedDispatch(side, payloadHash, {
   };
   const candidates = reviewLedger.snapshot().filter(r => {
     if (r.side !== targetSide || !active.has(r.status)) return false;
+    if (authority && !reviewDispatchMatchesAuthority(r, authority)) return false;
     return sourceId === null ? true : belongsToContinuation(r);
   });
   const reusable = candidates.filter(r =>
@@ -3352,7 +3378,8 @@ async function sendToSide(side, text, { record = true, deliveredSeq = null, deli
       : null;
   const unresolved = reviewFindUnresolvedDispatch(side, payloadHash, {
     continuationSourceDispatchId,
-    continuationCreatedAt: continuationPending?.createdAt || 0
+    continuationCreatedAt: continuationPending?.createdAt || 0,
+    authority
   });
   let dispatch;
   if (unresolved.blocking) {
@@ -3410,11 +3437,26 @@ async function sendToSide(side, text, { record = true, deliveredSeq = null, deli
   try {
     result = await chrome.tabs.sendMessage(tabId, command, { documentId: authority.documentId });
   } catch (_) {
-    await reviewTransitionDispatch(dispatch.dispatchId, DISPATCH_STATUS.DELIVERY_AMBIGUOUS, {
-      failureReason: "MESSAGE_ACK_LOST"
-    });
-    await reviewPauseForAmbiguity("Provider delivery result is ambiguous. The same logical prompt will not be replayed automatically.");
-    throw new Error("DELIVERY_AMBIGUOUS");
+    // The provider action may have completed even if the message-channel ACK
+    // was lost. Query the isolated content runtime's bounded action cache for
+    // the exact dispatch authority before declaring ambiguity. This is proof,
+    // not replay: no second click or prompt insertion occurs here.
+    const proof = await reviewReadContentActionProof(dispatch);
+    if (proof) {
+      result = {
+        ok: true,
+        outcome: "ACTION_CONFIRMED",
+        reason: null,
+        evidence: "content-action-proof-after-ack-loss",
+        authorityId: dispatch.dispatchId
+      };
+    } else {
+      await reviewTransitionDispatch(dispatch.dispatchId, DISPATCH_STATUS.DELIVERY_AMBIGUOUS, {
+        failureReason: "MESSAGE_ACK_LOST"
+      });
+      await reviewPauseForAmbiguity("Provider delivery result is ambiguous. The same logical prompt will not be replayed automatically.");
+      throw new Error("DELIVERY_AMBIGUOUS");
+    }
   }
 
   if (result?.outcome === "REJECTED_PRE_ACTION") {

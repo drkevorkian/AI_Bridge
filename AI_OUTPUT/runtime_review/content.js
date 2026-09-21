@@ -264,7 +264,7 @@
     // Fresh/new provider surfaces can mount the trusted editor asynchronously.
     // Wait only for the already-pinned selectors; never broaden authority to a
     // generic textbox. Re-prove route identity after the bounded mount window.
-    const composer1=await waitForTrusted(config.composer,{attempts:40,delayMs:75});
+    const composer1=await waitForTrusted(config.composer,{attempts:80,delayMs:100});
     if(!composer1){
       const stats=trustedSelectorStats(config.composer);
       const detail=`COMPOSER provider=${provider}; matched=${stats.matched}; visible=${stats.visible}; enabled=${stats.enabled}`;
@@ -287,8 +287,8 @@
     // visible, enabled Send element matching only the pinned trusted selectors.
     // This covers providers that create/enable Send asynchronously.
     let send=null;
-    for(let i=0;i<20;i++){
-      await sleep(i===0?120:50);
+    for(let i=0;i<80;i++){
+      await sleep(i===0?120:100);
       const composerNow=resolveTrusted(config.composer);
       if(composerNow!==composer2 || !composer2?.isConnected) {
         return rememberCommand(command,reject(command,"DOM_AUTHORITY_CHANGED","COMPOSER"));

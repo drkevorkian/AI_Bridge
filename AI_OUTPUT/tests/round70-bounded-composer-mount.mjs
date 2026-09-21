@@ -40,7 +40,7 @@ for(const rel of [
   const send=source.slice(sendStart,sendEnd);
 
   for(const token of [
-    'const composer1=await waitForTrusted(config.composer,{attempts:40,delayMs:75});',
+    'const composer1=await waitForTrusted(config.composer,{attempts:80,delayMs:100});',
     "const stats=trustedSelectorStats(config.composer);",
     'const detail=`COMPOSER provider=${provider}; matched=${stats.matched}; visible=${stats.visible}; enabled=${stats.enabled}`;',
     'reject(command,"DOM_AUTHORITY_UNAVAILABLE",detail)',
