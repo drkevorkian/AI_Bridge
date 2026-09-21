@@ -721,6 +721,7 @@ const REVIEW_UI_CONTROL_TYPES=new Set([
   "AI_BRIDGE_UPDATE_NATIVE_CHECK",
   "AI_BRIDGE_UPDATE_NATIVE_APPLY",
   "AI_BRIDGE_MANUAL_RELAY",
+  "AI_BRIDGE_READ_RESPONSE_TO_START",
   "AI_BRIDGE_PAUSE",
   "AI_BRIDGE_RESUME",
   "AI_BRIDGE_STOP",
@@ -4749,6 +4750,197 @@ async function handleCompletedResponse(side, text, { relay = true, artifacts = [
   }
 }
 
+
+async function reviewPrepareCommittedRecoveryReplay(sourceSide,recoveredText){
+  if(String(state.lastResponseBySide?.[sourceSide]||"")!==String(recoveredText||"")) return null;
+
+  const entry=[...state.transcript].reverse().find(item =>
+    item?.type==="response" && String(item?.side||"").toUpperCase()===sourceSide
+  )||null;
+  if(!entry) throw new Error("RECOVERY_START_DUPLICATE_RESPONSE_WITHOUT_TRANSCRIPT_ENTRY");
+
+  const directTarget=SIDES.includes(String(entry.directToSide||"").toUpperCase())
+    ? String(entry.directToSide).toUpperCase()
+    : null;
+  const targetSide=directTarget||nextSide(sourceSide);
+  if(!SIDES.includes(targetSide) || targetSide===sourceSide){
+    throw new Error("RECOVERY_START_REPLAY_TARGET_INVALID");
+  }
+
+  const outgoing=directTarget
+    ? directTurnMessage(sourceSide,targetSide,entry)
+    : normalTurnMessage(targetSide);
+  const payloadHash=await reviewPayloadHash(targetSide,outgoing.text);
+  const matching=reviewLedger.snapshot().filter(record =>
+    String(record.side||"").toUpperCase()===targetSide &&
+    String(record.payloadHash||"")===payloadHash
+  );
+
+  const unsafeStatuses=new Set([
+    DISPATCH_STATUS.DISPATCHING,
+    DISPATCH_STATUS.ACCEPTED,
+    DISPATCH_STATUS.AWAITING_RESPONSE,
+    DISPATCH_STATUS.DELIVERY_AMBIGUOUS,
+    DISPATCH_STATUS.RESPONSE_COMMITTED
+  ]);
+  const unsafe=matching.find(record => unsafeStatuses.has(record.status));
+  if(unsafe){
+    throw new Error("RECOVERY_START_REPLAY_BLOCKED_BY_PRIOR_DELIVERY:"+String(unsafe.status)+":"+String(unsafe.dispatchId));
+  }
+
+  const retrySafe=matching.filter(record =>
+    record.status===DISPATCH_STATUS.CREATED ||
+    (record.status===DISPATCH_STATUS.FAILED &&
+      record.acceptedAt==null &&
+      String(record.failureReason||"")!=="HARD_THREAD_LIMIT_REJECTED_BY_PROVIDER")
+  );
+  if(!retrySafe.length){
+    throw new Error("RECOVERY_START_DUPLICATE_RESPONSE_NO_PROVEN_FAILED_HANDOFF");
+  }
+
+  return {
+    sourceSide,
+    targetSide,
+    direct:Boolean(directTarget),
+    entry,
+    outgoing,
+    payloadHash,
+    priorDispatchIds:retrySafe.map(record=>String(record.dispatchId)),
+    priorFailureReasons:retrySafe.map(record=>String(record.failureReason||record.status))
+  };
+}
+async function reviewReadResponseToStartSource(sourceSide){
+  let record=reviewAuthorityBySide.get(sourceSide);
+  if(!record) record=await reviewRegisterSideAuthority(sourceSide);
+  const authority=reviewConversationAuthority(record);
+  if(!authority) throw new Error("RECOVERY_START_SOURCE_AUTHORITY_UNVERIFIED");
+
+  let recovered;
+  try{
+    recovered=await chrome.tabs.sendMessage(
+      Number(authority.tabId),
+      {type:"AI_BRIDGE_READ_LAST_RESPONSE"},
+      {documentId:String(record.documentId)}
+    );
+  }catch(error){
+    throw new Error("RECOVERY_START_READ_FAILED: "+(error?.message||error));
+  }
+
+  const recoveredText=String(recovered?.text||"").trim();
+  if(!recovered?.ok||!recoveredText){
+    throw new Error(recovered?.error||"RECOVERY_START_NO_VISIBLE_RESPONSE");
+  }
+  if(recovered.active) throw new Error(`AI ${sourceSide} still appears to be generating.`);
+  if(recoveredText.length>400000) throw new Error("RECOVERY_START_RESPONSE_TOO_LARGE");
+
+  let observedIdentity;
+  try{observedIdentity=reviewSanitizeIdentity(recovered.identity);}
+  catch(_){throw new Error("RECOVERY_START_RESPONSE_IDENTITY_INVALID");}
+
+  if(
+    String(recovered.provider||"")!==String(record.provider||"") ||
+    !reviewSameIdentity(observedIdentity,authority.identity)
+  ){
+    throw new Error("RECOVERY_START_RESPONSE_AUTHORITY_MISMATCH");
+  }
+
+  return {
+    text:recoveredText,
+    provider:String(record.provider||""),
+    tabId:Number(authority.tabId),
+    documentId:String(record.documentId),
+    generationEpoch:Number(authority.generationEpoch),
+    identity:observedIdentity
+  };
+}
+
+function reviewManualRelayAwaitingDispatch(sourceSide, authority){
+  const candidates=reviewLedger.snapshot().filter(record =>
+    record.side===sourceSide &&
+    record.status===DISPATCH_STATUS.AWAITING_RESPONSE &&
+    Number(record.tabId)===Number(authority.tabId) &&
+    Number(record.generationEpoch)===Number(authority.generationEpoch) &&
+    reviewSameIdentity(record.conversationIdentity,authority.identity)
+  );
+  if(candidates.length!==1){
+    return {
+      ok:false,
+      reason:candidates.length
+        ? "MANUAL_RELAY_MULTIPLE_AWAITING_DISPATCHES"
+        : "MANUAL_RELAY_NO_AWAITING_DISPATCH"
+    };
+  }
+  return {ok:true,dispatch:candidates[0]};
+}
+
+async function reviewRecoverManualRelaySource(sourceSide){
+  let record=reviewAuthorityBySide.get(sourceSide);
+  if(!record) record=await reviewRegisterSideAuthority(sourceSide);
+  const authority=reviewConversationAuthority(record);
+  if(!authority) throw new Error("MANUAL_RELAY_SOURCE_AUTHORITY_UNVERIFIED");
+
+  let recovered;
+  try{
+    recovered=await chrome.tabs.sendMessage(
+      Number(authority.tabId),
+      {type:"AI_BRIDGE_READ_LAST_RESPONSE"},
+      {documentId:String(record.documentId)}
+    );
+  }catch(error){
+    throw new Error("MANUAL_RELAY_READ_FAILED: "+(error?.message||error));
+  }
+
+  const recoveredText=String(recovered?.text||"").trim();
+  if(!recovered?.ok||!recoveredText){
+    throw new Error(recovered?.error||"MANUAL_RELAY_NO_VISIBLE_RESPONSE");
+  }
+  if(recovered.active) throw new Error(`AI ${sourceSide} still appears to be generating.`);
+
+  let observedIdentity;
+  try{observedIdentity=reviewSanitizeIdentity(recovered.identity);}
+  catch(_){throw new Error("MANUAL_RELAY_RESPONSE_IDENTITY_INVALID");}
+
+  if(
+    String(recovered.provider||"")!==String(record.provider||"") ||
+    !reviewSameIdentity(observedIdentity,authority.identity)
+  ){
+    throw new Error("MANUAL_RELAY_RESPONSE_AUTHORITY_MISMATCH");
+  }
+
+  const awaiting=reviewManualRelayAwaitingDispatch(sourceSide,authority);
+  if(!awaiting.ok) throw new Error(awaiting.reason);
+
+  const envelope={
+    dispatchId:String(awaiting.dispatch.dispatchId),
+    side:sourceSide,
+    senderTabId:Number(authority.tabId),
+    generationEpoch:Number(authority.generationEpoch),
+    conversationIdentity:observedIdentity,
+    rolloverId:null,
+    text:recoveredText,
+    artifacts:[],
+    completedAt:Date.now()
+  };
+
+  // Serialize through the same commit queue as automatic response delivery.
+  // If the late automatic envelope races this recovery, one path commits and
+  // the other observes the already-committed dispatch instead of duplicating it.
+  const task=()=>reviewProcessIncomingEnvelope(envelope);
+  responseCommitQueue=responseCommitQueue.catch(()=>{}).then(task);
+  const committed=await responseCommitQueue;
+  if(committed?.durableResponseAccepted!==true){
+    throw new Error(
+      "MANUAL_RELAY_RESPONSE_COMMIT_FAILED: "+
+      String(committed?.reason||committed?.error||"UNKNOWN")
+    );
+  }
+  return {
+    text:recoveredText,
+    dispatchId:awaiting.dispatch.dispatchId,
+    alreadyCommitted:Boolean(committed.alreadyCommitted)
+  };
+}
+
 function reviewAuthorizeProviderEvent(msg, sender) {
   if (!state.sessionActive) return { ok:false, reason:"NO_ACTIVE_SESSION" };
   if (sender?.id !== chrome.runtime.id) return { ok:false, reason:"PROVIDER_EVENT_EXTENSION_ID_MISMATCH" };
@@ -5103,6 +5295,149 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
       return;
     }
 
+    if (msg.type === "AI_BRIDGE_READ_RESPONSE_TO_START") {
+      if (state.sessionActive) throw new Error("Stop the active Bridge session before using Read Response to Start.");
+
+      const previousState=structuredClone(state);
+      const previousAgentCount=normalizeAgentCount(previousState.agentCount,DEFAULT_AGENT_COUNT);
+      setActiveAgentCount(previousAgentCount);
+
+      const sourceSide=String(msg.sourceSide||"").toUpperCase();
+      if(!SIDES.includes(sourceSide)) throw new Error("Choose an AI from the stopped session.");
+      if(isBatchWorkMode()){
+        throw new Error("Read Response to Start supports Relay, Collaborate, and Direct Mesh. Batch modes require the full phase state.");
+      }
+      if(!String(state.initialPrompt||"").trim() && !(Array.isArray(state.transcript)&&state.transcript.length)){
+        throw new Error("There is no stopped Bridge session to recover.");
+      }
+
+      const requestedAgentCount=normalizeAgentCount(msg.agentCount,previousAgentCount);
+      if(requestedAgentCount!==previousAgentCount){
+        throw new Error(`Stopped session used ${previousAgentCount} AI tab${previousAgentCount===1?"":"s"}. Restore that roster before recovery.`);
+      }
+
+      let recoveryCommitted=false;
+      try{
+        state.sessionActive=true;
+        state.running=false;
+        state.paused=true;
+        state.currentSide=sourceSide;
+        state.runtimePhase="READ_RESPONSE_TO_START";
+        state.pauseReason=`Reading AI ${sourceSide}'s last completed response as the recovery boundary.`;
+        state.nextTurnPending=null;
+        state.providerRecovery=null;
+        state.awaitingHuman=false;
+        state.pendingHuman=null;
+        state.pendingHumanQueue=[];
+        state.pendingMainInterjections=[];
+        state.suppressedHumanRequests=[];
+
+        await bindTabsFromMessage(msg);
+        const recovered=await reviewReadResponseToStartSource(sourceSide);
+
+        const replayPlan=await reviewPrepareCommittedRecoveryReplay(sourceSide,recovered.text);
+
+
+        // A stopped session has no legitimate in-flight provider transaction.
+        // After the operator has verified the visible recovery boundary, start a
+        // fresh exactly-once dispatch domain while preserving transcript/roles.
+        await reviewResetSessionDurability();
+
+        if(replayPlan){
+          state.running=true;
+          state.paused=false;
+          state.pauseReason="";
+          state.currentSide=replayPlan.targetSide;
+          state.runtimePhase="RECOVERY_START_REPLAYING_FAILED_HANDOFF";
+          appendLog({
+            time:Date.now(),
+            type:"recovery-replay",
+            side:sourceSide,
+            targetSide:replayPlan.targetSide,
+            text:"Replaying AI "+sourceSide+"'s already-committed response to AI "+replayPlan.targetSide+" because the prior handoff was proven unsent."
+          });
+          await clearAttention();
+          await saveState();
+          recoveryCommitted=true;
+
+          let replayResult;
+          try{
+            await new Promise(resolve=>setTimeout(resolve,state.delayMs));
+            if(!state.sessionActive||!state.running||state.awaitingHuman) throw new Error("RECOVERY_START_REPLAY_ABORTED");
+            await sendToSide(replayPlan.targetSide,replayPlan.outgoing.text,{
+              deliveredSeq:replayPlan.outgoing.deliveredSeq,
+              deliveredSources:replayPlan.outgoing.deliveredSources,
+              artifactIds:replayPlan.outgoing.artifactIds||[],
+              artifacts:replayPlan.outgoing.artifacts||[],
+              mainInterjectionIds:replayPlan.outgoing.mainInterjectionIds||[]
+            });
+            replayResult={ok:true};
+          }catch(error){
+            await pauseBridge("Could not replay recovered handoff to AI "+replayPlan.targetSide+": "+(error?.message||error));
+            replayResult={ok:false,error:error?.message||String(error)};
+          }
+
+          sendResponse({
+            ok:Boolean(replayResult.ok),
+            sourceSide,
+            recovered:true,
+            replayedCommitted:true,
+            priorDispatchIds:replayPlan.priorDispatchIds,
+            direct:replayPlan.direct,
+            targetSide:replayPlan.targetSide,
+            error:replayResult.error||null
+          });
+          return;
+        }
+
+        state.running=true;
+        state.paused=false;
+        state.pauseReason="";
+        state.currentSide=sourceSide;
+        state.runtimePhase="RECOVERY_START_PROCESSING";
+        appendLog({
+          time:Date.now(),
+          type:"recovery-start",
+          side:sourceSide,
+          text:`Read AI ${sourceSide}'s verified completed response and restarted automatic routing from that boundary.`
+        });
+        await clearAttention();
+        await saveState();
+        recoveryCommitted=true;
+
+        // Deliberately reuse the normal completed-response pipeline. Direct
+        // Mesh therefore reads the existing final SEND TO command and uses the
+        // same target resolution, transcript, delay, and durable send path.
+        const result=await handleCompletedResponse(sourceSide,recovered.text,{
+          relay:true,
+          artifacts:[],
+          completedAt:Date.now()
+        });
+
+        sendResponse({
+          ok:Boolean(result?.ok),
+          sourceSide,
+          recovered:true,
+          direct:Boolean(result?.direct),
+          targetSide:result?.targetSide||state.currentSide||null,
+          awaitingHuman:Boolean(result?.awaitingHuman),
+          paused:Boolean(result?.paused),
+          finished:Boolean(result?.finished),
+          error:result?.error||result?.commandError||null
+        });
+        return;
+      }catch(error){
+        if(!recoveryCommitted){
+          state=previousState;
+          setActiveAgentCount(previousAgentCount);
+          await saveState();
+        }else if(state.sessionActive && state.running){
+          await pauseBridge("Read Response to Start failed after recovery began: "+(error?.message||error));
+        }
+        throw error;
+      }
+    }
+
     if (msg.type === "AI_BRIDGE_UPDATE_RULES") {
       const rules = String(msg.rules || "").trim();
       if (rules.length > 12000) throw new Error("Team rules are limited to 12,000 characters.");
@@ -5118,7 +5453,6 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
 
     if (msg.type === "AI_BRIDGE_MANUAL_RELAY") {
       if (!state.sessionActive) throw new Error("Start a session first.");
-      if (state.running) throw new Error("Pause the session before using Manual Relay.");
       if (state.awaitingHuman) throw new Error("Resolve the pending human-input request before Manual Relay.");
       const sourceSide = String(msg.sourceSide || "").toUpperCase();
       const targetSides = [...new Set((Array.isArray(msg.targetSides) ? msg.targetSides : [])
@@ -5126,15 +5460,21 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
         .filter(side => SIDES.includes(side) && side !== sourceSide);
       if (!SIDES.includes(sourceSide)) throw new Error("Choose an active source AI.");
       if (!targetSides.length) throw new Error("Choose at least one active destination AI.");
-      const sourceTab = tabForSide(sourceSide);
-      if (!sourceTab) throw new Error(`AI ${sourceSide} has no bound tab.`);
-      const recovered = await chrome.tabs.sendMessage(sourceTab, { type: "AI_BRIDGE_READ_LAST_RESPONSE" });
-      const recoveredText = String(recovered?.text || "").trim();
-      if (!recovered?.ok || !recoveredText) throw new Error(recovered?.error || `Could not read AI ${sourceSide}'s last visible response.`);
-      if (recovered.active) throw new Error(`AI ${sourceSide} still appears to be generating.`);
 
-      recordTranscript("response", { side: sourceSide, text: recoveredText, manualRelay: true });
-      const deliveredSeq = latestSeq();
+      // Manual Relay is a recovery control. It must remain usable specifically
+      // when automatic response detection is stuck while the session still
+      // reports "running". Freeze progression before inspecting the page so no
+      // new automatic dispatch can race the operator-selected handoff.
+      state.running=false;
+      state.paused=true;
+      state.runtimePhase="MANUAL_RELAY_RECOVERY";
+      state.pauseReason=`Manual relay is recovering AI ${sourceSide}'s completed response.`;
+      await saveState();
+
+      const recovered=await reviewRecoverManualRelaySource(sourceSide);
+      const recoveredText=recovered.text;
+      const deliveredSeq=latestSeq();
+
       for (const targetSide of targetSides) {
         const manualMessage = [
           teamContext(targetSide),
@@ -5149,11 +5489,25 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
         ].join("\n");
         await sendToSide(targetSide, manualMessage, { deliveredSeq });
       }
-      state.running = false;
-      state.paused = true;
-      state.pauseReason = `Manual relay sent AI ${sourceSide}'s recovered response to ${targetSides.map(side => "AI " + side).join(", ")}. Resume when ready.`;
+
+      state.running=false;
+      state.paused=true;
+      state.runtimePhase="PAUSED";
+      state.pauseReason=`Manual relay committed AI ${sourceSide}'s recovered response and sent it to ${targetSides.map(side => "AI " + side).join(", ")}. Resume when ready.`;
+      appendLog({
+        time:Date.now(),
+        type:"manual-relay",
+        side:sourceSide,
+        dispatchId:recovered.dispatchId,
+        text:`Manual relay recovered and committed AI ${sourceSide}, then sent it to ${targetSides.join(",")}.`
+      });
       await saveState();
-      sendResponse({ ok: true, sourceSide, targetSides });
+      sendResponse({
+        ok:true,
+        sourceSide,
+        targetSides,
+        recoveredDispatchId:recovered.dispatchId
+      });
       return;
     }
 
