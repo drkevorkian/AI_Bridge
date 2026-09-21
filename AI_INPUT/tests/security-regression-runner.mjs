@@ -57,6 +57,7 @@ const tests=[
   'round75-grok-send-actionability.mjs',
   'round76-replay-failed-recovery-handoff.mjs',
   'round77-recovery-catchup.mjs',
+  'round78-post-commit-fresh-target-dispatch.mjs',
   'round42-content-runtime-lifecycle.mjs',
   'round43-next-turn-adoption.mjs',
   'round44-restart-delivery-recovery.mjs',
