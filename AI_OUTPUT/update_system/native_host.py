@@ -16,11 +16,13 @@ from pathlib import Path
 from typing import BinaryIO
 
 from companion_updater import (
+    MIN_RELEASE_RSA_BITS,
     PINNED_RELEASE_RSA_E,
     PINNED_RELEASE_RSA_N_HEX,
     UpdateError,
     apply_update,
     fetch_manifest,
+    validate_release_public_key,
 )
 
 HOST_NAME = "com.aibridge.updater"
@@ -111,24 +113,30 @@ def _release_verification_status() -> dict[str, object]:
     """Return non-secret release-trust readiness for extension UI diagnostics."""
     modulus_hex = str(PINNED_RELEASE_RSA_N_HEX or "").strip().lower()
     configured = bool(modulus_hex)
-    syntactically_valid = bool(
-        configured
-        and all(ch in "0123456789abcdef" for ch in modulus_hex)
-        and int(PINNED_RELEASE_RSA_E) >= 3
-        and int(PINNED_RELEASE_RSA_E) % 2 == 1
-    )
     key_bits = 0
-    if syntactically_valid:
+    ready = False
+    reason = "release public key is not configured"
+    if configured:
         try:
-            key_bits = int(modulus_hex, 16).bit_length()
-        except ValueError:
-            syntactically_valid = False
-            key_bits = 0
+            _, _, key_bits = validate_release_public_key(
+                modulus_hex,
+                PINNED_RELEASE_RSA_E,
+            )
+            ready = True
+            reason = "ready"
+        except UpdateError as exc:
+            try:
+                key_bits = int(modulus_hex, 16).bit_length()
+            except ValueError:
+                key_bits = 0
+            reason = str(exc)
     return {
         "configured": configured,
-        "ready": syntactically_valid,
+        "ready": ready,
         "algorithm": "RSA-PKCS1-v1_5-SHA256",
         "key_bits": key_bits,
+        "minimum_key_bits": MIN_RELEASE_RSA_BITS,
+        "reason": reason,
     }
 
 

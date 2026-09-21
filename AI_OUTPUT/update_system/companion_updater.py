@@ -38,6 +38,7 @@ RAW_PREFIX = "https://raw.githubusercontent.com/drkevorkian/AI_Bridge/main/"
 # blank is intentionally fail-closed.
 PINNED_RELEASE_RSA_N_HEX = ""
 PINNED_RELEASE_RSA_E = 65537
+MIN_RELEASE_RSA_BITS = 2048
 
 # Only runtime extension files may ever be replaced from main. Development
 # workspaces and tests are intentionally excluded.
@@ -82,17 +83,12 @@ def _decode_signature(payload: bytes | str) -> bytes:
         raise UpdateError("Detached release signature is not valid base64.") from exc
 
 
-def verify_detached_signature(
-    manifest_bytes: bytes,
-    signature_payload: bytes | str,
-    *,
+def validate_release_public_key(
     modulus_hex: str = PINNED_RELEASE_RSA_N_HEX,
     exponent: int = PINNED_RELEASE_RSA_E,
-) -> None:
-    """Verify RSA PKCS#1 v1.5 + SHA-256 using only the Python standard library."""
+) -> tuple[int, int, int]:
+    """Validate the pinned RSA release key and return (modulus, exponent, bits)."""
 
-    if not isinstance(manifest_bytes, (bytes, bytearray)):
-        raise TypeError("manifest_bytes must be bytes.")
     modulus_hex = str(modulus_hex or "").strip().lower()
     if not modulus_hex:
         raise UpdateError(
@@ -106,11 +102,35 @@ def verify_detached_signature(
         exponent = int(exponent)
     except (TypeError, ValueError) as exc:
         raise UpdateError("Pinned release RSA public key is malformed.") from exc
-    if modulus <= 0 or exponent < 3 or exponent % 2 == 0:
-        raise UpdateError("Pinned release RSA public key is invalid.")
 
+    if modulus <= 0 or modulus % 2 == 0:
+        raise UpdateError("Pinned release RSA modulus must be a positive odd integer.")
+    if exponent < 3 or exponent % 2 == 0 or exponent >= modulus:
+        raise UpdateError("Pinned release RSA public exponent is invalid.")
+
+    key_bits = modulus.bit_length()
+    if key_bits < MIN_RELEASE_RSA_BITS:
+        raise UpdateError(
+            f"Pinned release RSA key must be at least {MIN_RELEASE_RSA_BITS} bits."
+        )
+    return modulus, exponent, key_bits
+
+
+def verify_detached_signature(
+    manifest_bytes: bytes,
+    signature_payload: bytes | str,
+    *,
+    modulus_hex: str = PINNED_RELEASE_RSA_N_HEX,
+    exponent: int = PINNED_RELEASE_RSA_E,
+) -> None:
+    """Verify RSA PKCS#1 v1.5 + SHA-256 using only the Python standard library."""
+
+    if not isinstance(manifest_bytes, (bytes, bytearray)):
+        raise TypeError("manifest_bytes must be bytes.")
+
+    modulus, exponent, key_bits = validate_release_public_key(modulus_hex, exponent)
     signature = _decode_signature(signature_payload)
-    key_bytes = (modulus.bit_length() + 7) // 8
+    key_bytes = (key_bits + 7) // 8
     if len(signature) != key_bytes:
         raise UpdateError("Detached release signature length does not match key.")
 

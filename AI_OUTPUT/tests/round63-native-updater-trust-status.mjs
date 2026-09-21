@@ -16,6 +16,9 @@ for(const token of [
   '"ready": syntactically_valid',
   '"algorithm": "RSA-PKCS1-v1_5-SHA256"',
   '"key_bits": key_bits',
+  '"minimum_key_bits": MIN_RELEASE_RSA_BITS',
+  '"reason": reason',
+  "validate_release_public_key(",
   '"release_verification": _release_verification_status()'
 ]) assert.ok(host.includes(token),"native host missing "+token);
 
@@ -26,5 +29,7 @@ assert.ok(readme.includes("CHECK")&&readme.includes("APPLY")&&readme.includes("f
 assert.doesNotMatch(readme,/expose the reviewed native updater state machine in Settings/);
 assert.ok(readme.includes("native-host PING, signed CHECK, durable PREPARE, CHECKPOINTED-only APPLY"));
 assert.ok(readme.includes("native APPLY is bound to the checkpointed expected version/build"));
-assert.equal(manifest.name,"AI Bridge Review");\nassert.equal(manifest.version,"1.19.1");\nassert.ok(manifest.permissions.includes("nativeMessaging"));
+assert.equal(manifest.name,"AI Bridge Review");
+assert.equal(manifest.version,"1.19.1");
+assert.ok(manifest.permissions.includes("nativeMessaging"));
 console.log("round63-native-updater-trust-status: PASS");

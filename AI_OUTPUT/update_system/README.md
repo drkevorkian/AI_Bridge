@@ -233,3 +233,11 @@ extension root.
 The production release RSA public modulus is still intentionally unset.
 Therefore CHECK/APPLY continue to fail closed until the human-approved public
 key is pinned. PING can be used to verify installation independently.
+
+
+### Release-signing key strength
+
+Automatic native replacement requires a pinned RSA release key of at least 2048 bits.
+The native host's trust status uses the same validation predicate as detached-signature
+verification, so Settings cannot report release verification as ready for a weak or
+malformed key.
