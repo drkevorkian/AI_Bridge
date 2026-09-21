@@ -544,11 +544,24 @@ function reviewTrustedExtensionPage(sender){
 }
 const REVIEW_NATIVE_UPDATER_HOST="com.aibridge.updater";
 const REVIEW_NATIVE_UPDATER_SCHEMA=1;
+const REVIEW_NATIVE_UPDATER_ALLOWED_FILES=new Set([
+  "manifest.json","update-checkpoint.js","background.js","content.js",
+  "dashboard.html","dashboard.js","dashboard.css","dashboard-layouts.js","dashboard-layouts.css",
+  "popup.html","popup.js","popup.css","settings.html","settings.js","settings.css","icon128.png"
+]);
 function reviewBoundedNativeString(value,{required=true,max=128}={}){
   const text=String(value??"").trim();
   if(required&&!text)return null;
   if(text.length>max)return null;
   return text;
+}
+function reviewNativeUpdaterRuntimePath(value){
+  const path=reviewBoundedNativeString(value,{max:128});
+  if(!path||path.startsWith("/")||path.includes("\\")||/^[A-Za-z]:/.test(path))return null;
+  const parts=path.split("/");
+  if(parts.some(part=>!part||part==="."||part===".."))return null;
+  if(!REVIEW_NATIVE_UPDATER_ALLOWED_FILES.has(path))return null;
+  return path;
 }
 function reviewValidateNativeUpdaterResponse(op,result){
   if(!result||typeof result!=="object"||Array.isArray(result))return {ok:false,reason:"NATIVE_UPDATE_RESPONSE_INVALID"};
@@ -616,8 +629,8 @@ function reviewValidateNativeUpdaterResponse(op,result){
     const files=[];
     const seen=new Set();
     for(const raw of result.files){
-      const path=reviewBoundedNativeString(raw,{max:128});
-      if(!path||path.includes("..")||path.startsWith("/")||path.includes("\\")||seen.has(path)){
+      const path=reviewNativeUpdaterRuntimePath(raw);
+      if(!path||seen.has(path)){
         return {ok:false,reason:"NATIVE_UPDATE_APPLY_RESPONSE_INVALID"};
       }
       seen.add(path);files.push(path);
