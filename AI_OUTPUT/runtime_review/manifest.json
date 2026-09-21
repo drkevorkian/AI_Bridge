@@ -2,7 +2,7 @@
   "manifest_version": 3,
   "name": "AI Bridge Review",
   "version": "1.19.1",
-  "description": "AI Bridge reviewed playground build 1.19.1.27-AI-B with minimum-2048-bit native updater release-signing trust enforcement.",
+  "description": "AI Bridge reviewed playground build 1.19.1.28-AI-B with strict native-updater PING/CHECK/APPLY response validation.",
   "permissions": [
     "tabs",
     "storage",
@@ -69,5 +69,5 @@
   "content_security_policy": {
     "extension_pages": "script-src 'self'; object-src 'none'; base-uri 'none'; frame-ancestors 'none'"
   },
-  "version_name": "1.19.1.27-AI-B"
+  "version_name": "1.19.1.28-AI-B"
 }
