@@ -30,8 +30,14 @@ for(const rel of [
     source.includes('(resolveTrusted(config.send) || (resolveTrusted(config.composer) && config.send.length)) ? "PASS" : "FAIL"'),
     rel+": health must support provider-controlled conditional Send rendering"
   );
-  assert.ok(send.includes('reject(command,"DOM_AUTHORITY_UNAVAILABLE","COMPOSER")'),
-    rel+": unavailable authority must identify composer phase");
+  assert.ok(send.includes('const composer1=await waitForTrusted(config.composer,{attempts:40,delayMs:75});'),
+    rel+": composer authority must use the bounded trusted-selector mount window");
+  assert.ok(send.includes('const detail=`COMPOSER provider=${provider}; matched=${stats.matched}; visible=${stats.visible}; enabled=${stats.enabled}`;'),
+    rel+": unavailable composer diagnostics must remain non-sensitive and identify the composer phase");
+  assert.ok(send.includes('reject(command,"DOM_AUTHORITY_UNAVAILABLE",detail)'),
+    rel+": unavailable composer must still fail closed");
+  assert.ok(send.includes("const identityAfterComposerWait=routeIdentity()"),
+    rel+": route identity must be re-proven after waiting for composer mount");
   assert.ok(send.includes("for(let i=0;i<20;i++)"),
     rel+": conditional Send rendering wait must be bounded");
   assert.ok(send.includes("resolveTrusted(config.send,{requireEnabled:true})"),
