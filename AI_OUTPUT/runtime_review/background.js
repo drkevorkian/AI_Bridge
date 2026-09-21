@@ -4749,6 +4749,94 @@ async function handleCompletedResponse(side, text, { relay = true, artifacts = [
   }
 }
 
+
+function reviewManualRelayAwaitingDispatch(sourceSide, authority){
+  const candidates=reviewLedger.snapshot().filter(record =>
+    record.side===sourceSide &&
+    record.status===DISPATCH_STATUS.AWAITING_RESPONSE &&
+    Number(record.tabId)===Number(authority.tabId) &&
+    Number(record.generationEpoch)===Number(authority.generationEpoch) &&
+    reviewSameIdentity(record.conversationIdentity,authority.identity)
+  );
+  if(candidates.length!==1){
+    return {
+      ok:false,
+      reason:candidates.length
+        ? "MANUAL_RELAY_MULTIPLE_AWAITING_DISPATCHES"
+        : "MANUAL_RELAY_NO_AWAITING_DISPATCH"
+    };
+  }
+  return {ok:true,dispatch:candidates[0]};
+}
+
+async function reviewRecoverManualRelaySource(sourceSide){
+  let record=reviewAuthorityBySide.get(sourceSide);
+  if(!record) record=await reviewRegisterSideAuthority(sourceSide);
+  const authority=reviewConversationAuthority(record);
+  if(!authority) throw new Error("MANUAL_RELAY_SOURCE_AUTHORITY_UNVERIFIED");
+
+  let recovered;
+  try{
+    recovered=await chrome.tabs.sendMessage(
+      Number(authority.tabId),
+      {type:"AI_BRIDGE_READ_LAST_RESPONSE"},
+      {documentId:String(record.documentId)}
+    );
+  }catch(error){
+    throw new Error("MANUAL_RELAY_READ_FAILED: "+(error?.message||error));
+  }
+
+  const recoveredText=String(recovered?.text||"").trim();
+  if(!recovered?.ok||!recoveredText){
+    throw new Error(recovered?.error||"MANUAL_RELAY_NO_VISIBLE_RESPONSE");
+  }
+  if(recovered.active) throw new Error(`AI ${sourceSide} still appears to be generating.`);
+
+  let observedIdentity;
+  try{observedIdentity=reviewSanitizeIdentity(recovered.identity);}
+  catch(_){throw new Error("MANUAL_RELAY_RESPONSE_IDENTITY_INVALID");}
+
+  if(
+    String(recovered.provider||"")!==String(record.provider||"") ||
+    !reviewSameIdentity(observedIdentity,authority.identity)
+  ){
+    throw new Error("MANUAL_RELAY_RESPONSE_AUTHORITY_MISMATCH");
+  }
+
+  const awaiting=reviewManualRelayAwaitingDispatch(sourceSide,authority);
+  if(!awaiting.ok) throw new Error(awaiting.reason);
+
+  const envelope={
+    dispatchId:String(awaiting.dispatch.dispatchId),
+    side:sourceSide,
+    senderTabId:Number(authority.tabId),
+    generationEpoch:Number(authority.generationEpoch),
+    conversationIdentity:observedIdentity,
+    rolloverId:null,
+    text:recoveredText,
+    artifacts:[],
+    completedAt:Date.now()
+  };
+
+  // Serialize through the same commit queue as automatic response delivery.
+  // If the late automatic envelope races this recovery, one path commits and
+  // the other observes the already-committed dispatch instead of duplicating it.
+  const task=()=>reviewProcessIncomingEnvelope(envelope);
+  responseCommitQueue=responseCommitQueue.catch(()=>{}).then(task);
+  const committed=await responseCommitQueue;
+  if(committed?.durableResponseAccepted!==true){
+    throw new Error(
+      "MANUAL_RELAY_RESPONSE_COMMIT_FAILED: "+
+      String(committed?.reason||committed?.error||"UNKNOWN")
+    );
+  }
+  return {
+    text:recoveredText,
+    dispatchId:awaiting.dispatch.dispatchId,
+    alreadyCommitted:Boolean(committed.alreadyCommitted)
+  };
+}
+
 function reviewAuthorizeProviderEvent(msg, sender) {
   if (!state.sessionActive) return { ok:false, reason:"NO_ACTIVE_SESSION" };
   if (sender?.id !== chrome.runtime.id) return { ok:false, reason:"PROVIDER_EVENT_EXTENSION_ID_MISMATCH" };
@@ -5118,7 +5206,6 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
 
     if (msg.type === "AI_BRIDGE_MANUAL_RELAY") {
       if (!state.sessionActive) throw new Error("Start a session first.");
-      if (state.running) throw new Error("Pause the session before using Manual Relay.");
       if (state.awaitingHuman) throw new Error("Resolve the pending human-input request before Manual Relay.");
       const sourceSide = String(msg.sourceSide || "").toUpperCase();
       const targetSides = [...new Set((Array.isArray(msg.targetSides) ? msg.targetSides : [])
@@ -5126,15 +5213,21 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
         .filter(side => SIDES.includes(side) && side !== sourceSide);
       if (!SIDES.includes(sourceSide)) throw new Error("Choose an active source AI.");
       if (!targetSides.length) throw new Error("Choose at least one active destination AI.");
-      const sourceTab = tabForSide(sourceSide);
-      if (!sourceTab) throw new Error(`AI ${sourceSide} has no bound tab.`);
-      const recovered = await chrome.tabs.sendMessage(sourceTab, { type: "AI_BRIDGE_READ_LAST_RESPONSE" });
-      const recoveredText = String(recovered?.text || "").trim();
-      if (!recovered?.ok || !recoveredText) throw new Error(recovered?.error || `Could not read AI ${sourceSide}'s last visible response.`);
-      if (recovered.active) throw new Error(`AI ${sourceSide} still appears to be generating.`);
 
-      recordTranscript("response", { side: sourceSide, text: recoveredText, manualRelay: true });
-      const deliveredSeq = latestSeq();
+      // Manual Relay is a recovery control. It must remain usable specifically
+      // when automatic response detection is stuck while the session still
+      // reports "running". Freeze progression before inspecting the page so no
+      // new automatic dispatch can race the operator-selected handoff.
+      state.running=false;
+      state.paused=true;
+      state.runtimePhase="MANUAL_RELAY_RECOVERY";
+      state.pauseReason=`Manual relay is recovering AI ${sourceSide}'s completed response.`;
+      await saveState();
+
+      const recovered=await reviewRecoverManualRelaySource(sourceSide);
+      const recoveredText=recovered.text;
+      const deliveredSeq=latestSeq();
+
       for (const targetSide of targetSides) {
         const manualMessage = [
           teamContext(targetSide),
@@ -5149,11 +5242,25 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
         ].join("\n");
         await sendToSide(targetSide, manualMessage, { deliveredSeq });
       }
-      state.running = false;
-      state.paused = true;
-      state.pauseReason = `Manual relay sent AI ${sourceSide}'s recovered response to ${targetSides.map(side => "AI " + side).join(", ")}. Resume when ready.`;
+
+      state.running=false;
+      state.paused=true;
+      state.runtimePhase="PAUSED";
+      state.pauseReason=`Manual relay committed AI ${sourceSide}'s recovered response and sent it to ${targetSides.map(side => "AI " + side).join(", ")}. Resume when ready.`;
+      appendLog({
+        time:Date.now(),
+        type:"manual-relay",
+        side:sourceSide,
+        dispatchId:recovered.dispatchId,
+        text:`Manual relay recovered and committed AI ${sourceSide}, then sent it to ${targetSides.join(",")}.`
+      });
       await saveState();
-      sendResponse({ ok: true, sourceSide, targetSides });
+      sendResponse({
+        ok:true,
+        sourceSide,
+        targetSides,
+        recoveredDispatchId:recovered.dispatchId
+      });
       return;
     }
 

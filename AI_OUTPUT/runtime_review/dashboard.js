@@ -774,7 +774,7 @@ function updateControls(s) {
   $("workMode").disabled = Boolean(s.sessionActive);
   $("teamRules").disabled = false;
   $("applyTeamRules").disabled = false;
-  $("forceRelayBtn").disabled = !s.sessionActive || s.running || s.awaitingHuman || selectedManualRelayTargets().length === 0;
+  $("forceRelayBtn").disabled = !s.sessionActive || s.awaitingHuman || selectedManualRelayTargets().length === 0;
   $("sendInterject").disabled = !s.sessionActive || s.awaitingHuman;
   $("interjectText").disabled = !s.sessionActive || s.awaitingHuman;
   $("interjectNow").disabled = !s.sessionActive || s.awaitingHuman;
@@ -1186,7 +1186,7 @@ for (const side of ALL_SIDES) {
 $("forceRelayBtn").addEventListener("click", async () => {
   const targetSides = selectedManualRelayTargets();
   if (!targetSides.length) return;
-  $("manualRelayStatus").textContent = `Reading AI ${manualRelaySource}'s last visible reply…`;
+  $("manualRelayStatus").textContent = `Recovering AI ${manualRelaySource}'s last completed reply and freezing automatic progression…`;
   try {
     const res = await chrome.runtime.sendMessage({
       type: "AI_BRIDGE_MANUAL_RELAY",

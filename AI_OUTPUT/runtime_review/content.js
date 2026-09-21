@@ -89,6 +89,7 @@
   let awaitingResponseBaselineText = "";
   let lastResponseSignature = "";
   let lastObserved = "";
+  let lastObservedNode = null;
   let lastChangedAt = 0;
   let monitorTimer = null;
   let lastLimitSignature = "";
@@ -325,6 +326,9 @@
     const responseBaselineIdentity=identityAfterDraft;
     awaitingResponseBaselineNode=responseBaseline.node;
     awaitingResponseBaselineText=responseBaseline.text;
+    lastObserved="";
+    lastObservedNode=null;
+    lastChangedAt=Date.now();
     sendAgain.click();
     awaitingDispatchId=command.authorityId;
     awaitingResponseContext=Object.freeze({
@@ -523,12 +527,15 @@
       scheduleMonitor(350);
       return;
     }
-    if(text!==lastObserved || observation.node!==awaitingResponseBaselineNode){
+    if(text!==lastObserved || observation.node!==lastObservedNode){
       lastObserved=text;
+      lastObservedNode=observation.node;
       lastChangedAt=Date.now();
       // Once a different response node/text exists, the old-response baseline
-      // has served its purpose. Do not suppress a legitimate identical reply
-      // rendered as a new assistant message.
+      // has served its purpose. From this point onward, stability is measured
+      // against the previous OBSERVATION, not the cleared pre-send baseline.
+      // Comparing against awaitingResponseBaselineNode after clearing it to
+      // null causes every subsequent poll to look changed forever.
       awaitingResponseBaselineNode=null;
       awaitingResponseBaselineText="";
       scheduleMonitor(350);
@@ -740,7 +747,7 @@
         sendResponse({ok:false,error:"PROVIDER_EVENT_ACTIVE",providerEvent,active:generationActive(),host});
         return false;
       }
-      sendResponse({ok:Boolean(text),text,active:generationActive(),host});
+      sendResponse({ok:Boolean(text),text,active:generationActive(),host,provider,identity:routeIdentity()});
       return false;
     }
   };
@@ -760,6 +767,7 @@
     awaitingResponseContext=null;
     awaitingResponseBaselineNode=null;
     awaitingResponseBaselineText="";
+    lastObservedNode=null;
     pendingResponseDelivery=null;
     responseDeliveryInFlight=false;
     responseDeliveryAttempts=0;
