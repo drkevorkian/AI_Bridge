@@ -31,18 +31,24 @@ export const PROVIDER_CONTRACTS = Object.freeze({
   }),
   grok: Object.freeze({
     composer: freezeContracts([
+      { id: "grok-composer-chat-input", selector: "[data-testid='chat-input'] div.ProseMirror[contenteditable='true'][role='textbox']", rank: RANK.EXACT_SEMANTIC },
+      { id: "grok-composer-prosemirror", selector: "div.ProseMirror[contenteditable='true'][role='textbox'][aria-label*='Grok']", rank: RANK.ACCESSIBLE_EXACT },
       { id: "grok-composer-ask", selector: "textarea[placeholder*='Ask']", rank: RANK.ACCESSIBLE_EXACT },
       { id: "grok-composer-editable", selector: "div[contenteditable='true'][aria-label*='Grok']", rank: RANK.ACCESSIBLE_EXACT },
       { id: "grok-composer-broad", selector: "textarea, div[contenteditable='true']", rank: RANK.BROAD_GENERIC }
     ]),
     send: freezeContracts([
-      { id: "grok-send-aria", selector: "button[aria-label='Send message']", rank: RANK.ACCESSIBLE_EXACT, requiresEnabled: true },
+      { id: "grok-send-testid", selector: "button[data-testid='send-button']", rank: RANK.EXACT_SEMANTIC, requiresEnabled: true },
+      { id: "grok-send-aria-message", selector: "button[aria-label='Send message']", rank: RANK.ACCESSIBLE_EXACT, requiresEnabled: true },
+      { id: "grok-send-aria-send", selector: "button[aria-label='Send']", rank: RANK.ACCESSIBLE_EXACT, requiresEnabled: true },
+      { id: "grok-send-aria-submit", selector: "button[aria-label='Submit']", rank: RANK.ACCESSIBLE_EXACT, requiresEnabled: true },
       { id: "grok-send-submit", selector: "button[type='submit']", rank: RANK.STRUCTURAL, requiresEnabled: true }
     ]),
     stop: freezeContracts([
       { id: "grok-stop-aria", selector: "button[aria-label='Stop']", rank: RANK.ACCESSIBLE_EXACT }
     ]),
     response: freezeContracts([
+      { id: "grok-assistant-testid", selector: "[data-testid='assistant-message']", rank: RANK.EXACT_SEMANTIC },
       { id: "grok-message-testid", selector: "[data-testid='message-text']", rank: RANK.EXACT_SEMANTIC },
       { id: "grok-message-broad", selector: "article, div[class*='message']", rank: RANK.BROAD_GENERIC }
     ])
