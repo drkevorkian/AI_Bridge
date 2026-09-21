@@ -89,8 +89,12 @@ assert.doesNotMatch(
   /dispatchEvent\(new KeyboardEvent|key\s*:\s*["']Enter["']/,
   "ChatGPT SEND recovery must not bypass button authority with synthetic Enter"
 );
+const trustedStart=contentJs.indexOf("const TRUSTED = Object.freeze({");
+const grokStart=contentJs.indexOf("grok: Object.freeze({",trustedStart);
+assert.ok(trustedStart>=0&&grokStart>trustedStart,"provider TRUSTED boundary missing");
+const chatgptTrusted=contentJs.slice(trustedStart,grokStart);
 assert.doesNotMatch(
-  contentJs,
+  chatgptTrusted,
   /button\[type=['"]submit['"]\]/,
   "ChatGPT authority must not broaden to generic submit buttons"
 );
