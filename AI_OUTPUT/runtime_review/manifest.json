@@ -2,7 +2,7 @@
   "manifest_version": 3,
   "name": "AI Bridge Review",
   "version": "1.19.1",
-  "description": "AI Bridge review build 1.19.1.35-AI-A: fixes current Grok composer/send DOM drift with verified composer-scoped submission and assistant-message detection.",
+  "description": "AI Bridge review build 1.19.1.36-AI-A: Read X Response to Start can replay an already-committed response only when its prior downstream send is durably proven pre-action/unsent.",
   "permissions": [
     "tabs",
     "storage",
@@ -69,5 +69,5 @@
   "content_security_policy": {
     "extension_pages": "script-src 'self'; object-src 'none'; base-uri 'none'; frame-ancestors 'none'"
   },
-  "version_name": "1.19.1.35-AI-A"
+  "version_name": "1.19.1.36-AI-A"
 }
