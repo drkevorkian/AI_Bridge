@@ -60,7 +60,7 @@
   const TRUSTED = Object.freeze({
     chatgpt: Object.freeze({
       composer: Object.freeze(["#prompt-textarea"]),
-      send: Object.freeze(["button[data-testid='send-button']","button[aria-label='Send prompt']"]),
+      send: Object.freeze(["button[data-testid='send-button']","button[aria-label='Send prompt']","button#composer-submit-button"]),
       response: Object.freeze(["[data-message-author-role='assistant'] .markdown","[data-message-author-role='assistant']"])
     }),
     grok: Object.freeze({
@@ -96,6 +96,10 @@
   const providerEventSignatures = new Map();
   let routeTimer = null;
   let disposed = false;
+  let pendingResponseDelivery = null;
+  let responseDeliveryTimer = null;
+  let responseDeliveryInFlight = false;
+  let responseDeliveryAttempts = 0;
 
   function trim(map){ while(map.size > MAX_CACHE) map.delete(map.keys().next().value); }
   function rememberCommand(command,result){ byCommand.set(command.commandId,result); trim(byCommand); return result; }
@@ -260,7 +264,7 @@
     // Fresh/new provider surfaces can mount the trusted editor asynchronously.
     // Wait only for the already-pinned selectors; never broaden authority to a
     // generic textbox. Re-prove route identity after the bounded mount window.
-    const composer1=await waitForTrusted(config.composer,{attempts:40,delayMs:75});
+    const composer1=await waitForTrusted(config.composer,{attempts:80,delayMs:100});
     if(!composer1){
       const stats=trustedSelectorStats(config.composer);
       const detail=`COMPOSER provider=${provider}; matched=${stats.matched}; visible=${stats.visible}; enabled=${stats.enabled}`;
@@ -283,8 +287,8 @@
     // visible, enabled Send element matching only the pinned trusted selectors.
     // This covers providers that create/enable Send asynchronously.
     let send=null;
-    for(let i=0;i<20;i++){
-      await sleep(i===0?120:50);
+    for(let i=0;i<80;i++){
+      await sleep(i===0?120:100);
       const composerNow=resolveTrusted(config.composer);
       if(composerNow!==composer2 || !composer2?.isConnected) {
         return rememberCommand(command,reject(command,"DOM_AUTHORITY_CHANGED","COMPOSER"));
@@ -433,6 +437,61 @@
     return null;
   }
 
+  function latestExchangeObservation(){
+    if(provider!=="chatgpt") return {userText:"",assistantText:"",assistantAfterUser:false};
+    const users=[...document.querySelectorAll("[data-message-author-role='user']")].filter(visible);
+    const user=users[users.length-1]||null;
+    const assistant=responseObservation();
+    const userText=user?String(user.innerText||user.textContent||"").replace(/\u00a0/g," ").trim():"";
+    const assistantText=String(assistant.text||"").trim();
+    const assistantAfterUser=Boolean(
+      user&&assistant.node&&
+      typeof user.compareDocumentPosition==="function"&&
+      (user.compareDocumentPosition(assistant.node)&4)
+    );
+    return {userText,assistantText,assistantAfterUser};
+  }
+  function clearPendingResponseDelivery(dispatchId=null){
+    if(dispatchId!=null&&pendingResponseDelivery?.envelope?.dispatchId!==String(dispatchId)) return false;
+    pendingResponseDelivery=null;
+    responseDeliveryAttempts=0;
+    if(responseDeliveryTimer!==null){clearTimeout(responseDeliveryTimer);responseDeliveryTimer=null;}
+    return true;
+  }
+  function scheduleResponseDelivery(ms=250){
+    if(disposed||!pendingResponseDelivery||responseDeliveryTimer!==null) return;
+    const delay=Math.max(0,Math.min(5000,Number(ms)||0));
+    responseDeliveryTimer=setTimeout(()=>{
+      responseDeliveryTimer=null;
+      if(disposed) return;
+      deliverPendingResponse().catch(()=>{});
+    },delay);
+  }
+  async function deliverPendingResponse(){
+    if(disposed||responseDeliveryInFlight||!pendingResponseDelivery) return;
+    responseDeliveryInFlight=true;
+    const pending=pendingResponseDelivery;
+    let acknowledgement=null;
+    try{ acknowledgement=await chrome.runtime.sendMessage(pending.envelope); }
+    catch(_){}
+    finally{ responseDeliveryInFlight=false; }
+    if(pendingResponseDelivery!==pending) return;
+    if(acknowledgement?.durableResponseAccepted===true){
+      const dispatchId=String(pending.envelope.dispatchId||"");
+      clearPendingResponseDelivery(dispatchId);
+      if(awaitingDispatchId===dispatchId){
+        awaitingDispatchId=null;
+        awaitingResponseContext=null;
+        awaitingResponseBaselineNode=null;
+        awaitingResponseBaselineText="";
+      }
+      return;
+    }
+    responseDeliveryAttempts=Math.min(responseDeliveryAttempts+1,1000000);
+    const backoff=Math.min(5000,250*(2**Math.min(responseDeliveryAttempts,4)));
+    scheduleResponseDelivery(backoff);
+  }
+
   function responseObservation(){
     const nodes=[];
     for(const selector of config.response||[]){
@@ -451,6 +510,7 @@
   }
   async function monitor(){
     monitorTimer=null;
+    if(pendingResponseDelivery){scheduleResponseDelivery(0);return;}
     if(!awaitingDispatchId) return;
     if(await inspectProviderEvent()){scheduleMonitor(750);return;}
     const observation=responseObservation();
@@ -476,7 +536,7 @@
     }
     if(generationActive() || Date.now()-lastChangedAt<1600){scheduleMonitor(350);return;}
     const signature=awaitingDispatchId+"::"+text;
-    if(signature===lastResponseSignature) return;
+    if(signature===lastResponseSignature && pendingResponseDelivery){scheduleResponseDelivery(0);return;}
     lastResponseSignature=signature;
     const dispatchId=awaitingDispatchId;
     const responseContext=awaitingResponseContext && awaitingResponseContext.dispatchId===dispatchId
@@ -489,15 +549,14 @@
           authorityRegistrationId:registration.authorityRegistrationId,
           rolloverId:null
         }) : null);
-    awaitingDispatchId=null;
-    awaitingResponseContext=null;
-    awaitingResponseBaselineNode=null;
-    awaitingResponseBaselineText="";
-    try{
-      if(!responseContext) return;
-      const liveIdentity=routeIdentity();
-      if(liveIdentity.provider!==responseContext.provider || liveIdentity.writable!==true) return;
-      await chrome.runtime.sendMessage({
+    if(!responseContext) return;
+    const liveIdentity=routeIdentity();
+    if(liveIdentity.provider!==responseContext.provider || liveIdentity.writable!==true){
+      scheduleMonitor(500);
+      return;
+    }
+    pendingResponseDelivery=Object.freeze({
+      envelope:Object.freeze({
         type:"AI_BRIDGE_RESPONSE",
         text,
         completedAt:Date.now(),
@@ -507,8 +566,10 @@
         side:responseContext.side,
         rolloverId:responseContext.rolloverId,
         artifacts:[]
-      });
-    }catch(_){}
+      })
+    });
+    responseDeliveryAttempts=0;
+    scheduleResponseDelivery(0);
   }
   function scheduleMonitor(ms=250){
     if(disposed || monitorTimer) return;
@@ -653,6 +714,25 @@
       sendResponse({ok:false,outcome:"REJECTED_PRE_ACTION",reason:"NEW_CHAT_UNSUPPORTED",error:"Trusted New Chat authority is not available; no click was attempted."});
       return false;
     }
+    if(msg.type==="AI_BRIDGE_READ_LATEST_EXCHANGE"){
+      if(provider!=="chatgpt"){
+        sendResponse({ok:false,error:"LATEST_EXCHANGE_RECOVERY_UNSUPPORTED_PROVIDER",provider,host});
+        return false;
+      }
+      const exchange=latestExchangeObservation();
+      const identity=routeIdentity();
+      sendResponse({
+        ok:Boolean(exchange.userText&&exchange.assistantText&&exchange.assistantAfterUser),
+        provider,
+        host,
+        identity,
+        active:generationActive(),
+        userText:exchange.userText,
+        assistantText:exchange.assistantText,
+        assistantAfterUser:exchange.assistantAfterUser
+      });
+      return false;
+    }
     if(msg.type==="AI_BRIDGE_READ_LAST_RESPONSE"){
       const text=responseText();
       const providerEvent=classifyProviderEvent(text);
@@ -673,12 +753,16 @@
     try{ observer.disconnect(); }catch(_){}
     if(routeTimer!==null){ clearInterval(routeTimer); routeTimer=null; }
     if(monitorTimer!==null){ clearTimeout(monitorTimer); monitorTimer=null; }
+    if(responseDeliveryTimer!==null){ clearTimeout(responseDeliveryTimer); responseDeliveryTimer=null; }
     try{ chrome.runtime.onMessage.removeListener(onRuntimeMessage); }catch(_){}
     registration=null;
     awaitingDispatchId=null;
     awaitingResponseContext=null;
     awaitingResponseBaselineNode=null;
     awaitingResponseBaselineText="";
+    pendingResponseDelivery=null;
+    responseDeliveryInFlight=false;
+    responseDeliveryAttempts=0;
     providerEventBaseline.clear();
     providerEventSignatures.clear();
     byCommand.clear();
