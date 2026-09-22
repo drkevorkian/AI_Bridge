@@ -1181,6 +1181,7 @@ function formatEntry(entry) {
 }
 
 function boundedTranscript(entries, maxChars = 48000) {
+  entries = Array.isArray(entries) ? entries.filter(entry => entry?.type !== "provider-event") : [];
   const parts = [];
   let used = 0;
 
@@ -2494,6 +2495,61 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
 
       await saveState();
       sendResponse({ ok: true });
+      return;
+    }
+
+    if (msg.type === "AI_BRIDGE_PROVIDER_EVENT") {
+      if (!sender.tab) {
+        sendResponse({ ok: false, ignored: true });
+        return;
+      }
+      const side = sideForTab(sender.tab.id);
+      if (!SIDES.includes(side)) {
+        sendResponse({ ok: false, ignored: true });
+        return;
+      }
+      const allowedCodes = new Set([
+        "MESSAGE_DELIVERY_TIMEOUT",
+        "CONNECTION_INTERRUPTED",
+        "NETWORK_ERROR",
+        "GENERATION_ERROR",
+        "RATE_LIMIT",
+        "USAGE_LIMIT",
+        "AUTH_REQUIRED",
+        "CONTENT_BLOCKED"
+      ]);
+      const code = String(msg.code || "").toUpperCase();
+      if (!allowedCodes.has(code)) {
+        sendResponse({ ok: false, ignored: true });
+        return;
+      }
+      const text = String(msg.text || "").replace(/\s+/g, " ").trim().slice(0, 500);
+      if (!text) {
+        sendResponse({ ok: false, ignored: true });
+        return;
+      }
+      const deliveryAmbiguous = Boolean(msg.deliveryAmbiguous);
+      recordTranscript("provider-event", {
+        side,
+        text,
+        provider: String(msg.provider || ""),
+        providerCode: code,
+        severity: String(msg.severity || "WARN"),
+        deliveryAmbiguous,
+        observedAt: Number.isFinite(Number(msg.observedAt)) ? Number(msg.observedAt) : Date.now()
+      });
+      appendLog({
+        time: Date.now(),
+        type: "provider-event",
+        side,
+        text: `AI ${side} provider event ${code}: ${text}`
+      });
+      if (state.sessionActive && state.running && deliveryAmbiguous) {
+        await pauseBridge(`AI ${side} provider reported ${code}: ${text} Delivery is ambiguous, so AI Bridge did not resend automatically.`);
+      } else {
+        await saveState();
+      }
+      sendResponse({ ok: true, recorded: true, paused: Boolean(state.paused && deliveryAmbiguous) });
       return;
     }
 
