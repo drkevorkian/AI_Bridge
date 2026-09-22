@@ -24,6 +24,7 @@
   let disposed = false;
   let monitorInterval = null;
   let observer = null;
+  let lastProviderEventSignature = "";
   const MAX_ARTIFACTS_PER_RESPONSE = 8;
   const MAX_ARTIFACT_FILE_BYTES = 12 * 1024 * 1024;
   const MAX_ARTIFACT_TOTAL_BYTES = 24 * 1024 * 1024;
@@ -714,6 +715,77 @@
     return false;
   }
 
+  function normalizeProviderNotice(value) {
+    return String(value || "").replace(/\u00a0/g, " ").replace(/\s+/g, " ").trim();
+  }
+
+  function classifyProviderEvent(rawText) {
+    const text = normalizeProviderNotice(rawText);
+    if (!text) return null;
+    const rules = [
+      ["MESSAGE_DELIVERY_TIMEOUT", /\bmessage delivery timed out\b.*\bplease try again\b/i, "ERROR", true],
+      ["CONNECTION_INTERRUPTED", /\bconnection (?:lost|interrupted)\b/i, "ERROR", true],
+      ["NETWORK_ERROR", /\bnetwork error\b/i, "ERROR", true],
+      ["GENERATION_ERROR", /\b(?:error|failed) (?:generating|while generating)(?: a)? response\b|\bthere was an error generating a response\b/i, "ERROR", false],
+      ["RATE_LIMIT", /\btoo many requests\b|\brate limit\b|\btry again in \d+/i, "WARN", false],
+      ["USAGE_LIMIT", /\busage limit\b|\byou(?:'|’)ve reached (?:your|the) .*limit\b/i, "WARN", false],
+      ["AUTH_REQUIRED", /\bsign in\b|\blog in\b|\bauthentication required\b|\bsession expired\b/i, "ERROR", false],
+      ["CONTENT_BLOCKED", /\bcontent (?:was )?blocked\b|\brequest (?:was )?blocked\b|\bviolates? .*policy\b/i, "WARN", false]
+    ];
+    for (const [code, pattern, severity, deliveryAmbiguous] of rules) {
+      if (pattern.test(text)) return Object.freeze({ code, severity, deliveryAmbiguous, text: text.slice(0, 500) });
+    }
+    return null;
+  }
+
+  function providerEventCandidates(mutations = []) {
+    const found = new Set();
+    const add = node => {
+      const el = node?.nodeType === Node.TEXT_NODE ? node.parentElement : node;
+      if (!(el instanceof Element) || !el.isConnected) return;
+      if (el.closest?.("[data-message-author-role='assistant'], [data-message-author-role='user'], model-response, [data-content='ai-message']")) return;
+      const semantic = el.matches?.("[role='alert'], [aria-live='assertive'], [aria-live='polite']");
+      if (semantic) found.add(el);
+      for (const child of el.querySelectorAll?.("[role='alert'], [aria-live='assertive'], [aria-live='polite']") || []) {
+        if (!child.closest?.("[data-message-author-role='assistant'], [data-message-author-role='user'], model-response, [data-content='ai-message']")) found.add(child);
+        if (found.size >= 40) break;
+      }
+    };
+    for (const mutation of mutations || []) {
+      add(mutation.target);
+      for (const node of mutation.addedNodes || []) add(node);
+      if (found.size >= 40) break;
+    }
+    if (!found.size) {
+      for (const node of document.querySelectorAll("[role='alert'], [aria-live='assertive'], [aria-live='polite']")) {
+        add(node);
+        if (found.size >= 40) break;
+      }
+    }
+    return [...found];
+  }
+
+  function inspectProviderEvents(mutations = []) {
+    for (const node of providerEventCandidates(mutations)) {
+      if (!actionableSendControl(node)) continue;
+      const event = classifyProviderEvent(node.innerText || node.textContent || "");
+      if (!event) continue;
+      const signature = [providerKey || host, event.code, event.text].join("::");
+      if (signature === lastProviderEventSignature) return;
+      lastProviderEventSignature = signature;
+      runtimeSendMessage({
+        type: "AI_BRIDGE_PROVIDER_EVENT",
+        provider: providerKey || host,
+        code: event.code,
+        severity: event.severity,
+        deliveryAmbiguous: event.deliveryAmbiguous,
+        text: event.text,
+        observedAt: Date.now()
+      }).catch(() => {});
+      return;
+    }
+  }
+
   async function deliverPendingResponse() {
     if (disposed || responseDeliveryInFlight || !pendingResponseDelivery) return;
     const pending = pendingResponseDelivery;
@@ -797,7 +869,8 @@
     finally { monitorInFlight = false; }
   }
 
-  observer = new MutationObserver(() => {
+  observer = new MutationObserver(mutations => {
+    inspectProviderEvents(mutations);
     runMonitor().catch(() => {});
   });
   observer.observe(document.documentElement, { childList: true, subtree: true, characterData: true });
