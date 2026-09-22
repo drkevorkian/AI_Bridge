@@ -12,6 +12,7 @@ const THEME_KEY = "aiBridgeTheme";
 const PANE_WIDTH_KEY = "aiBridgeControlPaneWidth";
 const FRESH_KEY = "aiBridgeFreshOnStart";
 const LAYOUT_KEY = "aiBridgeLayout";
+const THREE_COLUMN_MIGRATION_KEY = "aiBridgeThreeColumnDefaultV1";
 const DEFAULT_PANE_PCT = 40;
 const MIN_PANE_PCT = 24;
 const MAX_PANE_PCT = 70;
@@ -157,7 +158,16 @@ async function loadTheme() {
 }
 
 async function loadLayout() {
-  const stored = await chrome.storage.local.get(LAYOUT_KEY);
+  const stored = await chrome.storage.local.get([LAYOUT_KEY, THREE_COLUMN_MIGRATION_KEY]);
+  if (stored?.[THREE_COLUMN_MIGRATION_KEY] !== true) {
+    applyLayout("studio");
+    try { localStorage.setItem(THREE_COLUMN_MIGRATION_KEY, "1"); } catch (_) {}
+    await chrome.storage.local.set({
+      [LAYOUT_KEY]: "studio",
+      [THREE_COLUMN_MIGRATION_KEY]: true
+    });
+    return;
+  }
   applyLayout(stored?.[LAYOUT_KEY] || DEFAULT_LAYOUT);
 }
 
