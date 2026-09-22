@@ -1805,12 +1805,15 @@ async function resetChatTab(tabId) {
   await ensureTabListener(id);
   try {
     const clicked = await chrome.tabs.sendMessage(id, { type: "AI_BRIDGE_NEW_CHAT" });
-    if (clicked?.ok && clicked.clicked) {
+    if (clicked?.ok && clicked.clicked && clicked.verifiedFresh) {
       await new Promise(resolve => setTimeout(resolve, 500));
       const afterClick = await chrome.tabs.get(id);
       if (afterClick?.status === "loading") return waitForTabReady(id);
+      await ensureTabListener(id);
       return afterClick;
     }
+    // A click without verified conversation-identity change is not accepted as
+    // a fresh chat. Fall through to the canonical provider route below.
   } catch (_) {
     // A navigation-triggering click can unload the sender before it replies.
     // The canonical route fallback below still guarantees a fresh conversation.
