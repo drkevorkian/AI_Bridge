@@ -41,7 +41,10 @@ jobs:
           node --check settings.js
           node --check popup.js
           node --check tests/repository-integrity.mjs
+          node --check tests/ui-radius-policy.mjs
       - name: Repository integrity
         run: node tests/repository-integrity.mjs
       - name: Three-column relay hardening
         run: node tests/v1.18.1-three-column-relay-hardening.mjs
+      - name: UI radius policy
+        run: node tests/ui-radius-policy.mjs
