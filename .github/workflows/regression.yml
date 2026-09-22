@@ -51,6 +51,7 @@ jobs:
           node --check tests/fresh-chat-verification.mjs
           node --check tests/provider-limit-signatures.mjs
           node --check tests/thread-limit-detection.mjs
+          node --check tests/thread-rollover.mjs
       - name: Repository integrity
         run: node tests/repository-integrity.mjs
       - name: Three-column relay hardening
@@ -71,3 +72,5 @@ jobs:
         run: node tests/provider-limit-signatures.mjs
       - name: Thread-limit detection integration
         run: node tests/thread-limit-detection.mjs
+      - name: Thread rollover
+        run: node tests/thread-rollover.mjs
