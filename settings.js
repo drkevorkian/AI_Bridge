@@ -36,7 +36,7 @@ async function portableSettings(){
     schema:1, savedAt:Date.now(),
     theme:THEMES.has(local[THEME_KEY])?local[THEME_KEY]:"blizzard",
     layout:LAYOUTS.has(local[LAYOUT_KEY])?local[LAYOUT_KEY]:"studio",
-    paneWidth:Math.min(70,Math.max(24,Number(local[PANE_WIDTH_KEY])||36)),
+    paneWidth:Math.min(70,Math.max(24,Number(local[PANE_WIDTH_KEY])||30)),
     agentCount:Number(local[AGENT_COUNT_KEY]||s.agentCount||3),
     teamRules:String(s.teamRules||"").slice(0,12000),
     workMode:String(s.workMode||"relay"), startSide:String(s.startSide||"A"),
@@ -148,7 +148,7 @@ async function init(){
   const manifest=chrome.runtime.getManifest();$("installedVersion").textContent="v"+manifest.version;$("updateVersion").textContent="Installed v"+manifest.version;
   const local=await chrome.storage.local.get([THEME_KEY,LAYOUT_KEY,PANE_WIDTH_KEY,AUTO_UPDATE_KEY,KEEP_AWAKE_KEY,GOOGLE_CLIENT_KEY]);
   applyTheme(local[THEME_KEY]);$("settingsLayout").value=LAYOUTS.has(local[LAYOUT_KEY])?local[LAYOUT_KEY]:"studio";
-  const paneWidth=Math.min(70,Math.max(24,Number(local[PANE_WIDTH_KEY])||36));$("paneWidth").value=String(paneWidth);$("paneWidthValue").textContent=Math.round(paneWidth)+"%";
+  const paneWidth=Math.min(70,Math.max(24,Number(local[PANE_WIDTH_KEY])||30));$("paneWidth").value=String(paneWidth);$("paneWidthValue").textContent=Math.round(paneWidth)+"%";
   $("autoCheckUpdates").checked=local[AUTO_UPDATE_KEY]===true;$("keepAwake").checked=local[KEEP_AWAKE_KEY]===true;$("powerStatus").textContent=local[KEEP_AWAKE_KEY]===true?"System awake":"Released";$("googleClientId").value=local[GOOGLE_CLIENT_KEY]||"";
   $("extensionId").textContent=chrome.runtime.id;$("redirectUri").textContent=chrome.identity.getRedirectURL("google");
   const sess=await chrome.storage.session.get(GOOGLE_TOKEN_KEY);$("googleStatus").textContent=sess[GOOGLE_TOKEN_KEY]?.accessToken?"Linked for this Chrome session":"Not linked";
@@ -158,7 +158,7 @@ function guarded(fn,notice){return async()=>{try{await fn()}catch(e){show(notice
 $("settingsTheme").addEventListener("change",e=>setTheme(e.target.value));
 $("settingsLayout").addEventListener("change",e=>setLayout(e.target.value));
 $("paneWidth").addEventListener("input",e=>{$("paneWidthValue").textContent=e.target.value+"%";});
-$("paneWidth").addEventListener("change",async e=>{const width=Math.min(70,Math.max(24,Number(e.target.value)||36));await chrome.storage.local.set({[PANE_WIDTH_KEY]:width});});
+$("paneWidth").addEventListener("change",async e=>{const width=Math.min(70,Math.max(24,Number(e.target.value)||30));await chrome.storage.local.set({[PANE_WIDTH_KEY]:width});});
 $("openDashboard").addEventListener("click",()=>chrome.tabs.create({url:chrome.runtime.getURL("dashboard.html")}));
 $("syncPush").addEventListener("click",guarded(syncPush,"syncNotice"));$("syncPull").addEventListener("click",guarded(syncPull,"syncNotice"));
 $("saveGoogleClientId").addEventListener("click",guarded(async()=>{const v=$("googleClientId").value.trim();if(v&&!/^[A-Za-z0-9._-]+\.apps\.googleusercontent\.com$/.test(v))throw new Error("That does not look like a Google OAuth client ID.");await chrome.storage.local.set({[GOOGLE_CLIENT_KEY]:v});show("googleNotice","OAuth client ID saved locally.");},"googleNotice"));
