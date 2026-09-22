@@ -14,7 +14,10 @@ assert.match(content,/function inspectThreadLimit\(/);
 assert.match(content,/AI_BRIDGE_THREAD_LIMIT/);
 assert.match(content,/result\.state !== "HARD_THREAD_LIMIT"/);
 assert.match(background,/msg\.type === "AI_BRIDGE_THREAD_LIMIT"/);
-assert.match(background,/Automatic rollover is not enabled yet; the session is paused safely/);
+assert.match(background,/const rollover = await performThreadRollover\(side,/,
+  "verified hard limits must hand off only to the dedicated rollover transaction");
+assert.match(background,/String\(msg\.state \|\| ""\) !== "HARD_THREAD_LIMIT"/,
+  "background must still reject non-hard-limit events");
 assert.match(background,/providerCode: "HARD_THREAD_LIMIT"/);
 
 console.log("AI Bridge thread-limit detection integration: OK");

@@ -87,6 +87,7 @@ const DEFAULT_STATE = {
   lastRoundDurationMsBySide: { A: null, B: null, C: null, D: null, E: null },
   lastRoundCompletedAtBySide: { A: null, B: null, C: null, D: null, E: null },
   totalWorkMsBySide: { A: 0, B: 0, C: 0, D: 0, E: 0 },
+  rolloverBySide: { A: null, B: null, C: null, D: null, E: null },
 
   awaitingHuman: false,
   pendingHuman: null,
@@ -118,6 +119,7 @@ function cloneDefaultState() {
     lastRoundDurationMsBySide: { A: null, B: null, C: null, D: null, E: null },
     lastRoundCompletedAtBySide: { A: null, B: null, C: null, D: null, E: null },
     totalWorkMsBySide: { A: 0, B: 0, C: 0, D: 0, E: 0 },
+    rolloverBySide: { A: null, B: null, C: null, D: null, E: null },
     phasePendingSides: [],
     phaseSentSides: [],
     phaseCompletedSides: [],
@@ -880,6 +882,7 @@ async function loadState() {
       lastRoundDurationMsBySide: { A: null, B: null, C: null, D: null, E: null, ...(bridgeState.lastRoundDurationMsBySide || {}) },
       lastRoundCompletedAtBySide: { A: null, B: null, C: null, D: null, E: null, ...(bridgeState.lastRoundCompletedAtBySide || {}) },
       totalWorkMsBySide: { A: 0, B: 0, C: 0, D: 0, E: 0, ...(bridgeState.totalWorkMsBySide || {}) },
+      rolloverBySide: { A: null, B: null, C: null, D: null, E: null, ...(bridgeState.rolloverBySide || {}) },
       phasePendingSides: Array.isArray(bridgeState.phasePendingSides) ? bridgeState.phasePendingSides.filter(side => SIDES.includes(side)) : [],
       phaseSentSides: Array.isArray(bridgeState.phaseSentSides) ? bridgeState.phaseSentSides.filter(side => SIDES.includes(side)) : [],
       phaseCompletedSides: Array.isArray(bridgeState.phaseCompletedSides) ? bridgeState.phaseCompletedSides.filter(side => SIDES.includes(side)) : [],
@@ -896,6 +899,14 @@ async function loadState() {
     state.mainSide = SIDES.includes(state.mainSide) ? state.mainSide : state.startSide;
     if (state.currentSide && !SIDES.includes(state.currentSide)) state.currentSide = state.startSide;
     state.workMode = normalizeWorkMode(state.workMode);
+    for (const side of SIDES) {
+      const tx = state.rolloverBySide?.[side];
+      if (tx && ["PREPARING", "FRESH_CHAT_READY", "SENDING_CONTINUITY"].includes(String(tx.phase || ""))) {
+        state.running = false;
+        state.paused = true;
+        state.pauseReason = `Interrupted thread rollover for AI ${side} requires manual recovery; AI Bridge will not resend an ambiguous continuity prompt automatically.`;
+      }
+    }
     if (!isBatchWorkMode(state.workMode)) {
       state.workPhase = state.workMode === "collaborate" ? "collaborate" : (state.workMode === "mesh" ? "mesh" : "relay");
       state.phasePendingSides = [];
@@ -1167,6 +1178,16 @@ function phaseLabel(phase = state.workPhase) {
   if (phase === "collaborate") return "Collaborate";
   if (phase === "mesh") return "Direct Mesh";
   return "Relay";
+}
+
+function simpleTextHash(value) {
+  const text = String(value || "");
+  let hash = 2166136261;
+  for (let i = 0; i < text.length; i++) {
+    hash ^= text.charCodeAt(i);
+    hash = Math.imul(hash, 16777619);
+  }
+  return (hash >>> 0).toString(16).padStart(8, "0");
 }
 
 function formatEntry(entry) {
@@ -1823,6 +1844,95 @@ async function resetChatTab(tabId) {
   if (current?.url === target) await chrome.tabs.reload(id);
   else await chrome.tabs.update(id, { url: target });
   return waitForTabReady(id);
+}
+
+function rolloverContinuityMessage(side, pendingPrompt) {
+  const recovery = recoveryMessage(side);
+  const pending = String(pendingPrompt || "").trim();
+  return {
+    ...recovery,
+    text: [
+      recovery.text,
+      "",
+      "THREAD ROLLOVER CONTINUITY:",
+      "The previous provider conversation reached its verified maximum length.",
+      "Continue the same AI Bridge role and task in this fresh conversation.",
+      pending ? "The handoff below had been sent when the provider reported the thread limit. Treat it as the pending work to continue, not as a new independent task." : "",
+      pending ? "" : "",
+      pending ? "--- PENDING HANDOFF ---" : "",
+      pending,
+      pending ? "--- END PENDING HANDOFF ---" : ""
+    ].filter(Boolean).join("\n")
+  };
+}
+
+async function performThreadRollover(side, event = {}) {
+  if (!SIDES.includes(side)) throw new Error("Unknown rollover AI side.");
+  const existing = state.rolloverBySide?.[side];
+  if (existing && ["PREPARING", "FRESH_CHAT_READY", "SENDING_CONTINUITY", "CONTINUITY_SENT"].includes(String(existing.phase || ""))) {
+    return { ok: true, duplicate: true, phase: existing.phase, rolloverId: existing.id };
+  }
+
+  const tabId = tabForSide(side);
+  if (!tabId) throw new Error(`AI ${side} has no bound tab for rollover.`);
+  const pendingPrompt = String(state.lastSentBySide?.[side] || "");
+  const tx = {
+    id: `rollover-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`,
+    side,
+    phase: "PREPARING",
+    startedAt: Date.now(),
+    provider: String(event.provider || ""),
+    evidence: String(event.text || "").slice(0, 500),
+    pendingPrompt,
+    previousTurn: Number(state.turn) || 0
+  };
+  state.rolloverBySide = { A: null, B: null, C: null, D: null, E: null, ...(state.rolloverBySide || {}) };
+  state.rolloverBySide[side] = tx;
+  state.running = false;
+  state.paused = true;
+  state.pauseReason = `AI ${side} reached the conversation limit. Opening and verifying a fresh chat…`;
+  await saveState();
+
+  try {
+    await resetChatTab(tabId);
+    tx.phase = "FRESH_CHAT_READY";
+    tx.freshChatReadyAt = Date.now();
+    state.pauseReason = `AI ${side} fresh chat verified. Preparing continuity handoff…`;
+    await saveState();
+
+    const outgoing = rolloverContinuityMessage(side, pendingPrompt);
+    tx.phase = "SENDING_CONTINUITY";
+    tx.continuityHash = simpleTextHash(outgoing.text);
+    state.pauseReason = `AI ${side} fresh chat verified. Sending one continuity handoff…`;
+    await saveState();
+
+    await sendToSide(side, outgoing.text, {
+      deliveredSeq: outgoing.deliveredSeq,
+      deliveredSources: outgoing.deliveredSources,
+      artifactIds: outgoing.artifactIds,
+      artifacts: outgoing.artifacts,
+      mainInterjectionIds: outgoing.mainInterjectionIds || []
+    });
+
+    tx.phase = "CONTINUITY_SENT";
+    tx.continuitySentAt = Date.now();
+    state.currentSide = side;
+    state.running = true;
+    state.paused = false;
+    state.pauseReason = "";
+    appendLog({ time: Date.now(), type: "thread-rollover", side, text: `AI ${side} continued in a verified fresh provider conversation`, rolloverId: tx.id });
+    await saveState();
+    return { ok: true, rolloverId: tx.id, phase: tx.phase };
+  } catch (error) {
+    tx.phase = "FAILED";
+    tx.failedAt = Date.now();
+    tx.error = String(error?.message || error).slice(0, 500);
+    state.running = false;
+    state.paused = true;
+    state.pauseReason = `Thread rollover failed for AI ${side}: ${tx.error}`;
+    await saveState();
+    return { ok: false, rolloverId: tx.id, phase: tx.phase, error: tx.error };
+  }
 }
 
 async function resetSelectedChats(msg, sides = SIDES, { allowActive = false } = {}) {
@@ -2522,12 +2632,25 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
         confidence: String(msg.confidence || ""),
         observedAt: Number.isFinite(Number(msg.observedAt)) ? Number(msg.observedAt) : Date.now()
       });
-      if (state.sessionActive) {
-        await pauseBridge(`AI ${side} reached a verified hard conversation-length limit. Automatic rollover is not enabled yet; the session is paused safely.`);
-      } else {
+      if (!state.sessionActive) {
         await saveState();
+        sendResponse({ ok: true, recorded: true, paused: false, rollover: false });
+        return;
       }
-      sendResponse({ ok: true, recorded: true, paused: Boolean(state.sessionActive && state.paused) });
+
+      const rollover = await performThreadRollover(side, {
+        provider: String(msg.provider || ""),
+        text,
+        confidence: String(msg.confidence || "")
+      });
+      sendResponse({
+        ok: Boolean(rollover?.ok),
+        recorded: true,
+        rollover: true,
+        rolloverId: rollover?.rolloverId || null,
+        phase: rollover?.phase || null,
+        error: rollover?.error || null
+      });
       return;
     }
 
@@ -2613,7 +2736,16 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
           errors: Array.isArray(diagnostics.errors) ? diagnostics.errors.slice(0, 8) : []
         });
       }
-      const task = () => handleCompletedResponse(side, text, { relay, artifacts: msg.artifacts, completedAt });
+      const task = async () => {
+        const result = await handleCompletedResponse(side, text, { relay, artifacts: msg.artifacts, completedAt });
+        const rollover = state.rolloverBySide?.[side];
+        if (rollover?.phase === "CONTINUITY_SENT") {
+          state.rolloverBySide[side] = null;
+          appendLog({ time: Date.now(), type: "thread-rollover-complete", side, text: `AI ${side} answered in the fresh conversation; rollover transaction cleared`, rolloverId: rollover.id });
+          await saveState();
+        }
+        return result;
+      };
       responseCommitQueue = responseCommitQueue.catch(() => {}).then(task);
       const result = await responseCommitQueue;
       sendResponse(result);
