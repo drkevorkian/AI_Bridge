@@ -1,8 +1,8 @@
 {
   "manifest_version": 3,
   "name": "AI Bridge",
-  "version": "1.18.0",
-  "description": "Coordinate 1–5 logical AI agents across selected tabs, with full themes, layouts, sync, provider health, updates, and power controls.",
+  "version": "1.18.1",
+  "description": "AI Bridge 1.18.1: v1.18 state-v3 relay core with true three-column Studio UI, acknowledged response delivery, and reload-safe content runtime.",
   "permissions": [
     "tabs",
     "storage",
