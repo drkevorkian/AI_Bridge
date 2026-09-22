@@ -1,6 +1,4 @@
-const ALL_SIDES = ["A", "B", "C", "D", "E"];
-const DEFAULT_AGENT_COUNT = 3;
-let SIDES = ALL_SIDES.slice(0, DEFAULT_AGENT_COUNT);
+const SIDES = ["A", "B", "C"];
 const supported = [
   { re: /^https:\/\/(chatgpt\.com|chat\.openai\.com)\//, name: "ChatGPT" },
   { re: /^https:\/\/grok\.com\//, name: "Grok" },
@@ -11,118 +9,112 @@ const supported = [
 
 const $ = id => document.getElementById(id);
 const THEME_KEY = "aiBridgeTheme";
-const AGENT_COUNT_KEY = "aiBridgeAgentCount";
+const PANE_WIDTH_KEY = "aiBridgeControlPaneWidth";
+const FRESH_KEY = "aiBridgeFreshOnStart";
+const LAYOUT_KEY = "aiBridgeLayout";
+const DEFAULT_PANE_PCT = 40;
+const MIN_PANE_PCT = 24;
+const MAX_PANE_PCT = 70;
 const THEMES = new Set(["blizzard", "ghostwhite", "midnight", "slate", "light", "solarized", "ocean", "terminal"]);
+const LAYOUTS = new Set(["studio", "classic"]);
+const DEFAULT_LAYOUT = "studio";
 let tabsById = new Map();
 let latestState = null;
+let lastUpdateResult = null;
 let hydrated = false;
 let renderedSeq = 0;
 let autoScroll = true;
 let selectedSourceFiles = [];
 let activeHumanModalKey = "";
-function renderBuildIdentity() {
-  const manifest = chrome.runtime.getManifest();
-  const build = manifest.version_name || manifest.version;
-  const el = $("buildIdentity");
-  if (el) el.textContent = `v${manifest.version} · ${build}`;
-}
-
 const WORK_MODE_INFO = {
-  relay: { label: "Relay" },
-  collaborate: { label: "Collaborate" },
-  compete: { label: "Compete" },
-  parallel: { label: "Parallel Independent" },
-  review: { label: "Peer Review" },
-  mesh: { label: "Direct Mesh" }
+  relay: {
+    label: "Relay",
+    minTurns: 1,
+    help: [
+      "Timing: sequential A → B → C. One AI at a time.",
+      "Peer visibility: every later AI sees accumulated shared updates before it responds, and continues the same problem.",
+      "Cycle: every selected LLM has participated once (A, then B, then C). The counter ticks only after that full lap.",
+      "Main AI: first speaker, and the recipient of queued human interjections.",
+      "Best for: investigations, debugging, and iterative design where each specialist builds on prior work."
+    ].join("\n")
+  },
+  collaborate: {
+    label: "Collaborate",
+    minTurns: 1,
+    help: [
+      "Timing: sequential like Relay. One AI at a time. Not a live consensus discussion.",
+      "Peer visibility: every later AI sees the accumulated shared deliverable and revises that same artifact.",
+      "Cycle: every selected LLM has participated once. The counter ticks only after that full lap of the shared document/design/code.",
+      "Main AI: first speaker, and the recipient of queued human interjections.",
+      "Best for: writing one final design, spec, or codebase where each specialist improves the same artifact."
+    ].join("\n")
+  },
+  compete: {
+    label: "Compete",
+    minTurns: 1,
+    help: [
+      "Timing: A, B, and C start simultaneously.",
+      "Peer visibility: they do not see each other's answers during the primary pass.",
+      "Cycle: the whole simultaneous batch. The counter ticks after every selected LLM has submitted, not after each individual response.",
+      "Main AI: still the recipient of queued human interjections; it is not a sequential first speaker in this mode.",
+      "Best for: independent solutions, avoiding anchoring, then comparing results."
+    ].join("\n")
+  },
+  parallel: {
+    label: "Parallel Independent",
+    minTurns: 1,
+    help: [
+      "Timing: A, B, and C start simultaneously.",
+      "Peer visibility: they work independently on their assigned jobs rather than solving the identical problem three times.",
+      "Cycle: the whole simultaneous batch. The counter ticks after every selected job has finished.",
+      "Main AI: recipient of queued human interjections; all three still start together.",
+      "Best for: work that decomposes into backend / frontend / research / security tracks."
+    ].join("\n")
+  },
+  review: {
+    label: "Peer Review",
+    minTurns: 1,
+    help: [
+      "Timing: two simultaneous phases. All three produce independent primaries first; there is no single drafter.",
+      "Peer visibility: phase 1 is independent (no peer answers). Phase 2 gives each AI the other two results and requests critique. There is no automatic primary-revision pass after critique.",
+      "Cycle: the full primary+critique pass (6 responses when A/B/C are selected). The counter ticks only after both phases finish.",
+      "Main AI: recipient of queued human interjections; it is not a sequential first speaker.",
+      "Best for: high-confidence validation and catching mistakes or bias."
+    ].join("\n")
+  },
+  mesh: {
+    label: "Direct Mesh",
+    minTurns: 1,
+    help: [
+      "Timing: one AI at a time.",
+      "Peer visibility: the responding AI sees accumulated shared updates, then can choose the next teammate.",
+      "Cycle: every selected LLM has participated at least once. Routing the same teammate twice does not complete the cycle. Put SEND TO: AI A|B|C (or an unambiguous label) on the final non-empty line. Without a valid target, normal next-agent routing applies.",
+      "Main AI: first speaker unless a prior handoff changed the cursor, and the recipient of queued human interjections.",
+      "Best for: dynamic workflows where the right next specialist depends on what was just discovered."
+    ].join("\n")
+  }
 };
-
-renderBuildIdentity();
-
-function normalizeAgentCount(raw) {
-  const value = Number(raw);
-  return Number.isInteger(value) && value >= 1 && value <= ALL_SIDES.length ? value : DEFAULT_AGENT_COUNT;
-}
-
-function minimumTurnsForMode(mode = selectedWorkMode()) {
-  if (mode === "review") return SIDES.length * 2;
-  if (mode === "compete" || mode === "parallel") return SIDES.length;
-  return 1;
-}
-
-function modeHelp(mode = selectedWorkMode()) {
-  const count = SIDES.length;
-  if (mode === "relay") return "Normal sequential " + SIDES.join(" → ") + " relay. Each AI receives shared updates from the previous agents.";
-  if (mode === "collaborate") return "Sequential shared-deliverable mode. Each active AI improves one common result using its assigned specialty.";
-  if (mode === "compete") return "All " + count + " active AIs receive the same objective simultaneously and submit independently.";
-  if (mode === "parallel") return "All " + count + " active AIs work simultaneously and independently on complementary versions of the same objective.";
-  if (mode === "review") return "Phase 1: all " + count + " active AIs answer independently. Phase 2: each AI receives the other active responses and critiques them simultaneously.";
-  return "One AI speaks at a time, but each model can route its completed response directly to a specific active teammate with a final-line SEND TO command.";
-}
-
-function setAgentCountUI(raw, { persist = false } = {}) {
-  const count = normalizeAgentCount(raw);
-  SIDES = ALL_SIDES.slice(0, count);
-  if ($("agentCount")) $("agentCount").value = String(count);
-  if ($("teamRouteLabel")) $("teamRouteLabel").textContent = SIDES.join(" → ");
-  for (const side of ALL_SIDES) {
-    const active = SIDES.includes(side);
-    const card = $("agentCard" + side);
-    if (card) card.hidden = !active;
-    const option = [...($("startSide")?.options || [])].find(item => item.value === side);
-    if (option) {
-      option.hidden = !active;
-      option.disabled = !active;
-    }
-    const recoveryOption = [...($("readResponseStartSide")?.options || [])].find(item => item.value === side);
-    if (recoveryOption) {
-      recoveryOption.hidden = !active;
-      recoveryOption.disabled = !active;
-    }
-  }
-  if ($("startSide") && !SIDES.includes($("startSide").value)) $("startSide").value = SIDES[0];
-  if ($("readResponseStartSide") && !SIDES.includes($("readResponseStartSide").value)) $("readResponseStartSide").value = SIDES[0];
-  updateRecoveryStartLabel();
-  const relayOption = [...($("workMode")?.options || [])].find(item => item.value === "relay");
-  if (relayOption) relayOption.textContent = "Relay — " + SIDES.join(" → ");
-  updateWorkModeUI();
-  refreshStartLabels();
-  if (latestState) renderHistory(latestState.history);
-  updateManualRelayUI();
-  if (persist) chrome.storage.local.set({ [AGENT_COUNT_KEY]: count }).catch(() => {});
-  return count;
-}
-
-async function loadAgentCountPreference() {
-  try {
-    const stored = await chrome.storage.local.get(AGENT_COUNT_KEY);
-    setAgentCountUI(stored?.[AGENT_COUNT_KEY] ?? DEFAULT_AGENT_COUNT);
-  } catch (_) {
-    setAgentCountUI(DEFAULT_AGENT_COUNT);
-  }
-}
 
 function selectedWorkMode() {
   const value = $("workMode")?.value || "relay";
   return WORK_MODE_INFO[value] ? value : "relay";
 }
 
-function updateRecoveryStartLabel() {
-  const side = SIDES.includes($("readResponseStartSide")?.value) ? $("readResponseStartSide").value : SIDES[0];
-  if ($("readResponseStart") && side) $("readResponseStart").textContent = `Read ${side} response to start`;
-}
-
 function updateWorkModeUI() {
   const mode = selectedWorkMode();
-  const minTurns = minimumTurnsForMode(mode);
-  if ($("workModeHelp")) $("workModeHelp").textContent = modeHelp(mode);
+  const info = WORK_MODE_INFO[mode];
+  if ($("workModeHelp")) $("workModeHelp").textContent = info.help;
   const batch = ["compete", "parallel", "review"].includes(mode);
   $("startSide").disabled = Boolean(latestState?.sessionActive);
   $("startSide").title = batch
-    ? "All " + SIDES.length + " active AIs start simultaneously; this selection still defines the Main AI for queued human interjections."
+    ? "All three AIs start simultaneously; this selection still defines the Main AI for queued human interjections."
     : "Choose the first speaker and Main AI for queued human interjections.";
-  const maxHelp = $("maxTurns")?.parentElement?.querySelector(".field-help");
+  const maxHelp = $("maxCycles")?.parentElement?.querySelector(".field-help");
   if (maxHelp) {
-    maxHelp.innerHTML = "<strong>-1 = Infinite</strong> · " + (minTurns > 1 ? (minTurns + "–10000 for this mode") : "1–10000 = finite");
+    maxHelp.replaceChildren();
+    const strong = document.createElement("strong");
+    strong.textContent = "-1 = Infinite";
+    maxHelp.append(strong, document.createTextNode(" · 1–10000 team cycles"));
   }
 }
 
@@ -138,9 +130,179 @@ function applyTheme(theme) {
   if ($("themeSelect")) $("themeSelect").value = chosen;
 }
 
+function applyLayout(layout) {
+  // Studio is the default for new installs. Classic is the original stacked pane.
+  // Unknown values fail closed to Studio rather than inventing a third chrome.
+  const chosen = LAYOUTS.has(layout) ? layout : DEFAULT_LAYOUT;
+  document.documentElement.dataset.layout = chosen;
+  try { localStorage.setItem("aiBridgeLayoutHint", chosen); } catch (_) {}
+  if ($("layoutSelect")) $("layoutSelect").value = chosen;
+  const studioBtn = $("layoutStudioBtn");
+  const classicBtn = $("layoutClassicBtn");
+  if (studioBtn) {
+    studioBtn.classList.toggle("active", chosen === "studio");
+    studioBtn.setAttribute("aria-pressed", chosen === "studio" ? "true" : "false");
+  }
+  if (classicBtn) {
+    classicBtn.classList.toggle("active", chosen === "classic");
+    classicBtn.setAttribute("aria-pressed", chosen === "classic" ? "true" : "false");
+  }
+  document.body.classList.toggle("is-studio", chosen === "studio");
+  document.body.classList.toggle("is-classic", chosen === "classic");
+}
+
 async function loadTheme() {
   const stored = await chrome.storage.local.get(THEME_KEY);
   applyTheme(stored?.[THEME_KEY]);
+}
+
+async function loadLayout() {
+  const stored = await chrome.storage.local.get(LAYOUT_KEY);
+  applyLayout(stored?.[LAYOUT_KEY] || DEFAULT_LAYOUT);
+}
+
+async function persistLayout(layout) {
+  const chosen = LAYOUTS.has(layout) ? layout : DEFAULT_LAYOUT;
+  applyLayout(chosen);
+  await chrome.storage.local.set({ [LAYOUT_KEY]: chosen });
+}
+
+function clampPanePct(value) {
+  const n = Number(value);
+  if (!Number.isFinite(n)) return DEFAULT_PANE_PCT;
+  return Math.min(MAX_PANE_PCT, Math.max(MIN_PANE_PCT, Math.round(n * 10) / 10));
+}
+
+function applyPaneWidth(pct) {
+  const width = clampPanePct(pct);
+  const shell = document.querySelector(".app-shell");
+  if (shell) shell.style.setProperty("--control-pane-width", `${width}%`);
+  const splitter = $("paneSplitter");
+  const label = $("paneWidthLabel");
+  const rounded = Math.round(width);
+  if (splitter) {
+    splitter.setAttribute("aria-valuenow", String(rounded));
+    splitter.setAttribute("aria-valuetext", `${rounded} percent`);
+    splitter.title = `Control pane ${rounded}%. Drag to resize. Double-click resets to 40%.`;
+  }
+  if (label) label.textContent = `${rounded}%`;
+  return width;
+}
+
+async function loadPaneWidth() {
+  const stored = await chrome.storage.local.get(PANE_WIDTH_KEY);
+  const value = stored?.[PANE_WIDTH_KEY];
+  applyPaneWidth(value == null || value === "" ? DEFAULT_PANE_PCT : value);
+}
+
+async function persistPaneWidth(pct) {
+  await chrome.storage.local.set({ [PANE_WIDTH_KEY]: clampPanePct(pct) });
+}
+
+function currentPanePct() {
+  const shell = document.querySelector(".app-shell");
+  if (!shell) return DEFAULT_PANE_PCT;
+  const raw = parseFloat(getComputedStyle(shell).getPropertyValue("--control-pane-width"));
+  return clampPanePct(raw);
+}
+
+function dashboardViewFromHash() {
+  return String(location.hash || "").replace(/^#/, "") === "settings" ? "settings" : "session";
+}
+
+function showDashboardView(view) {
+  const isSettings = view === "settings";
+  const sessionView = $("sessionView");
+  const settingsView = $("settingsView");
+  const sessionBtn = $("viewSessionBtn");
+  const settingsBtn = $("viewSettingsBtn");
+  const shell = document.querySelector(".app-shell");
+  if (sessionView) sessionView.classList.toggle("hidden", isSettings);
+  if (settingsView) settingsView.classList.toggle("hidden", !isSettings);
+  if (shell) shell.classList.toggle("is-settings", isSettings);
+  if (isSettings && shell) shell.classList.remove("tools-open");
+  if (sessionBtn) {
+    sessionBtn.classList.toggle("active", !isSettings);
+    sessionBtn.setAttribute("aria-selected", isSettings ? "false" : "true");
+  }
+  if (settingsBtn) {
+    settingsBtn.classList.toggle("active", isSettings);
+    settingsBtn.setAttribute("aria-selected", isSettings ? "true" : "false");
+  }
+  if (isSettings) refreshCloudStatus().catch(() => {});
+}
+
+function initPaneSplitter() {
+  const splitter = $("paneSplitter");
+  const shell = document.querySelector(".app-shell");
+  if (!splitter || !shell) return;
+  let dragging = false;
+
+  function pctFromClientX(clientX) {
+    const rect = shell.getBoundingClientRect();
+    if (!rect.width) return DEFAULT_PANE_PCT;
+    const minPx = Math.min(280, rect.width * 0.24);
+    const minRight = Math.min(320, rect.width * 0.3);
+    const minPct = (minPx / rect.width) * 100;
+    const maxPct = 100 - (minRight / rect.width) * 100;
+    const raw = ((clientX - rect.left) / rect.width) * 100;
+    if (minPct >= maxPct) return DEFAULT_PANE_PCT;
+    return Math.min(maxPct, Math.max(minPct, raw));
+  }
+
+  function currentPct() {
+    return parseFloat(getComputedStyle(shell).getPropertyValue("--control-pane-width")) || DEFAULT_PANE_PCT;
+  }
+
+  splitter.addEventListener("pointerdown", event => {
+    if (event.button !== 0) return;
+    if (event.detail >= 2) {
+      dragging = false;
+      document.body.classList.remove("is-resizing");
+      shell.classList.remove("is-resizing");
+      applyPaneWidth(DEFAULT_PANE_PCT);
+      persistPaneWidth(DEFAULT_PANE_PCT);
+      return;
+    }
+    dragging = true;
+    splitter.setPointerCapture(event.pointerId);
+    document.body.classList.add("is-resizing");
+    shell.classList.add("is-resizing");
+    applyPaneWidth(pctFromClientX(event.clientX));
+  });
+
+  splitter.addEventListener("pointermove", event => {
+    if (!dragging) return;
+    applyPaneWidth(pctFromClientX(event.clientX));
+  });
+
+  async function endDrag(event) {
+    if (!dragging) return;
+    dragging = false;
+    document.body.classList.remove("is-resizing");
+    shell.classList.remove("is-resizing");
+    try { splitter.releasePointerCapture(event.pointerId); } catch (_) {}
+    await persistPaneWidth(currentPct());
+  }
+
+  splitter.addEventListener("pointerup", endDrag);
+  splitter.addEventListener("pointercancel", endDrag);
+  splitter.addEventListener("dblclick", async () => {
+    applyPaneWidth(DEFAULT_PANE_PCT);
+    await persistPaneWidth(DEFAULT_PANE_PCT);
+  });
+  splitter.addEventListener("keydown", async event => {
+    const current = currentPct();
+    let next = current;
+    if (event.key === "ArrowLeft") next = current - 1;
+    else if (event.key === "ArrowRight") next = current + 1;
+    else if (event.key === "Home") next = MIN_PANE_PCT;
+    else if (event.key === "End") next = MAX_PANE_PCT;
+    else if (event.key === "Enter" || event.key === " ") next = DEFAULT_PANE_PCT;
+    else return;
+    event.preventDefault();
+    await persistPaneWidth(applyPaneWidth(next));
+  });
 }
 
 function formatHistoryTime(time) {
@@ -160,6 +322,7 @@ function historyEmpty(text) {
 function renderHistory(history = latestState?.history) {
   const jobs = Array.isArray(history?.jobs) ? history.jobs : [];
   const commands = Array.isArray(history?.commands) ? history.commands : [];
+  const rules = Array.isArray(history?.rules) ? history.rules : [];
   const locked = Boolean(latestState?.sessionActive);
 
   const jobList = $("jobHistory");
@@ -241,6 +404,45 @@ function renderHistory(history = latestState?.history) {
       commandList.appendChild(row);
     }
   }
+
+  const rulesList = $("rulesHistory");
+  if (rulesList) {
+    rulesList.textContent = "";
+    if (!rules.length) {
+      rulesList.appendChild(historyEmpty("No previous team rules yet."));
+    } else {
+      for (const item of rules) {
+        const row = document.createElement("div");
+        row.className = "history-row";
+
+        const badge = document.createElement("div");
+        badge.className = "history-badge";
+        badge.textContent = "ALL";
+
+        const copy = document.createElement("div");
+        copy.className = "history-copy";
+        const title = document.createElement("div");
+        title.className = "history-title";
+        title.textContent = formatHistoryTime(item.time);
+        const text = document.createElement("div");
+        text.className = "history-text";
+        text.textContent = item.text || "";
+        copy.append(title, text);
+
+        const use = document.createElement("button");
+        use.type = "button";
+        use.className = "tiny ghost history-use";
+        use.textContent = "Use";
+        use.disabled = false;
+        use.addEventListener("click", () => {
+          $("teamRules").value = item.text || "";
+        });
+
+        row.append(badge, copy, use);
+        rulesList.appendChild(row);
+      }
+    }
+  }
 }
 
 function aiName(url) {
@@ -258,7 +460,7 @@ function setSelectToTab(side, tabId) {
 }
 
 function refreshStartLabels() {
-  for (const side of ALL_SIDES) {
+  for (const side of SIDES) {
     const tab = tabsById.get(selectedTab(side));
     const option = [...$("startSide").options].find(o => o.value === side);
     if (option) option.textContent = `${aiName(tab?.url)} (AI ${side}) — Main`;
@@ -267,13 +469,13 @@ function refreshStartLabels() {
 
 async function loadTabs({ preserve = true } = {}) {
   const previous = {};
-  if (preserve) for (const side of ALL_SIDES) previous[side] = selectedTab(side);
+  if (preserve) for (const side of SIDES) previous[side] = selectedTab(side);
 
   const tabs = await chrome.tabs.query({});
   const candidates = tabs.filter(t => supported.some(x => x.re.test(t.url || "")));
   tabsById = new Map(candidates.map(t => [t.id, t]));
 
-  for (const side of ALL_SIDES) {
+  for (const side of SIDES) {
     const select = $(`tab${side}`);
     select.textContent = "";
     for (const tab of candidates) {
@@ -284,21 +486,16 @@ async function loadTabs({ preserve = true } = {}) {
     }
   }
 
-  for (const [index, side] of ALL_SIDES.entries()) {
+  for (const [index, side] of SIDES.entries()) {
     const desired = previous[side] || latestState?.[`tab${side}`];
     if (!setSelectToTab(side, desired) && candidates[index]) {
       $(`tab${side}`).value = String(candidates[index].id);
     }
   }
 
-  for (const option of $("agentCount").options) {
-    option.disabled = Number(option.value) > candidates.length;
-  }
-  $("agentCountHelp").textContent = `${candidates.length} supported AI tab${candidates.length === 1 ? "" : "s"} currently open. Multiple tabs from the same LLM are allowed and count as separate agents.`;
-
   refreshStartLabels();
-  if (candidates.length < SIDES.length) {
-    $("status").textContent = `Open at least ${SIDES.length} supported AI tab${SIDES.length === 1 ? "" : "s"}, then click Refresh AI tabs.`;
+  if (candidates.length < 3) {
+    $("status").textContent = "Open at least three supported AI chat tabs, then click Refresh AI tabs.";
   }
 }
 
@@ -306,8 +503,7 @@ function hydrateFromState(s) {
   if (hydrated || !s) return;
   hydrated = true;
 
-  if (s.sessionActive) setAgentCountUI(s.agentCount);
-  for (const side of ALL_SIDES) {
+  for (const side of SIDES) {
     setSelectToTab(side, s[`tab${side}`]);
     if (s[`job${side}`]) $(`job${side}`).value = s[`job${side}`];
   }
@@ -316,8 +512,10 @@ function hydrateFromState(s) {
   if (s.startSide && SIDES.includes(s.startSide)) $("startSide").value = s.startSide;
   if (s.workMode && WORK_MODE_INFO[s.workMode]) $("workMode").value = s.workMode;
   updateWorkModeUI();
-  if (Number.isInteger(Number(s.maxTurns))) $("maxTurns").value = String(s.maxTurns);
+  if (Number.isInteger(Number(s.maxCycles ?? s.maxTurns))) $("maxCycles").value = String(s.maxCycles ?? s.maxTurns);
   if (Number.isFinite(Number(s.delayMs))) $("delayMs").value = String(s.delayMs);
+  if (Number.isInteger(Number(s.checkpointEveryNCycles))) $("checkpointEveryNCycles").value = String(s.checkpointEveryNCycles);
+  if (Number.isInteger(Number(s.stuckTimeoutMinutes))) $("stuckTimeoutMinutes").value = String(s.stuckTimeoutMinutes);
   selectedSourceFiles = Array.isArray(s.sourceFiles) ? s.sourceFiles.map(file => ({ ...file })) : [];
   renderSourceFiles();
   renderHistory(s.history);
@@ -416,7 +614,8 @@ function attachmentChips(entry) {
 }
 
 function limitLabel(s) {
-  return Number(s?.maxTurns) === -1 ? "∞" : String(s?.maxTurns ?? "?");
+  const max = Number(s?.maxCycles ?? s?.maxTurns);
+  return max === -1 ? "∞" : String(Number.isInteger(max) ? max : "?");
 }
 
 function currentLabel(s) {
@@ -440,29 +639,31 @@ function updateRoundTimers(s = latestState) {
   for (const side of SIDES) {
     const totalNode = $(`timerTotal${side}`);
     const currentNode = $(`timerCurrent${side}`);
-    if (!totalNode || !currentNode) continue;
     const startedAt = Number(s?.roundStartedAtBySide?.[side]);
     const roundNumber = Math.max(0, Number(s?.roundNumberBySide?.[side]) || 0);
     const lastDuration = Number(s?.lastRoundDurationMsBySide?.[side]);
-    const storedTotal = Math.max(0, Number(s?.totalWorkMsBySide?.[side]) || 0);
+    const totalMs = Math.max(0, Number(s?.totalWorkMsBySide?.[side]) || 0);
     const active = Boolean(s?.sessionActive && Number.isFinite(startedAt) && startedAt > 0);
     const liveMs = active ? Math.max(0, now - startedAt) : 0;
-
-    totalNode.textContent = `Total ${formatRoundDuration(storedTotal + liveMs, active)}`;
-    totalNode.classList.toggle("active", active);
-    totalNode.classList.toggle("idle", !active);
-
-    currentNode.classList.toggle("active", active);
-    currentNode.classList.toggle("idle", !active);
-    if (active) {
-      currentNode.textContent = `Current R${roundNumber} · ${formatRoundDuration(liveMs, true)}`;
-      currentNode.title = `Round ${roundNumber} active · extension timer started when the prompt was submitted`;
-    } else if (roundNumber > 0 && Number.isFinite(lastDuration) && lastDuration >= 0) {
-      currentNode.textContent = `Last R${roundNumber} · ${formatRoundDuration(lastDuration)}`;
-      currentNode.title = `Last completed round ${roundNumber} · extension-measured prompt-to-final-response time`;
-    } else {
-      currentNode.textContent = "Current —";
-      currentNode.title = "No extension-measured round has completed yet";
+    if (totalNode) {
+      totalNode.classList.toggle("active", false);
+      totalNode.classList.toggle("idle", true);
+      totalNode.textContent = `Total ${formatRoundDuration(totalMs + liveMs, active)}`;
+      totalNode.title = "Cumulative prompt-accepted to final-response time for this LLM in the current session. Aborted or stuck attempts still count.";
+    }
+    if (currentNode) {
+      currentNode.classList.toggle("active", active);
+      currentNode.classList.toggle("idle", !active);
+      if (active) {
+        currentNode.textContent = `Current ${formatRoundDuration(liveMs, true)}`;
+        currentNode.title = `Round ${roundNumber} active · started when the prompt was accepted`;
+      } else if (roundNumber > 0 && Number.isFinite(lastDuration) && lastDuration >= 0) {
+        currentNode.textContent = `Last ${formatRoundDuration(lastDuration)}`;
+        currentNode.title = `Last completed round ${roundNumber} · extension-measured prompt-to-final-response time`;
+      } else {
+        currentNode.textContent = "Current —";
+        currentNode.title = "No current turn is running";
+      }
     }
   }
 }
@@ -483,6 +684,19 @@ function updateSessionPill(s) {
     pill.classList.add("idle");
     pill.textContent = "Idle";
   }
+  updatePowerPill(s);
+}
+
+function updatePowerPill(s) {
+  const pill = $("powerPill");
+  if (!pill) return;
+  const awake = Boolean(s?.sessionActive && s?.running && !s?.awaitingHuman);
+  pill.hidden = !awake;
+  pill.classList.toggle("active", awake);
+  pill.textContent = awake ? "Keep-awake on" : "Keep-awake";
+  pill.title = awake
+    ? "System keep-awake is active while this run is live. Pause, Stop, or HUMAN_INPUT releases it. The display may still dim."
+    : "System keep-awake is released.";
 }
 
 function renderSuppressedRequests(s = latestState) {
@@ -569,7 +783,7 @@ function clearTranscript() {
 
 function transcriptCard(entry) {
   const card = document.createElement("article");
-  const sideClass = entry.type === "human" ? "human" : (entry.type === "provider-event" ? "provider-event" : String(entry.side || "").toLowerCase());
+  const sideClass = entry.type === "human" ? "human" : String(entry.side || "").toLowerCase();
   card.className = `transcript-card side-${sideClass}`;
   card.dataset.seq = String(entry.seq);
 
@@ -578,12 +792,20 @@ function transcriptCard(entry) {
 
   const title = document.createElement("div");
   title.className = "transcript-title";
+  const titleText = document.createElement("span");
   if (entry.type === "human") {
-    title.textContent = entry.interjection ? "Human controller · interjection" : "Human controller";
-  } else if (entry.type === "provider-event") {
-    title.textContent = `Provider event · AI ${entry.side || "?"} · ${String(entry.provider || "provider").toUpperCase()}`;
+    titleText.textContent = entry.interjection ? "Human controller · interjection" : "Human controller";
+  } else if (entry.type === "checkpoint") {
+    titleText.textContent = `Recovery checkpoint · AI ${entry.side || "?"} · ${entry.label || "AI"}`;
   } else {
-    title.textContent = `AI ${entry.side || "?"} · ${entry.label || "AI"}`;
+    titleText.textContent = `AI ${entry.side || "?"} · ${entry.label || "AI"}`;
+  }
+  title.append(titleText);
+  if (entry.type === "response") {
+    const evidence = document.createElement("span");
+    evidence.className = "peer-data-pill";
+    evidence.textContent = "Peer Output — Data Only";
+    title.append(evidence);
   }
 
   const meta = document.createElement("div");
@@ -592,8 +814,7 @@ function transcriptCard(entry) {
   const phase = entry.workPhase && !["relay", "collaborate"].includes(entry.workPhase) ? ` · ${String(entry.workPhase).toUpperCase()}` : "";
   const elapsed = Number.isFinite(Number(entry.roundDurationMs)) ? ` · ${formatRoundDuration(Number(entry.roundDurationMs))}` : "";
   const round = Number.isFinite(Number(entry.roundNumber)) && Number(entry.roundNumber) > 0 ? ` · R${Number(entry.roundNumber)}` : "";
-  const providerCode = entry.type === "provider-event" && entry.eventCode ? ` · ${entry.eventCode}` : "";
-  meta.textContent = `#${entry.seq}${providerCode}${phase}${round}${elapsed}${when ? ` · ${when}` : ""}`;
+  meta.textContent = `#${entry.seq}${phase}${round}${elapsed}${when ? ` · ${when}` : ""}`;
 
   const body = document.createElement("div");
   body.className = "transcript-body";
@@ -625,7 +846,7 @@ function renderTranscript(s) {
     clearTranscript();
   }
 
-  const fresh = entries.filter(e => Number(e.seq) > renderedSeq && (e.type === "response" || e.type === "human" || e.type === "provider-event"));
+  const fresh = entries.filter(e => Number(e.seq) > renderedSeq && (e.type === "response" || e.type === "human" || e.type === "checkpoint"));
   if (!fresh.length) return;
 
   $("emptyTranscript").classList.add("hidden");
@@ -777,141 +998,63 @@ function updateControls(s) {
   $("pause").disabled = !s.sessionActive || !s.running || s.awaitingHuman;
   $("resume").disabled = !s.sessionActive || s.running || s.awaitingHuman;
   $("stop").disabled = !s.sessionActive;
-  const manualFreshAllowed = !s.sessionActive;
-  const bindingStatus = activeBindingStatus();
-  const activeTabsValid = bindingStatus.valid;
-  const stoppedRecoveryAvailable = !s.sessionActive && (Boolean(String(s.initialPrompt || "").trim()) || Number(s.transcriptCount || 0) > 0);
-  if ($("readResponseStartSide")) $("readResponseStartSide").disabled = Boolean(s.sessionActive);
-  if ($("readResponseStart")) $("readResponseStart").disabled = !stoppedRecoveryAvailable || !activeTabsValid;
-  $("newAllChats").disabled = !manualFreshAllowed || !activeTabsValid;
-  $("freshOnStart").disabled = !manualFreshAllowed || !activeTabsValid;
-  $("agentCount").disabled = Boolean(s.sessionActive);
+  $("newAllChats").disabled = Boolean(s.sessionActive);
+  $("freshOnStart").disabled = Boolean(s.sessionActive);
   $("workMode").disabled = Boolean(s.sessionActive);
-  $("teamRules").disabled = false;
-  $("applyTeamRules").disabled = false;
-  $("forceRelayBtn").disabled = !s.sessionActive || s.awaitingHuman || selectedManualRelayTargets().length === 0;
+  if ($("teamRules")) $("teamRules").disabled = false;
+  if ($("applyTeamRules")) $("applyTeamRules").disabled = false;
+  if ($("cloudPull")) $("cloudPull").disabled = Boolean(s.sessionActive);
+  if ($("cloudPush")) $("cloudPush").disabled = false;
+  if ($("cloudConnect")) $("cloudConnect").disabled = false;
+  if ($("cloudUnlink")) $("cloudUnlink").disabled = false;
   $("sendInterject").disabled = !s.sessionActive || s.awaitingHuman;
   $("interjectText").disabled = !s.sessionActive || s.awaitingHuman;
   $("interjectNow").disabled = !s.sessionActive || s.awaitingHuman;
   updateWorkModeUI();
 
   for (const side of SIDES) {
-    const manualTabReady = manualFreshTabReady(side, bindingStatus);
-    $(`newChat${side}`).disabled = !manualFreshAllowed || !manualTabReady;
+    $(`newChat${side}`).disabled = Boolean(s.sessionActive) || !selectedTab(side);
     const batchDone = ["compete", "parallel", "review"].includes(s.workMode) && Array.isArray(s.phaseCompletedSides) && s.phaseCompletedSides.includes(side);
     $(`resend${side}`).disabled = !s.sessionActive || !s.running || s.awaitingHuman || !s.lastSentBySide?.[side] || batchDone;
+    $(`useLast${side}`).disabled = !s.sessionActive || !selectedTab(side);
   }
+  const forceReady = Boolean(s.sessionActive) && SIDES.some(side => selectedTab(side));
+  if ($("forceRelayBtn")) $("forceRelayBtn").disabled = !forceReady;
+  SIDES.forEach(side => {
+    if ($(`forceFrom${side}`)) $(`forceFrom${side}`).disabled = !s.sessionActive;
+    if ($(`forceTo${side}`)) $(`forceTo${side}`).disabled = !s.sessionActive;
+  });
   $("jobHistory").querySelectorAll(".history-use").forEach(button => { button.disabled = Boolean(s.sessionActive); });
   $("commandHistory").querySelectorAll(".history-use").forEach(button => { button.disabled = Boolean(s.sessionActive); });
-}
-
-function runtimePhaseLabel(raw) {
-  return ({
-    IDLE: "Idle",
-    DISPATCHING: "Dispatching provider action",
-    AWAITING_PROVIDER_RESPONSE: "Awaiting provider response",
-    NEXT_TURN_PENDING: "Next relay turn pending",
-    RECOVERING_NEXT_TURN: "Recovering next relay turn",
-    PROVIDER_RECOVERY_REQUIRED: "Provider recovery required",
-    PROVIDER_RESPONSE_RECOVERED: "Provider response recovered",
-    READ_RESPONSE_TO_START: "Reading stopped-session response",
-    RECOVERY_START_PROCESSING: "Restarting from recovered response",
-    RECOVERY_START_CAUGHT_UP: "Caught up to latest completed AI response",
-    RECOVERY_START_REPLAYING_FAILED_HANDOFF: "Replaying previously failed recovery handoff",
-    THREAD_ROLLOVER_CONTINUITY_DISPATCHING: "Sending continuation context",
-    THREAD_ROLLOVER_AWAITING_CONTINUITY_RESPONSE: "Awaiting continuation response",
-    PAUSED: "Paused"
-  })[String(raw || "IDLE")] || String(raw || "Unknown").replaceAll("_", " ");
-}
-
-function rolloverStatusText(s) {
-  const rollover = s?.threadRollover;
-  if (!rollover?.active) return "";
-  const from = String(rollover.previousTitle || "").trim();
-  const to = String(rollover.nextTitle || "").trim();
-  const titleLine = from && to
-    ? from + " → " + to
-    : (to || from || ("AI " + (rollover.side || "?") + " continuation"));
-  const phase = String(rollover.phase || "");
-  const detail = ({
-    LIMIT_DETECTED: "Conversation limit reached. Preparing a seamless continuation…",
-    FINAL_RESPONSE_COMMITTED: "Final response saved.",
-    CONTINUITY_PREPARED: "Continuity context prepared.",
-    OLD_AUTHORITY_REVOKED: "Previous conversation safely finalized.",
-    OPENING_NEW_CHAT: "Opening continuation chat…",
-    AWAITING_NEW_IDENTITY: "Verifying the new conversation…",
-    NEW_IDENTITY_VERIFIED: "New conversation verified.",
-    CONTINUITY_PENDING: "Restoring context…",
-    CONTINUITY_SENT: "Continuation context sent.",
-    AWAITING_CONTINUITY_RESPONSE: "Context restored. Waiting for the AI to continue…"
-  })[phase] || ("Continuing rollover: " + phase.replaceAll("_", " "));
-  return "Continuing conversation…\n" + titleLine + "\n" + detail;
+  $("rulesHistory")?.querySelectorAll(".history-use").forEach(button => { button.disabled = false; });
 }
 
 function updateStatus(s) {
   const limit = limitLabel(s);
-  $("turnCounter").textContent = `${s.turn || 0} / ${limit}`;
+  const cycles = Number(s?.cycleCount) || 0;
+  $("turnCounter").textContent = `Cycle ${cycles} / ${limit}`;
   updateSessionPill(s);
-  const phase = runtimePhaseLabel(s.runtimePhase);
 
   if (s.sessionActive && s.awaitingHuman && s.pendingHuman) {
-    $("status").textContent = `PAUSED — HUMAN INPUT NEEDED\nRuntime: ${phase}\nWaiting on controller for ${s.pendingHuman.requestingLabel || `AI ${s.pendingHuman.requestingSide}`}.`;
-  } else if (s.sessionActive && s.threadRollover?.active) {
-    $("status").textContent = rolloverStatusText(s) + `\nRuntime: ${phase}\nAI turns: ${s.turn || 0}/${limit}`;
-  } else if (s.sessionActive && s.providerRecovery) {
-    const event = s.providerRecovery;
-    $("status").textContent = `PAUSED — provider action needed
-Runtime: ${phase}
-AI ${event.side || "?"} / ${event.provider || "provider"}: ${event.message || event.code || "Provider error"}
-AI Bridge did not resend the prompt automatically because that could duplicate work. Resolve/retry in the provider tab; the same dispatch remains correlated.`;
-  } else if (s.sessionActive && ["NEXT_TURN_PENDING","RECOVERING_NEXT_TURN"].includes(s.runtimePhase)) {
-    $("status").textContent = `Running — recovering next relay turn\nRuntime: ${phase}\nAI turns: ${s.turn}/${limit}`;
+    $("status").textContent = `PAUSED — HUMAN INPUT NEEDED\nWaiting on controller for ${s.pendingHuman.requestingLabel || `AI ${s.pendingHuman.requestingSide}`}.`;
+  } else if (s.sessionActive && s.checkpointPending) {
+    $("status").textContent = `Running — recovery checkpoint\nMain AI is writing a local restart summary after cycle ${cycles}.\nTeam cycles: ${cycles}/${limit}`;
   } else if (s.sessionActive && s.running) {
     const batch = ["compete", "parallel", "review"].includes(s.workMode);
     if (batch) {
       const pending = Array.isArray(s.phasePendingSides) && s.phasePendingSides.length ? s.phasePendingSides.map(side => `AI ${side}`).join(", ") : "phase transition";
-      $("status").textContent = `Running — ${WORK_MODE_INFO[s.workMode]?.label || s.workMode} / ${String(s.workPhase || "primary").toUpperCase()}\nRuntime: ${phase}\nWaiting on: ${pending}\nAI turns: ${s.turn}/${limit}`;
+      $("status").textContent = `Running — ${WORK_MODE_INFO[s.workMode]?.label || s.workMode} / ${String(s.workPhase || "primary").toUpperCase()}\nWaiting on: ${pending}\nTeam cycles: ${cycles}/${limit}`;
     } else {
-      $("status").textContent = `Running — ${WORK_MODE_INFO[s.workMode]?.label || "Relay"}\nRuntime: ${phase}\nWaiting on: ${currentLabel(s)}\nAI turns: ${s.turn}/${limit}`;
+      $("status").textContent = `Running — ${WORK_MODE_INFO[s.workMode]?.label || "Relay"}\nWaiting on: ${currentLabel(s)}\nTeam cycles: ${cycles}/${limit}`;
     }
   } else if (s.sessionActive && s.paused) {
     const batch = ["compete", "parallel", "review"].includes(s.workMode);
     const next = batch ? ((s.phasePendingSides || []).map(side => `AI ${side}`).join(", ") || "phase transition") : currentLabel(s);
     const suppressed = Array.isArray(s.suppressedHumanRequests) ? s.suppressedHumanRequests.length : 0;
-    $("status").textContent = `PAUSED — ${s.pauseReason || "Session saved."}\nRuntime: ${phase}\nNext/current: ${next}\nAI turns: ${s.turn}/${limit}${suppressed ? `\nSuppressed human requests: ${suppressed}` : ""}`;
+    $("status").textContent = `PAUSED — ${s.pauseReason || "Session saved."}\nNext/current: ${next}\nTeam cycles: ${cycles}/${limit}${suppressed ? `\nSuppressed human requests: ${suppressed}` : ""}`;
   } else {
     const last = s.log?.length ? s.log[s.log.length - 1]?.text : "";
-    $("status").textContent = `Idle · Runtime: ${phase}${last ? ` — ${last}` : ""}`;
-  }
-}
-
-async function refreshProviderHealth() {
-  for (const side of ALL_SIDES) {
-    const node = $(`health${side}`);
-    if (!node) continue;
-    if (!SIDES.includes(side)) {
-      node.textContent = "Connection: — · Authority: — · Relay: — · Rollover: Limited · Artifacts: Limited";
-      continue;
-    }
-    const tabId = selectedTab(side) || Number(latestState?.[`tab${side}`]);
-    if (!Number.isInteger(Number(tabId)) || Number(tabId) <= 0) {
-      node.textContent = "Connection: Disconnected · Authority: Not verified · Relay: WAITING · Rollover: LIMITED · Artifacts: LIMITED";
-      continue;
-    }
-    try {
-      const res = await chrome.runtime.sendMessage({ type:"AI_BRIDGE_PROVIDER_HEALTH", tabId:Number(tabId) });
-      if (!res?.ok) throw new Error(res?.error || "health unavailable");
-      const connection = res.connectionStatus === "CONNECTED" ? "Connected" : "Disconnected";
-      const authority = res.actionAuthorityStatus === "DOCUMENT_AUTHORITY_VERIFIED" ? "Verified"
-        : (res.actionAuthorityStatus === "LISTENER_CONNECTED" ? "Registering" : "Not verified");
-      const relay = String(res.capabilities?.relay || "WAITING").toUpperCase();
-      const rollover = String(res.capabilities?.rollover || "LIMITED").toUpperCase();
-      const artifacts = String(res.capabilities?.artifacts || "LIMITED").toUpperCase();
-      const event = res.operationalEvent;
-      node.textContent = `Connection: ${connection} · Authority: ${authority} · Relay: ${relay} · Rollover: ${rollover} · Artifacts: ${artifacts}${event?.message ? ` · Provider event: ${event.code || "ERROR"} — ${event.message}` : ""}`;
-    } catch (_) {
-      node.textContent = "Connection: Disconnected · Authority: Not verified · Relay: WAITING · Rollover: LIMITED · Artifacts: LIMITED";
-    }
+    $("status").textContent = `Idle${last ? ` — ${last}` : ""}`;
   }
 }
 
@@ -932,7 +1075,6 @@ async function refreshState() {
     updateRoundTimers(s);
     updateStatus(s);
     updateControls(s);
-    await refreshProviderHealth();
     setHumanModal(s);
     renderTranscript(s);
   } catch (err) {
@@ -951,88 +1093,46 @@ function selectedBindings() {
   return data;
 }
 
-function activeBindingStatus() {
-  const bindings = SIDES.map(side => ({ side, tabId: selectedTab(side) }));
-  const missingSides = bindings
-    .filter(({ tabId }) => !Number.isInteger(tabId) || tabId <= 0 || !tabsById.has(tabId))
-    .map(({ side }) => side);
-
-  const ownersByTab = new Map();
-  for (const { side, tabId } of bindings) {
-    if (!Number.isInteger(tabId) || tabId <= 0 || !tabsById.has(tabId)) continue;
-    const owners = ownersByTab.get(tabId) || [];
-    owners.push(side);
-    ownersByTab.set(tabId, owners);
-  }
-
-  const duplicateTabs = new Set(
-    [...ownersByTab.entries()]
-      .filter(([, owners]) => owners.length > 1)
-      .map(([tabId]) => tabId)
-  );
-  const duplicateSides = new Set(
-    bindings
-      .filter(({ tabId }) => duplicateTabs.has(tabId))
-      .map(({ side }) => side)
-  );
-
-  return Object.freeze({
-    valid: missingSides.length === 0 && duplicateTabs.size === 0,
-    missingSides: Object.freeze(missingSides),
-    duplicateTabs,
-    duplicateSides
-  });
-}
-
-function manualFreshTabReady(side, status = activeBindingStatus()) {
-  return SIDES.includes(side) &&
-    !status.missingSides.includes(side) &&
-    !status.duplicateSides.has(side);
-}
-
-function validateActiveTabs(status = activeBindingStatus()) {
-  if (status.missingSides.length) return `Choose ${SIDES.length} supported AI tab${SIDES.length === 1 ? "" : "s"}.`;
-  if (status.duplicateTabs.size) return "Each logical AI must use a different browser tab. Multiple tabs from the same LLM are allowed.";
+function validateThreeTabs() {
+  const ids = SIDES.map(selectedTab);
+  if (ids.some(id => !id)) return "Choose three supported AI tabs.";
+  if (new Set(ids).size !== 3) return "AI A, AI B, and AI C must be three different tabs.";
   return null;
 }
 
-let manualRelaySource = "A";
-
-function updateManualRelayUI() {
-  if (!SIDES.includes(manualRelaySource)) manualRelaySource = SIDES[0];
-  for (const side of ALL_SIDES) {
-    const active = SIDES.includes(side);
-    const from = $(`forceFrom${side}`);
-    const to = $(`forceTo${side}`);
-    if (from) {
-      from.hidden = !active;
-      from.disabled = !active;
-      from.classList.toggle("active", active && side === manualRelaySource);
-      from.setAttribute("aria-pressed", String(active && side === manualRelaySource));
-    }
-    if (to) {
-      to.closest("label").hidden = !active;
-      to.disabled = !active || side === manualRelaySource;
-      if (!active || side === manualRelaySource) to.checked = false;
-    }
-  }
-}
-
-function selectedManualRelayTargets() {
-  return SIDES.filter(side => side !== manualRelaySource && $(`forceTo${side}`)?.checked);
-}
-
-function validateMaxTurns() {
-  const input = $("maxTurns");
+function validateMaxCycles() {
+  const input = $("maxCycles");
   input.classList.remove("validation-error");
   const raw = input.value.trim();
   const value = Number(raw);
-  const mode = selectedWorkMode();
-  const minTurns = minimumTurnsForMode(mode);
-  const valid = raw !== "" && Number.isInteger(value) && (value === -1 || (value >= minTurns && value <= 10000));
+  const valid = raw !== "" && Number.isInteger(value) && (value === -1 || (value >= 1 && value <= 10000));
   if (!valid) {
     input.classList.add("validation-error");
-    return `${WORK_MODE_INFO[mode]?.label || "This"} mode requires -1 (infinite) or an integer from ${minTurns} to 10000.`;
+    return "Max team cycles requires -1 (infinite) or an integer from 1 to 10000.";
+  }
+  return null;
+}
+
+function validateCheckpointEvery() {
+  const input = $("checkpointEveryNCycles");
+  if (!input) return null;
+  input.classList.remove("validation-error");
+  const value = Number(input.value);
+  if (!Number.isInteger(value) || value < 1 || value > 50) {
+    input.classList.add("validation-error");
+    return "Recovery summary interval must be an integer from 1 to 50 cycles.";
+  }
+  return null;
+}
+
+function validateStuckTimeout() {
+  const input = $("stuckTimeoutMinutes");
+  if (!input) return null;
+  input.classList.remove("validation-error");
+  const value = Number(input.value);
+  if (!Number.isInteger(value) || value < 5 || value > 120) {
+    input.classList.add("validation-error");
+    return "Stuck timeout must be an integer from 5 to 120 minutes.";
   }
   return null;
 }
@@ -1043,61 +1143,71 @@ $("themeSelect").addEventListener("change", async event => {
   await chrome.storage.local.set({ [THEME_KEY]: theme });
 });
 
+if ($("layoutSelect")) {
+  $("layoutSelect").addEventListener("change", async event => {
+    await persistLayout(event.target.value);
+  });
+}
+if ($("layoutStudioBtn")) {
+  $("layoutStudioBtn").addEventListener("click", () => persistLayout("studio"));
+}
+if ($("layoutClassicBtn")) {
+  $("layoutClassicBtn").addEventListener("click", () => persistLayout("classic"));
+}
+if ($("toolsToggle")) {
+  $("toolsToggle").addEventListener("click", () => {
+    const shell = document.querySelector(".app-shell");
+    if (!shell) return;
+    const open = !shell.classList.contains("tools-open");
+    shell.classList.toggle("tools-open", open);
+    $("toolsToggle").setAttribute("aria-pressed", open ? "true" : "false");
+    $("toolsToggle").classList.toggle("active", open);
+  });
+}
+
 chrome.storage.onChanged.addListener((changes, area) => {
-  if (area === "local" && changes[THEME_KEY]) applyTheme(changes[THEME_KEY].newValue);
+  if (area !== "local") return;
+  if (changes[THEME_KEY]) applyTheme(changes[THEME_KEY].newValue);
+  if (changes[LAYOUT_KEY]) applyLayout(changes[LAYOUT_KEY].newValue || DEFAULT_LAYOUT);
+  if (Object.prototype.hasOwnProperty.call(changes, PANE_WIDTH_KEY)) {
+    applyPaneWidth(changes[PANE_WIDTH_KEY].newValue ?? DEFAULT_PANE_PCT);
+  }
+  if (Object.prototype.hasOwnProperty.call(changes, FRESH_KEY) && $("freshOnStart")) {
+    $("freshOnStart").checked = changes[FRESH_KEY].newValue !== false;
+  }
 });
 
-async function openFreshChats(rawSides) {
-  const requested = [...new Set((Array.isArray(rawSides) ? rawSides : [])
-    .map(side => String(side || "").toUpperCase()))]
-    .filter(side => SIDES.includes(side));
-  if (!requested.length) {
-    $("status").textContent = "Choose at least one active AI role to open in a fresh chat.";
-    return;
-  }
-  if (latestState?.sessionActive) {
-    $("status").textContent = "Stop the current Bridge session before opening fresh AI chats manually.";
+async function openFreshChats(sides) {
+  if (latestState?.sessionActive) return;
+  const chosen = Array.isArray(sides) ? sides : SIDES;
+  const tabError = validateThreeTabs();
+  if (chosen.length === 3 && tabError) {
+    $("status").textContent = tabError;
     return;
   }
 
-  const bindingStatus = activeBindingStatus();
-  const unavailable = requested.filter(side => !manualFreshTabReady(side, bindingStatus));
-  if (unavailable.length) {
-    const duplicated = unavailable.filter(side => bindingStatus.duplicateSides.has(side));
-    $("status").textContent = duplicated.length
-      ? "Each logical AI must use a different browser tab before opening a fresh chat."
-      : `Choose an open supported AI tab for ${unavailable.map(side => "AI " + side).join(", ")}.`;
-    return;
+  const oldLabels = new Map();
+  for (const side of chosen) {
+    const button = chosen.length === 1 ? $(`newChat${side}`) : null;
+    if (button) { oldLabels.set(button, button.textContent); button.textContent = "Opening…"; button.disabled = true; }
   }
-
-  const buttons = requested.map(side => $(`newChat${side}`)).filter(Boolean);
-  const bulkButton = $("newAllChats");
-  for (const button of buttons) button.disabled = true;
-  if (bulkButton) bulkButton.disabled = true;
-
-  const targetLabel = requested.length === 1
-    ? `AI ${requested[0]}`
-    : requested.map(side => `AI ${side}`).join(", ");
-  $("status").textContent = requested.length === 1
-    ? `Opening fresh chat for ${targetLabel}…`
-    : `Opening fresh chats for ${targetLabel}…`;
+  if (chosen.length === 3) { oldLabels.set($("newAllChats"), $("newAllChats").textContent); $("newAllChats").textContent = "Opening…"; $("newAllChats").disabled = true; }
 
   try {
-    const res = await chrome.runtime.sendMessage({
-      type: "AI_BRIDGE_NEW_CHATS",
-      sides: requested,
-      ...selectedBindings()
-    });
+    const payload = { type: "AI_BRIDGE_NEW_CHATS", sides: chosen };
+    for (const side of chosen) {
+      payload[`tab${side}`] = selectedTab(side);
+      if (!payload[`tab${side}`]) throw new Error(`Choose an open AI tab for AI ${side}.`);
+    }
+    const res = await chrome.runtime.sendMessage(payload);
     if (!res?.ok) throw new Error(res?.error || "Could not open fresh AI chat.");
+    $("status").textContent = `Fresh chat${chosen.length === 1 ? "" : "s"} opened for AI ${chosen.join(", AI ")}.`;
     await loadTabs({ preserve: true });
     await refreshState();
-    $("status").textContent = requested.length === 1
-      ? `Fresh chat verified for ${targetLabel}.`
-      : `Fresh chats verified for ${targetLabel}.`;
   } catch (err) {
-    $("status").textContent = `Fresh chat failed: ${err.message}`;
+    $("status").textContent = `New chat failed: ${err.message}`;
   } finally {
-    if (latestState) updateControls(latestState);
+    for (const [button, label] of oldLabels) button.textContent = label;
   }
 }
 
@@ -1112,58 +1222,79 @@ async function clearHistory(kind) {
 
 $("clearJobHistory").addEventListener("click", () => clearHistory("jobs"));
 $("clearCommandHistory").addEventListener("click", () => clearHistory("commands"));
+$("clearRulesHistory").addEventListener("click", () => clearHistory("rules"));
+$("applyTeamRules")?.addEventListener("click", async () => {
+  const button = $("applyTeamRules");
+  const old = button.textContent;
+  button.disabled = true;
+  button.textContent = "Applying…";
+  try {
+    const res = await chrome.runtime.sendMessage({
+      type: "AI_BRIDGE_SET_TEAM_RULES",
+      teamRules: $("teamRules").value
+    });
+    if (!res?.ok) throw new Error(res?.error || "Could not apply team rules");
+    $("status").textContent = res.live
+      ? "Team rules applied. Every later A/B/C turn will receive them, regardless of job."
+      : "Team rules saved. They will bind every member when you Start.";
+    await refreshState();
+  } catch (err) {
+    $("status").textContent = `Team rules failed: ${err.message}`;
+  } finally {
+    button.textContent = old;
+    button.disabled = false;
+  }
+});
 
-for (const side of ALL_SIDES) {
+for (const side of SIDES) {
   $(`tab${side}`).addEventListener("change", () => { refreshStartLabels(); if (latestState) updateControls(latestState); });
   $(`newChat${side}`).addEventListener("click", () => openFreshChats([side]));
 }
-$("newAllChats").addEventListener("click", () => openFreshChats([...SIDES]));
-$("agentCount").addEventListener("change", async event => {
-  if (latestState?.sessionActive) {
-    event.target.value = String(latestState.agentCount || SIDES.length);
-    return;
-  }
-  const requested = normalizeAgentCount(event.target.value);
-  if (tabsById.size && requested > tabsById.size) {
-    $("status").textContent = `Only ${tabsById.size} supported AI tab${tabsById.size === 1 ? "" : "s"} are open.`;
-    event.target.value = String(Math.min(SIDES.length, tabsById.size));
-    return;
-  }
-  setAgentCountUI(requested, { persist: true });
-  await loadTabs({ preserve: true });
-  if (latestState) updateControls(latestState);
-});
+$("newAllChats").addEventListener("click", () => openFreshChats(SIDES));
 $("workMode").addEventListener("change", () => {
   updateWorkModeUI();
-  $("maxTurns").classList.remove("validation-error");
+  $("maxCycles").classList.remove("validation-error");
 });
-$("maxTurns").addEventListener("input", () => $("maxTurns").classList.remove("validation-error"));
+$("maxCycles").addEventListener("input", () => $("maxCycles").classList.remove("validation-error"));
+$("checkpointEveryNCycles")?.addEventListener("input", () => $("checkpointEveryNCycles").classList.remove("validation-error"));
+$("stuckTimeoutMinutes")?.addEventListener("input", () => $("stuckTimeoutMinutes").classList.remove("validation-error"));
+if ($("freshOnStart")) {
+  $("freshOnStart").addEventListener("change", async () => {
+    await chrome.storage.local.set({ [FRESH_KEY]: $("freshOnStart").checked });
+  });
+}
 
 $("start").addEventListener("click", async () => {
-  const tabError = validateActiveTabs();
+  const tabError = validateThreeTabs();
   if (tabError) return $("status").textContent = tabError;
-  const turnError = validateMaxTurns();
+  const turnError = validateMaxCycles();
   if (turnError) return $("status").textContent = turnError;
+  const checkpointError = validateCheckpointEvery();
+  if (checkpointError) return $("status").textContent = checkpointError;
+  const stuckError = validateStuckTimeout();
+  if (stuckError) return $("status").textContent = stuckError;
 
   const initialPrompt = $("prompt").value.trim();
   if (!initialPrompt) return $("status").textContent = "Enter a primary objective or initial prompt.";
 
-  $("status").textContent = `Starting ${SIDES.length}-AI session…`;
+  $("status").textContent = "Starting three-AI session…";
   try {
-    const jobBindings = {};
-    for (const side of SIDES) jobBindings[`job${side}`] = $(`job${side}`).value.trim();
     const res = await chrome.runtime.sendMessage({
       type: "AI_BRIDGE_START",
       ...selectedBindings(),
-      ...jobBindings,
-      agentCount: SIDES.length,
       startSide: $("startSide").value,
       workMode: selectedWorkMode(),
+      jobA: $("jobA").value.trim(),
+      jobB: $("jobB").value.trim(),
+      jobC: $("jobC").value.trim(),
       teamRules: $("teamRules").value.trim(),
       initialPrompt,
       sourceFiles: selectedSourceFiles.map(file => ({ path: file.path, size: file.size, content: file.content })),
       freshChats: $("freshOnStart").checked,
-      maxTurns: Number($("maxTurns").value),
+      maxCycles: Number($("maxCycles").value),
+      maxTurns: Number($("maxCycles").value),
+      checkpointEveryNCycles: Number($("checkpointEveryNCycles").value),
+      stuckTimeoutMinutes: Number($("stuckTimeoutMinutes").value),
       delayMs: Number($("delayMs").value)
     });
     if (!res?.ok) throw new Error(res?.error || "Could not start");
@@ -1174,83 +1305,6 @@ $("start").addEventListener("click", async () => {
   }
 });
 
-$("readResponseStartSide").addEventListener("change", () => {
-  updateRecoveryStartLabel();
-});
-
-$("readResponseStart").addEventListener("click", async () => {
-  const tabError = validateActiveTabs();
-  if (tabError) return $("readResponseStartStatus").textContent = tabError;
-  const sourceSide = $("readResponseStartSide").value;
-  $("readResponseStartStatus").textContent = `Reading AI ${sourceSide}'s last completed response and restarting from that boundary…`;
-  $("readResponseStart").disabled = true;
-  try {
-    const res = await chrome.runtime.sendMessage({
-      type: "AI_BRIDGE_READ_RESPONSE_TO_START",
-      sourceSide,
-      agentCount: SIDES.length,
-      ...selectedBindings()
-    });
-    if (!res?.ok) throw new Error(res?.error || "Recovery start failed");
-    const routed = res.targetSide ? ` Next AI: ${res.targetSide}.` : "";
-    const effective = res.effectiveSourceSide && res.effectiveSourceSide !== sourceSide
-      ? ` Recovery caught up from AI ${sourceSide} to AI ${res.effectiveSourceSide} because downstream completed responses proved the earlier handoff(s) succeeded.`
-      : "";
-    const replayed = res.replayedCommitted ? " Only the unresolved downstream handoff was replayed; committed responses were not duplicated." : "";
-    $("readResponseStartStatus").textContent = `Recovered AI ${sourceSide}'s completed response.${effective}${replayed}${routed} Automatic Bridge operation has restarted.`;
-    await refreshState();
-  } catch (err) {
-    $("readResponseStartStatus").textContent = `Recovery start failed: ${err.message}`;
-    await refreshState();
-  }
-});
-
-$("applyTeamRules").addEventListener("click", async () => {
-  const rules = $("teamRules").value.trim();
-  if (rules.length > 12000) {
-    $("status").textContent = "Team rules are limited to 12,000 characters.";
-    return;
-  }
-  try {
-    const res = await chrome.runtime.sendMessage({ type: "AI_BRIDGE_UPDATE_RULES", rules });
-    if (!res?.ok) throw new Error(res?.error || "Could not update team rules");
-    $("status").textContent = rules ? "Team rules applied to all active AI roles." : "Team rules cleared.";
-    await refreshState();
-  } catch (err) {
-    $("status").textContent = `Team rules update failed: ${err.message}`;
-  }
-});
-
-for (const side of ALL_SIDES) {
-  $(`forceFrom${side}`).addEventListener("click", () => {
-    if (!SIDES.includes(side)) return;
-    manualRelaySource = side;
-    updateManualRelayUI();
-    if (latestState) updateControls(latestState);
-  });
-  $(`forceTo${side}`).addEventListener("change", () => {
-    if (latestState) updateControls(latestState);
-  });
-}
-
-$("forceRelayBtn").addEventListener("click", async () => {
-  const targetSides = selectedManualRelayTargets();
-  if (!targetSides.length) return;
-  $("manualRelayStatus").textContent = `Recovering AI ${manualRelaySource}'s last completed reply and freezing automatic progression…`;
-  try {
-    const res = await chrome.runtime.sendMessage({
-      type: "AI_BRIDGE_MANUAL_RELAY",
-      sourceSide: manualRelaySource,
-      targetSides
-    });
-    if (!res?.ok) throw new Error(res?.error || "Manual relay failed");
-    $("manualRelayStatus").textContent = `Recovered AI ${manualRelaySource} and sent it to ${res.targetSides.map(side => "AI " + side).join(", ")}.`;
-    await refreshState();
-  } catch (err) {
-    $("manualRelayStatus").textContent = `Manual relay failed: ${err.message}`;
-  }
-});
-
 $("pause").addEventListener("click", async () => {
   const res = await chrome.runtime.sendMessage({ type: "AI_BRIDGE_PAUSE" });
   if (!res?.ok) $("status").textContent = `Pause failed: ${res?.error || "Unknown error"}`;
@@ -1258,8 +1312,8 @@ $("pause").addEventListener("click", async () => {
 });
 
 $("resume").addEventListener("click", async () => {
-  const tabError = validateActiveTabs();
-  if (tabError) return $("status").textContent = `${tabError}\nTo resume, bind every active AI role to an open supported tab.`;
+  const tabError = validateThreeTabs();
+  if (tabError) return $("status").textContent = `${tabError}\nTo resume, bind all three roles to open AI tabs.`;
 
   $("status").textContent = "Restoring saved session…";
   try {
@@ -1295,7 +1349,66 @@ async function resend(side) {
     await refreshState();
   }
 }
-for (const side of ALL_SIDES) $(`resend${side}`).addEventListener("click", () => resend(side));
+for (const side of SIDES) $(`resend${side}`).addEventListener("click", () => resend(side));
+
+function selectedForceSource() {
+  return SIDES.find(side => $(`forceFrom${side}`)?.classList.contains("active")) || "A";
+}
+
+function selectedForceTargets() {
+  return SIDES.filter(side => $(`forceTo${side}`)?.checked);
+}
+
+function setForceSource(side) {
+  const source = SIDES.includes(side) ? side : "A";
+  for (const item of SIDES) {
+    const button = $(`forceFrom${item}`);
+    if (!button) continue;
+    const active = item === source;
+    button.classList.toggle("active", active);
+    button.setAttribute("aria-pressed", active ? "true" : "false");
+  }
+  for (const item of SIDES) {
+    const box = $(`forceTo${item}`);
+    if (box) box.checked = item !== source;
+  }
+}
+
+for (const side of SIDES) {
+  $(`forceFrom${side}`)?.addEventListener("click", () => setForceSource(side));
+  $(`useLast${side}`)?.addEventListener("click", () => {
+    setForceSource(side);
+    $("forceRelayBtn")?.scrollIntoView({ behavior: "smooth", block: "center" });
+  });
+}
+
+$("forceRelayBtn")?.addEventListener("click", async () => {
+  const button = $("forceRelayBtn");
+  const source = selectedForceSource();
+  const targets = selectedForceTargets();
+  if (!targets.length) {
+    $("status").textContent = "Choose at least one destination AI.";
+    return;
+  }
+  button.disabled = true;
+  const old = button.textContent;
+  button.textContent = "Reading…";
+  try {
+    const res = await chrome.runtime.sendMessage({ type: "AI_BRIDGE_FORCE_RELAY", source, targets });
+    if (!res?.ok) throw new Error(res?.error || "Manual relay failed");
+    const sent = (res.targets || []).map(side => `AI ${side}`).join(", ");
+    const failed = Array.isArray(res.failed) && res.failed.length
+      ? ` Failed: ${res.failed.map(item => `AI ${item.side}`).join(", ")}.`
+      : "";
+    const busy = res.generating ? " Source tab still looked busy; captured anyway." : "";
+    $("status").textContent = `Re-read AI ${res.source} and sent to ${sent}.${failed}${busy}`;
+  } catch (err) {
+    $("status").textContent = `Manual relay failed: ${err.message}`;
+  } finally {
+    button.textContent = old;
+    await refreshState();
+  }
+});
 
 $("sendHumanModal").addEventListener("click", async () => {
   const text = $("humanModalResponse").value.trim();
@@ -1447,8 +1560,302 @@ $("jumpLatest").addEventListener("click", () => {
   $("jumpLatest").classList.add("hidden");
 });
 
-Promise.all([loadTheme(), loadAgentCountPreference()])
-  .then(() => loadTabs({ preserve: false }))
-  .then(refreshState);
+async function loadFreshOnStart() {
+  const stored = await chrome.storage.local.get(FRESH_KEY);
+  if (Object.prototype.hasOwnProperty.call(stored, FRESH_KEY) && $("freshOnStart")) {
+    $("freshOnStart").checked = stored[FRESH_KEY] !== false;
+  }
+}
+
+function showCloudNotice(text, isError = false) {
+  const el = $("cloudNotice");
+  if (!el) return;
+  if (!text) {
+    el.classList.add("hidden");
+    el.textContent = "";
+    el.classList.remove("error");
+    return;
+  }
+  el.classList.remove("hidden");
+  el.classList.toggle("error", Boolean(isError));
+  el.textContent = text;
+}
+
+function collectCloudSettings() {
+  return {
+    theme: document.documentElement.dataset.theme || "blizzard",
+    layout: document.documentElement.dataset.layout || DEFAULT_LAYOUT,
+    paneWidth: currentPanePct(),
+    workMode: selectedWorkMode(),
+    startSide: $("startSide")?.value || "A",
+    maxTurns: Number($("maxCycles")?.value),
+    maxCycles: Number($("maxCycles")?.value),
+    checkpointEveryNCycles: Number($("checkpointEveryNCycles")?.value),
+    stuckTimeoutMinutes: Number($("stuckTimeoutMinutes")?.value),
+    delayMs: Number($("delayMs")?.value),
+    freshOnStart: Boolean($("freshOnStart")?.checked),
+    jobA: $("jobA")?.value || "",
+    jobB: $("jobB")?.value || "",
+    jobC: $("jobC")?.value || "",
+    teamRules: $("teamRules")?.value || "",
+    history: latestState?.history || { jobs: [], commands: [], rules: [] }
+  };
+}
+
+function applyCloudSettingsToForm(settings) {
+  if (!settings || typeof settings !== "object") return;
+  if (settings.theme) applyTheme(settings.theme);
+  if (settings.layout) applyLayout(settings.layout);
+  if (settings.paneWidth != null) applyPaneWidth(settings.paneWidth);
+  if ($("freshOnStart")) $("freshOnStart").checked = settings.freshOnStart !== false;
+  if ($("workMode") && WORK_MODE_INFO[settings.workMode]) $("workMode").value = settings.workMode;
+  if ($("startSide") && SIDES.includes(settings.startSide)) $("startSide").value = settings.startSide;
+  if (Number.isInteger(Number(settings.maxCycles ?? settings.maxTurns))) $("maxCycles").value = String(settings.maxCycles ?? settings.maxTurns);
+  if (Number.isFinite(Number(settings.delayMs))) $("delayMs").value = String(settings.delayMs);
+  if (Number.isInteger(Number(settings.checkpointEveryNCycles))) $("checkpointEveryNCycles").value = String(settings.checkpointEveryNCycles);
+  if (Number.isInteger(Number(settings.stuckTimeoutMinutes))) $("stuckTimeoutMinutes").value = String(settings.stuckTimeoutMinutes);
+  if (typeof settings.jobA === "string") $("jobA").value = settings.jobA;
+  if (typeof settings.jobB === "string") $("jobB").value = settings.jobB;
+  if (typeof settings.jobC === "string") $("jobC").value = settings.jobC;
+  if (typeof settings.teamRules === "string") $("teamRules").value = settings.teamRules;
+  if (settings.history) renderHistory(settings.history);
+  updateWorkModeUI();
+}
+
+async function refreshCloudStatus() {
+  const pill = $("cloudStatusPill");
+  try {
+    const res = await chrome.runtime.sendMessage({ type: "AI_BRIDGE_CLOUD_STATUS" });
+    if (!res?.ok) throw new Error(res?.error || "Cloud status unavailable");
+    let label = "Local only";
+    let state = "local";
+    if (res.googleLinked) {
+      label = "Google linked";
+      state = "google";
+    } else if (res.chromeSyncHasCopy) {
+      label = "Chrome Sync copy";
+      state = "sync";
+    } else if (res.chromeSyncAvailable) {
+      label = "Local · Sync optional";
+      state = "local";
+    }
+    if (pill) {
+      pill.textContent = label;
+      pill.dataset.state = state;
+    }
+    if ($("cloudUnlink")) $("cloudUnlink").disabled = !res.googleLinked;
+    if ($("cloudConnect")) {
+      $("cloudConnect").title = res.googleConfigured
+        ? "Opens Google sign-in for drive.appdata only. Login is optional."
+        : "Paste a Web-application OAuth client ID below first. Push/Pull still work through Chrome Sync.";
+    }
+    if ($("extensionIdValue")) $("extensionIdValue").textContent = res.extensionId || "unavailable";
+    if ($("redirectUriValue")) $("redirectUriValue").textContent = res.redirectUri || "unavailable";
+    if ($("googleClientId") && document.activeElement !== $("googleClientId")) {
+      $("googleClientId").value = res.googleClientId || "";
+    }
+    if ($("installedVersionPill")) {
+      $("installedVersionPill").textContent = res.installedVersion ? `v${res.installedVersion}` : "v?";
+    }
+    if ($("autoCheckUpdates")) $("autoCheckUpdates").checked = res.autoCheckUpdates === true;
+  } catch (err) {
+    if (pill) {
+      pill.textContent = "Sync unavailable";
+      pill.dataset.state = "local";
+    }
+    showCloudNotice(err.message, true);
+  }
+}
+
+async function runCloudAction(button, type, extra = {}) {
+  if (!button) return;
+  const old = button.textContent;
+  button.disabled = true;
+  button.textContent = "Working…";
+  showCloudNotice();
+  try {
+    const res = await chrome.runtime.sendMessage({ type, ...extra });
+    if (!res?.ok) throw new Error(res?.error || "Cloud action failed");
+    if (res.settings) applyCloudSettingsToForm(res.settings);
+    if (type === "AI_BRIDGE_CLOUD_PUSH") {
+      const via = res.via || "chrome-sync";
+      showCloudNotice(`Settings pushed (${via}, ${res.bytes || 0} bytes). Transcripts, Vault files, and tokens were not included.`);
+    } else if (type === "AI_BRIDGE_CLOUD_PULL") {
+      showCloudNotice(`Settings pulled from ${res.via || "cloud"} (newest valid copy). Transcripts and Vault files stayed local.`);
+      await refreshState();
+    } else if (type === "AI_BRIDGE_CLOUD_CONNECT") {
+      showCloudNotice(res.googleLinked
+        ? (res.via === "user-client-id"
+          ? "Google account linked. Drive appDataFolder + Chrome Sync. The access token stays in session storage only and is never synced."
+          : "Google account linked. Settings will use the private Drive appDataFolder plus Chrome Sync. Tokens stay in Chrome's identity cache.")
+        : "Google login is not configured yet.");
+    } else if (type === "AI_BRIDGE_CLOUD_UNLINK") {
+      showCloudNotice("Google account unlinked on this extension. Chrome Sync still works. Drive app data was not deleted.");
+    }
+    await refreshCloudStatus();
+  } catch (err) {
+    showCloudNotice(err.message, true);
+    $("status").textContent = err.message;
+  } finally {
+    button.textContent = old;
+    button.disabled = false;
+    if (latestState) updateControls(latestState);
+  }
+}
+
+if ($("cloudPush")) {
+  $("cloudPush").addEventListener("click", () => runCloudAction($("cloudPush"), "AI_BRIDGE_CLOUD_PUSH", { settings: collectCloudSettings() }));
+}
+if ($("cloudPull")) {
+  $("cloudPull").addEventListener("click", () => runCloudAction($("cloudPull"), "AI_BRIDGE_CLOUD_PULL"));
+}
+if ($("cloudConnect")) {
+  $("cloudConnect").addEventListener("click", () => runCloudAction($("cloudConnect"), "AI_BRIDGE_CLOUD_CONNECT"));
+}
+if ($("cloudUnlink")) {
+  $("cloudUnlink").addEventListener("click", () => runCloudAction($("cloudUnlink"), "AI_BRIDGE_CLOUD_UNLINK"));
+}
+
+async function copySettingsValue(value, label) {
+  const text = String(value || "").trim();
+  if (!text || text === "loading…" || text === "unavailable") {
+    showCloudNotice(`Nothing to copy for ${label} yet.`, true);
+    return;
+  }
+  try {
+    await navigator.clipboard.writeText(text);
+    showCloudNotice(`Copied ${label}.`);
+  } catch (_) {
+    showCloudNotice(`Could not copy ${label}. Select it manually.`, true);
+  }
+}
+
+function renderUpdateStatus(info, fallback) {
+  const el = $("updateStatus");
+  if (!el) return;
+  if (!info) {
+    el.textContent = fallback || "Not checked yet.";
+    return;
+  }
+  if (info.updateAvailable) {
+    el.textContent = `Update available: v${info.remoteVersion} (installed v${info.installedVersion}). Download the ZIP, extract over this folder, then Reload on chrome://extensions.`;
+  } else {
+    el.textContent = `Already on latest (v${info.installedVersion}). You can still download the GitHub ZIP to reinstall.`;
+  }
+}
+
+if ($("copyExtensionId")) {
+  $("copyExtensionId").addEventListener("click", () => copySettingsValue($("extensionIdValue")?.textContent, "extension ID"));
+}
+if ($("copyRedirectUri")) {
+  $("copyRedirectUri").addEventListener("click", () => copySettingsValue($("redirectUriValue")?.textContent, "redirect URI"));
+}
+if ($("saveGoogleClientId")) {
+  $("saveGoogleClientId").addEventListener("click", async () => {
+    const button = $("saveGoogleClientId");
+    const old = button.textContent;
+    button.disabled = true;
+    button.textContent = "Saving…";
+    showCloudNotice();
+    try {
+      const res = await chrome.runtime.sendMessage({
+        type: "AI_BRIDGE_SAVE_GOOGLE_CLIENT_ID",
+        clientId: $("googleClientId")?.value || ""
+      });
+      if (!res?.ok) throw new Error(res?.error || "Could not save client ID");
+      showCloudNotice(res.saved
+        ? "OAuth client ID saved on this machine. It is never synced. Click Link Google account next."
+        : "OAuth client ID cleared on this machine. Chrome Sync still works.");
+      await refreshCloudStatus();
+    } catch (err) {
+      showCloudNotice(err.message, true);
+    } finally {
+      button.textContent = old;
+      button.disabled = false;
+    }
+  });
+}
+if ($("checkUpdates")) {
+  $("checkUpdates").addEventListener("click", async () => {
+    const button = $("checkUpdates");
+    const old = button.textContent;
+    button.disabled = true;
+    button.textContent = "Checking…";
+    try {
+      const res = await chrome.runtime.sendMessage({ type: "AI_BRIDGE_CHECK_UPDATES" });
+      if (!res?.ok) throw new Error(res?.error || "Update check failed");
+      lastUpdateResult = res;
+      renderUpdateStatus(res);
+      if ($("downloadUpdate")) $("downloadUpdate").disabled = false;
+    } catch (err) {
+      lastUpdateResult = null;
+      renderUpdateStatus(null, err.message);
+      if ($("downloadUpdate")) $("downloadUpdate").disabled = true;
+    } finally {
+      button.textContent = old;
+      button.disabled = false;
+    }
+  });
+}
+if ($("downloadUpdate")) {
+  $("downloadUpdate").addEventListener("click", async () => {
+    const button = $("downloadUpdate");
+    const old = button.textContent;
+    button.disabled = true;
+    button.textContent = "Downloading…";
+    try {
+      const res = await chrome.runtime.sendMessage({ type: "AI_BRIDGE_DOWNLOAD_UPDATE" });
+      if (!res?.ok) throw new Error(res?.error || "Download failed");
+      lastUpdateResult = res;
+      renderUpdateStatus(res, null);
+      const el = $("updateStatus");
+      if (el) el.textContent = `Download started (${res.filename || "ZIP"}). Extract over this folder, then Reload on chrome://extensions.`;
+      if ($("downloadUpdate")) $("downloadUpdate").disabled = false;
+    } catch (err) {
+      renderUpdateStatus(lastUpdateResult, err.message);
+      const el = $("updateStatus");
+      if (el) el.textContent = err.message;
+      button.disabled = false;
+    } finally {
+      button.textContent = old;
+    }
+  });
+}
+if ($("autoCheckUpdates")) {
+  $("autoCheckUpdates").addEventListener("change", async event => {
+    const enabled = Boolean(event.target.checked);
+    try {
+      const res = await chrome.runtime.sendMessage({ type: "AI_BRIDGE_SET_AUTO_UPDATE", enabled });
+      if (!res?.ok) throw new Error(res?.error || "Could not save update preference");
+      showCloudNotice(enabled
+        ? "Daily GitHub check enabled. AI Bridge will notify if a newer manifest is on main — it will not auto-install."
+        : "Daily GitHub check disabled.");
+    } catch (err) {
+      event.target.checked = !enabled;
+      showCloudNotice(err.message, true);
+    }
+  });
+}
+
+if ($("viewSessionBtn")) {
+  $("viewSessionBtn").addEventListener("click", () => {
+    if (location.hash === "#settings") location.hash = "session";
+    else showDashboardView("session");
+  });
+}
+if ($("viewSettingsBtn")) {
+  $("viewSettingsBtn").addEventListener("click", () => {
+    if (location.hash !== "#settings") location.hash = "settings";
+    else showDashboardView("settings");
+  });
+}
+window.addEventListener("hashchange", () => showDashboardView(dashboardViewFromHash()));
+showDashboardView(dashboardViewFromHash());
+
+initPaneSplitter();
+Promise.all([loadTheme(), loadLayout(), loadPaneWidth(), loadFreshOnStart(), loadTabs({ preserve: false })]).then(async () => {
+  await refreshState();
+  await refreshCloudStatus();
+});
 setInterval(refreshState, 750);
 setInterval(() => updateRoundTimers(latestState), 100);
