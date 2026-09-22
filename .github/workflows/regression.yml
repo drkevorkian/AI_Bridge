@@ -45,6 +45,7 @@ jobs:
           node --check tests/ui-radius-policy.mjs
           node --check tests/dom-resilience.mjs
           node --check tests/provider-send-authority.mjs
+          node --check tests/provider-event-awareness.mjs
       - name: Repository integrity
         run: node tests/repository-integrity.mjs
       - name: Three-column relay hardening
@@ -55,3 +56,5 @@ jobs:
         run: node tests/dom-resilience.mjs
       - name: Provider send authority
         run: node tests/provider-send-authority.mjs
+      - name: Provider operational events
+        run: node tests/provider-event-awareness.mjs
