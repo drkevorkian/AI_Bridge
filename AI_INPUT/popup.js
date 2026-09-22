@@ -2,13 +2,6 @@ const $ = id => document.getElementById(id);
 const THEME_KEY = "aiBridgeTheme";
 const THEMES = new Set(["blizzard", "ghostwhite", "midnight", "slate", "light", "solarized", "ocean", "terminal"]);
 
-function renderBuildIdentity() {
-  const manifest = chrome.runtime.getManifest();
-  const build = manifest.version_name || manifest.version;
-  const el = $("buildIdentity");
-  if (el) el.textContent = `v${manifest.version} · ${build}`;
-}
-
 function applyTheme(theme) {
   const chosen = THEMES.has(theme) ? theme : "blizzard";
   document.documentElement.dataset.theme = chosen;
@@ -21,7 +14,31 @@ async function loadTheme() {
 }
 
 function limitLabel(s) {
-  return Number(s?.maxTurns) === -1 ? "∞" : String(s?.maxTurns ?? "?");
+  const max = Number(s?.maxCycles ?? s?.maxTurns);
+  return max === -1 ? "∞" : String(Number.isInteger(max) ? max : "?");
+}
+
+function formatDurationMs(ms) {
+  if (!Number.isFinite(Number(ms)) || Number(ms) < 0) return "";
+  const value = Number(ms);
+  if (value < 60000) return `${(value / 1000).toFixed(1)}s`;
+  const total = Math.round(value / 1000);
+  const minutes = Math.floor(total / 60);
+  const seconds = total % 60;
+  return minutes < 60 ? `${minutes}m ${seconds}s` : `${Math.floor(minutes / 60)}h ${minutes % 60}m`;
+}
+
+function liveRoundLine(s) {
+  const started = s?.roundStartedAtBySide || {};
+  const parts = [];
+  for (const side of ["A", "B", "C"]) {
+    const startedAt = Number(started[side]);
+    if (Number.isFinite(startedAt) && startedAt > 0) {
+      const round = Math.max(1, Number(s?.roundNumberBySide?.[side]) || 1);
+      parts.push(`AI ${side} R${round} ${formatDurationMs(Date.now() - startedAt)}`);
+    }
+  }
+  return parts.length ? `\nClock: ${parts.join(" · ")}` : "";
 }
 
 function updatePill(s) {
@@ -49,12 +66,13 @@ async function refresh() {
     if (!s) return;
     updatePill(s);
     const limit = limitLabel(s);
+    const cycles = Number(s?.cycleCount) || 0;
     if (s.sessionActive && s.awaitingHuman) {
-      $("status").textContent = `Human input needed\n${s.pendingHuman?.requestingLabel || `AI ${s.pendingHuman?.requestingSide || ""}`} is waiting.\nTurns: ${s.turn}/${limit}`;
+      $("status").textContent = `Human input needed\n${s.pendingHuman?.requestingLabel || `AI ${s.pendingHuman?.requestingSide || ""}`} is waiting.\nCycles: ${cycles}/${limit}`;
     } else if (s.sessionActive && s.running) {
-      $("status").textContent = `Running · turns ${s.turn}/${limit}\nCurrent: AI ${s.currentSide || "?"}`;
+      $("status").textContent = `Running · cycle ${cycles}/${limit}\nCurrent: AI ${s.currentSide || "?"}${liveRoundLine(s)}`;
     } else if (s.sessionActive) {
-      $("status").textContent = `Paused · turns ${s.turn}/${limit}\n${s.pauseReason || "Session saved."}`;
+      $("status").textContent = `Paused · cycle ${cycles}/${limit}\n${s.pauseReason || "Session saved."}`;
     } else {
       $("status").textContent = "Idle — open the dashboard to configure or start a session.";
     }
@@ -75,13 +93,14 @@ chrome.storage.onChanged.addListener((changes, area) => {
   if (area === "local" && changes[THEME_KEY]) applyTheme(changes[THEME_KEY].newValue);
 });
 
-$("openSettings").addEventListener("click", async () => {
-  await chrome.tabs.create({ url: chrome.runtime.getURL("settings.html") });
-});
-
 $("openDashboard").addEventListener("click", async () => {
   const res = await chrome.runtime.sendMessage({ type: "AI_BRIDGE_OPEN_DASHBOARD" });
   if (!res?.ok) $("status").textContent = `Could not open dashboard: ${res?.error || "Unknown error"}`;
+});
+
+$("openSettings").addEventListener("click", async () => {
+  const res = await chrome.runtime.sendMessage({ type: "AI_BRIDGE_OPEN_DASHBOARD", hash: "settings" });
+  if (!res?.ok) $("status").textContent = `Could not open settings: ${res?.error || "Unknown error"}`;
 });
 
 $("pause").addEventListener("click", async () => {
@@ -96,6 +115,5 @@ $("stop").addEventListener("click", async () => {
   await refresh();
 });
 
-renderBuildIdentity();
 loadTheme().then(refresh);
 setInterval(refresh, 900);
