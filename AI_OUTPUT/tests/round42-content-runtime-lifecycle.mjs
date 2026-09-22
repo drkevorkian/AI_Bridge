@@ -81,18 +81,11 @@ function harness(initialBuild,{legacy=false}={}){
   assert.equal(h.stats.intervalCreates,1);
 
   h.run();
-  assert.equal(h.context.__AI_BRIDGE_CONTENT_RUNTIME__,first,"same-build reinjection must no-op");
-  assert.equal(h.stats.listenerAdds,1,"same-build reinjection duplicated listener");
-  assert.equal(h.stats.observerCreates,1,"same-build reinjection duplicated observer");
-  assert.equal(h.stats.intervalCreates,1,"same-build reinjection duplicated interval");
-
-  h.setBuild("1.19.2.01-AI-A");
-  h.run();
   const second=h.context.__AI_BRIDGE_CONTENT_RUNTIME__;
-  assert.notEqual(second,first);
-  assert.equal(first.active,false,"old runtime was not disposed");
-  assert.equal(first.disposedReason,"superseded");
-  assert.equal(second.build,"1.19.2.01-AI-A");
+  assert.notEqual(second,first,"explicit same-build reinjection must replace a possibly invalidated resident runtime");
+  assert.equal(first.active,false,"same-build resident runtime was not disposed");
+  assert.equal(first.disposedReason,"same-build-reinjection");
+  assert.equal(second.build,"1.19.1.05-AI-A");
   assert.equal(second.active,true);
   assert.equal(h.stats.listenerRemoves,1);
   assert.equal(h.stats.observerDisconnects,1);
@@ -100,6 +93,21 @@ function harness(initialBuild,{legacy=false}={}){
   assert.equal(h.stats.listenerAdds,2);
   assert.equal(h.stats.observerCreates,2);
   assert.equal(h.stats.intervalCreates,2);
+
+  h.setBuild("1.19.2.01-AI-A");
+  h.run();
+  const third=h.context.__AI_BRIDGE_CONTENT_RUNTIME__;
+  assert.notEqual(third,second);
+  assert.equal(second.active,false,"older runtime was not disposed");
+  assert.equal(second.disposedReason,"superseded");
+  assert.equal(third.build,"1.19.2.01-AI-A");
+  assert.equal(third.active,true);
+  assert.equal(h.stats.listenerRemoves,2);
+  assert.equal(h.stats.observerDisconnects,2);
+  assert.equal(h.stats.intervalClears,2);
+  assert.equal(h.stats.listenerAdds,3);
+  assert.equal(h.stats.observerCreates,3);
+  assert.equal(h.stats.intervalCreates,3);
 }
 
 {
