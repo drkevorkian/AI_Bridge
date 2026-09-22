@@ -47,6 +47,7 @@ jobs:
           node --check tests/provider-send-authority.mjs
           node --check tests/provider-event-awareness.mjs
           node --check tests/startup-guard.mjs
+          node --check tests/fresh-chat-verification.mjs
       - name: Repository integrity
         run: node tests/repository-integrity.mjs
       - name: Three-column relay hardening
@@ -61,3 +62,5 @@ jobs:
         run: node tests/provider-event-awareness.mjs
       - name: Startup guard
         run: node tests/startup-guard.mjs
+      - name: Fresh chat verification
+        run: node tests/fresh-chat-verification.mjs
