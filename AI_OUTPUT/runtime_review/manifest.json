@@ -2,7 +2,7 @@
   "manifest_version": 3,
   "name": "AI Bridge Review",
   "version": "1.19.1",
-  "description": "AI Bridge review build 1.19.1.38-AI-A: fixes post-response handoff to verified fresh target chats during recovery and durable continuation without loosening normal relay authority.",
+  "description": "AI Bridge review build 1.19.1.39-AI-A: repairs response relay after extension reload by replacing invalidated same-build content runtimes and hardens worker boot dependencies.",
   "permissions": [
     "tabs",
     "storage",
@@ -69,5 +69,5 @@
   "content_security_policy": {
     "extension_pages": "script-src 'self'; object-src 'none'; base-uri 'none'; frame-ancestors 'none'"
   },
-  "version_name": "1.19.1.38-AI-A"
+  "version_name": "1.19.1.39-AI-A"
 }
