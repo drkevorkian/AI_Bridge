@@ -25,6 +25,7 @@
   let monitorInterval = null;
   let observer = null;
   let lastProviderEventSignature = "";
+  let lastThreadLimitSignature = "";
   const MAX_ARTIFACTS_PER_RESPONSE = 8;
   const MAX_ARTIFACT_FILE_BYTES = 12 * 1024 * 1024;
   const MAX_ARTIFACT_TOTAL_BYTES = 24 * 1024 * 1024;
@@ -811,6 +812,43 @@
     return [...found];
   }
 
+  function inspectThreadLimit(mutations = []) {
+    const classifier = globalThis.AIBridgeProviderLimitSignatures?.classifyThreadLimit;
+    if (typeof classifier !== "function" || !providerKey) return;
+
+    const regions = providerEventCandidates(mutations).map(node => ({
+      kind: "provider-notice",
+      visible: actionableSendControl(node),
+      text: node.innerText || node.textContent || ""
+    }));
+    if (!regions.length) return;
+
+    const composer = trustedComposer();
+    const result = classifier({
+      provider: providerKey,
+      regions,
+      composer: {
+        present: Boolean(composer),
+        disabled: Boolean(composer && (composer.disabled === true || composer.getAttribute?.("aria-disabled") === "true"))
+      }
+    });
+    if (!result?.automaticRollover || result.state !== "HARD_THREAD_LIMIT") return;
+
+    const evidenceText = regions.map(region => normalizeProviderNotice(region.text)).filter(Boolean).join(" | ").slice(0, 500);
+    const signature = [providerKey, result.state, evidenceText].join("::");
+    if (signature === lastThreadLimitSignature) return;
+    lastThreadLimitSignature = signature;
+
+    runtimeSendMessage({
+      type: "AI_BRIDGE_THREAD_LIMIT",
+      provider: providerKey,
+      state: result.state,
+      confidence: result.confidence || "",
+      text: evidenceText,
+      observedAt: Date.now()
+    }).catch(() => {});
+  }
+
   function inspectProviderEvents(mutations = []) {
     for (const node of providerEventCandidates(mutations)) {
       if (!actionableSendControl(node)) continue;
@@ -916,6 +954,7 @@
   }
 
   observer = new MutationObserver(mutations => {
+    inspectThreadLimit(mutations);
     inspectProviderEvents(mutations);
     runMonitor().catch(() => {});
   });
