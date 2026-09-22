@@ -35,6 +35,7 @@ jobs:
       - name: JavaScript syntax
         run: |
           node --check background.js
+          node --check dom-resilience.js
           node --check content.js
           node --check dashboard.js
           node --check dashboard-layouts.js
@@ -42,9 +43,12 @@ jobs:
           node --check popup.js
           node --check tests/repository-integrity.mjs
           node --check tests/ui-radius-policy.mjs
+          node --check tests/dom-resilience.mjs
       - name: Repository integrity
         run: node tests/repository-integrity.mjs
       - name: Three-column relay hardening
         run: node tests/v1.18.1-three-column-relay-hardening.mjs
       - name: UI radius policy
         run: node tests/ui-radius-policy.mjs
+      - name: DOM resilience contracts
+        run: node tests/dom-resilience.mjs

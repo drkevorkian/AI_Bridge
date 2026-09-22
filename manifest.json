@@ -57,6 +57,7 @@
         "https://copilot.microsoft.com/*"
       ],
       "js": [
+        "dom-resilience.js",
         "content.js"
       ],
       "run_at": "document_idle"

@@ -131,10 +131,21 @@ async function health(){
     const p=document.createElement("strong");p.textContent=provider;
     const title=document.createElement("span");title.textContent=tab.title||tab.url||("Tab "+tab.id);
     const state=document.createElement("span");state.className="health-state";
-    try{const res=await timeout(chrome.tabs.sendMessage(tab.id,{type:"AI_BRIDGE_PING"}),1800);if(res?.ok){state.textContent="Ready";state.classList.add("ok");ok++;}else throw new Error()}catch(_){state.textContent="No bridge";state.classList.add("bad")}
+    try{
+      const res=await timeout(chrome.tabs.sendMessage(tab.id,{type:"AI_BRIDGE_PING"}),1800);
+      if(!res?.ok)throw new Error();
+      const dom=res.domHealth||null;
+      const composer=dom?.composer?.state||"UNKNOWN";
+      const send=dom?.send?.state||"UNKNOWN";
+      const response=dom?.response?.state||"UNKNOWN";
+      const relayReady=composer==="PASS"&&(send==="PASS"||send==="DEGRADED");
+      title.title="Composer: "+composer+" · Send: "+send+" · Response: "+response;
+      if(relayReady){state.textContent="Relay ready";state.classList.add("ok");ok++;}
+      else{state.textContent=dom?"DOM check":"Connected";state.classList.add("bad");}
+    }catch(_){state.textContent="No bridge";state.classList.add("bad")}
     row.append(p,title,state);$("healthList").append(row);
   }
-  $("healthSummary").textContent=supported.length?ok+"/"+supported.length+" ready":"No supported AI tabs open";
+  $("healthSummary").textContent=supported.length?ok+"/"+supported.length+" relay-ready":"No supported AI tabs open";
 }
 async function checkUpdates(){
   $("updateStatus").textContent="Checking GitHub…";
