@@ -2632,12 +2632,25 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
         confidence: String(msg.confidence || ""),
         observedAt: Number.isFinite(Number(msg.observedAt)) ? Number(msg.observedAt) : Date.now()
       });
-      if (state.sessionActive) {
-        await pauseBridge(`AI ${side} reached a verified hard conversation-length limit. Automatic rollover is not enabled yet; the session is paused safely.`);
-      } else {
+      if (!state.sessionActive) {
         await saveState();
+        sendResponse({ ok: true, recorded: true, paused: false, rollover: false });
+        return;
       }
-      sendResponse({ ok: true, recorded: true, paused: Boolean(state.sessionActive && state.paused) });
+
+      const rollover = await performThreadRollover(side, {
+        provider: String(msg.provider || ""),
+        text,
+        confidence: String(msg.confidence || "")
+      });
+      sendResponse({
+        ok: Boolean(rollover?.ok),
+        recorded: true,
+        rollover: true,
+        rolloverId: rollover?.rolloverId || null,
+        phase: rollover?.phase || null,
+        error: rollover?.error || null
+      });
       return;
     }
 
@@ -2723,7 +2736,16 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
           errors: Array.isArray(diagnostics.errors) ? diagnostics.errors.slice(0, 8) : []
         });
       }
-      const task = () => handleCompletedResponse(side, text, { relay, artifacts: msg.artifacts, completedAt });
+      const task = async () => {
+        const result = await handleCompletedResponse(side, text, { relay, artifacts: msg.artifacts, completedAt });
+        const rollover = state.rolloverBySide?.[side];
+        if (rollover?.phase === "CONTINUITY_SENT") {
+          state.rolloverBySide[side] = null;
+          appendLog({ time: Date.now(), type: "thread-rollover-complete", side, text: `AI ${side} answered in the fresh conversation; rollover transaction cleared`, rolloverId: rollover.id });
+          await saveState();
+        }
+        return result;
+      };
       responseCommitQueue = responseCommitQueue.catch(() => {}).then(task);
       const result = await responseCommitQueue;
       sendResponse(result);
