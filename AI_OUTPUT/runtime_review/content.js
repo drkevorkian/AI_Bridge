@@ -4,47 +4,58 @@
   const manifest = chrome.runtime.getManifest();
   const CONTENT_BUILD = String(manifest.version_name || manifest.version || "unknown");
   const CONTENT_RUNTIME_SCHEMA = 1;
+
+  function bestEffortRuntimeMessage(message){
+    try{
+      const pending=chrome.runtime.sendMessage(message);
+      Promise.resolve(pending).catch(()=>{});
+    }catch(_){}
+  }
+
   const resident = globalThis.__AI_BRIDGE_CONTENT_RUNTIME__;
 
   if (resident) {
     if (
-      resident.schema === CONTENT_RUNTIME_SCHEMA &&
-      resident.build === CONTENT_BUILD &&
-      resident.active === true
-    ) return;
-
-    if (
       resident.schema !== CONTENT_RUNTIME_SCHEMA ||
       typeof resident.dispose !== "function"
     ) {
-      chrome.runtime.sendMessage({
+      bestEffortRuntimeMessage({
         type: "AI_BRIDGE_CONTENT_RUNTIME_INCOMPATIBLE",
         residentBuild: String(resident.build || "unknown"),
         requestedBuild: CONTENT_BUILD
-      }).catch(() => {});
+      });
       return;
     }
 
+    // Never trust the page-global active flag as proof that chrome.runtime is
+    // still alive. Reloading an unpacked extension invalidates the old content
+    // context while its JS globals can remain resident in the already-open tab.
+    // ensureTabListener() pings first, so reaching an executeScript reinjection
+    // means the resident runtime must be replaced even when build strings match.
     try {
-      resident.dispose("superseded");
+      resident.dispose(
+        resident.build === CONTENT_BUILD
+          ? "same-build-reinjection"
+          : "superseded"
+      );
     } catch (_) {
-      chrome.runtime.sendMessage({
+      bestEffortRuntimeMessage({
         type: "AI_BRIDGE_CONTENT_RUNTIME_INCOMPATIBLE",
         residentBuild: String(resident.build || "unknown"),
         requestedBuild: CONTENT_BUILD,
         reason: "DISPOSE_FAILED"
-      }).catch(() => {});
+      });
       return;
     }
   } else if (globalThis.__AI_BRIDGE_REVIEW_CONTENT__ === true) {
     // The legacy boolean-only runtime did not retain observer/timer/listener
     // handles, so it cannot be safely replaced without reloading the host page.
-    chrome.runtime.sendMessage({
+    bestEffortRuntimeMessage({
       type: "AI_BRIDGE_CONTENT_RUNTIME_INCOMPATIBLE",
       residentBuild: "legacy-boolean-runtime",
       requestedBuild: CONTENT_BUILD,
       reason: "LEGACY_RUNTIME_NOT_DISPOSABLE"
-    }).catch(() => {});
+    });
     return;
   }
 
@@ -112,6 +123,21 @@
   let responseDeliveryTimer = null;
   let responseDeliveryInFlight = false;
   let responseDeliveryAttempts = 0;
+
+  function extensionContextInvalidated(error){
+    return /extension context invalidated/i.test(String(error?.message||error||""));
+  }
+  async function runtimeSendMessage(message){
+    try{
+      return await chrome.runtime.sendMessage(message);
+    }catch(error){
+      if(extensionContextInvalidated(error)){
+        try{disposeContentRuntime("extension-context-invalidated");}catch(_){}
+        return null;
+      }
+      throw error;
+    }
+  }
 
   function trim(map){ while(map.size > MAX_CACHE) map.delete(map.keys().next().value); }
   function rememberCommand(command,result){ byCommand.set(command.commandId,result); trim(byCommand); return result; }
@@ -494,7 +520,7 @@
         providerEventSignatures.set(signature,Date.now());
         trim(providerEventSignatures);
         try{
-          await chrome.runtime.sendMessage({
+          await runtimeSendMessage({
             type:"AI_BRIDGE_PROVIDER_EVENT",
             provider,
             dispatchId:awaitingDispatchId,
@@ -548,7 +574,7 @@
     responseDeliveryInFlight=true;
     const pending=pendingResponseDelivery;
     let acknowledgement=null;
-    try{ acknowledgement=await chrome.runtime.sendMessage(pending.envelope); }
+    try{ acknowledgement=await runtimeSendMessage(pending.envelope); }
     catch(_){}
     finally{ responseDeliveryInFlight=false; }
     if(pendingResponseDelivery!==pending) return;
@@ -676,7 +702,7 @@
       if(!sameIdentity(liveIdentity,registration.identity)) return;
       const composer=resolveTrusted(config.composer);
       lastLimitSignature=limitSignatureKey;
-      chrome.runtime.sendMessage({
+      runtimeSendMessage({
         type:"AI_BRIDGE_THREAD_LIMIT",
         provider,
         text:signature,
@@ -716,7 +742,7 @@
       // changes. Registration is still revoked above, so cached results cannot
       // authorize a new action; they only prove/deduplicate an action that was
       // already executed before a worker restart.
-      chrome.runtime.sendMessage({type:"AI_BRIDGE_DOCUMENT_ROUTE_CHANGED"}).catch(()=>{});
+      runtimeSendMessage({type:"AI_BRIDGE_DOCUMENT_ROUTE_CHANGED"}).catch(()=>{});
     }
     scheduleMonitor();
     inspectThreadLimit();
@@ -736,7 +762,7 @@
     if(msg.type==="AI_BRIDGE_REGISTER_DOCUMENT"){
       (async()=>{
         const currentIdentity=routeIdentity();
-        const result=await chrome.runtime.sendMessage({
+        const result=await runtimeSendMessage({
           type:"AI_BRIDGE_DOCUMENT_REGISTER",
           side:msg.side,
           provider:msg.provider,
