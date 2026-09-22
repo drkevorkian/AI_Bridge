@@ -13,7 +13,9 @@ assert.doesNotThrow(() => new Function(background), "background.js must parse");
 assert.doesNotThrow(() => new Function(contentScript), "content.js must parse");
 assert.doesNotThrow(() => new Function(signatures), "provider-limit-signatures.js must parse");
 
-assert.match(background, /importScripts\("runtime-core\.js","provider-limit-signatures\.js","update-checkpoint\.js"\)/);
+assert.match(background, /importScripts\("runtime-core\.js","update-checkpoint\.js"\)/);
+assert.match(background, /const AIBridgeProviderLimitSignatures = \(\(\) => \{/);
+assert.doesNotMatch(background, /importScripts\([^\n]*provider-limit-signatures\.js/);
 assert.match(background, /function reviewAuthorizeThreadLimit\(/);
 assert.match(background, /THREAD_LIMIT_NO_ACTIVE_DISPATCH/);
 assert.match(background, /THREAD_LIMIT_DOCUMENT_MISMATCH/);
