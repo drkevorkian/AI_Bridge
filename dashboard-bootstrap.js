@@ -15,8 +15,13 @@
   // default `script-src 'self'` policy. Keep first-paint behavior in a packaged
   // script so dashboard.html stays CSP-clean.
   try {
+    const migrationDone = localStorage.getItem("aiBridgeThreeColumnDefaultV1") === "1";
     const hint = localStorage.getItem("aiBridgeLayoutHint");
-    document.documentElement.dataset.layout = VALID_LAYOUT_HINTS.has(hint) ? hint : "studio";
+    // After restoring the known-good source-fold runtime, force one clean
+    // first paint in the three-column Studio layout. Once migrated, preserve
+    // any later explicit user layout choice.
+    document.documentElement.dataset.layout =
+      migrationDone && VALID_LAYOUT_HINTS.has(hint) ? hint : "studio";
   } catch (_) {
     document.documentElement.dataset.layout = "studio";
   }
