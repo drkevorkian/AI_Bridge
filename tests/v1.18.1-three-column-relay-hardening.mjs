@@ -44,6 +44,10 @@ assert.doesNotMatch(content, /new KeyboardEvent\("(?:keydown|keyup)"/,
   "synthetic Enter events are not accepted as proof of Send");
 assert.match(content, /form\.requestSubmit\(\)/);
 assert.match(content, /Could not prove an actionable Send control/);
+assert.match(content, /function firstActionableSendControl\(selectors\)/);
+assert.match(content, /let monitorInFlight = false;/);
+assert.match(content, /async function runMonitor\(\)/);
+assert.match(content, /if \(disposed \|\| monitorInFlight\) return;/);
 
 assert.match(background, /if \(state\.lastResponseBySide\[side\] === text\) return \{ ok: false, duplicate: true \};/,
   "background duplicate guard is required so response retries stay exactly-once at transcript level");
