@@ -1,5 +1,12 @@
 (() => {
-  if (window.__AI_BRIDGE_LOADED_V113__) return;
+  const RUNTIME_KEY = "__AI_BRIDGE_CONTENT_RUNTIME_V118__";
+  const residentRuntime = globalThis[RUNTIME_KEY];
+  if (residentRuntime && typeof residentRuntime.dispose === "function") {
+    try { residentRuntime.dispose("reinjected"); } catch (_) {}
+  }
+  // Retain the legacy marker for compatibility, but never use it as proof that
+  // the extension context is still alive. Unpacked-extension reloads invalidate
+  // chrome.runtime while page globals can survive long enough to fool a boolean guard.
   window.__AI_BRIDGE_LOADED_V113__ = true;
 
   const host = location.hostname;
@@ -7,7 +14,15 @@
   let lastChangeAt = 0;
   let lastReportedText = "";
   let lastReportedSignature = "";
+  let lastObservedNode = null;
   let pendingSend = false;
+  let pendingResponseDelivery = null;
+  let responseDeliveryInFlight = false;
+  let awaitingResponseBaselineNode = null;
+  let awaitingResponseBaselineText = "";
+  let disposed = false;
+  let monitorInterval = null;
+  let observer = null;
   const MAX_ARTIFACTS_PER_RESPONSE = 8;
   const MAX_ARTIFACT_FILE_BYTES = 12 * 1024 * 1024;
   const MAX_ARTIFACT_TOTAL_BYTES = 24 * 1024 * 1024;
@@ -163,6 +178,21 @@
     return new Promise(resolve => setTimeout(resolve, ms));
   }
 
+  function extensionContextInvalidated(error) {
+    return /extension context invalidated/i.test(String(error?.message || error || ""));
+  }
+
+  async function runtimeSendMessage(message) {
+    try {
+      return await chrome.runtime.sendMessage(message);
+    } catch (error) {
+      if (extensionContextInvalidated(error)) {
+        try { disposeContentRuntime("extension-context-invalidated"); } catch (_) {}
+      }
+      throw error;
+    }
+  }
+
   function base64ToFile(item) {
     const binary = atob(String(item.dataBase64 || ""));
     const bytes = new Uint8Array(binary.length);
@@ -246,39 +276,71 @@
     return { clicked: true };
   }
 
+  function actionableSendControl(node) {
+    if (!node || node.isConnected === false || node.disabled === true || node.getAttribute?.("aria-disabled") === "true") return false;
+    const rect = node.getBoundingClientRect?.();
+    const style = getComputedStyle(node);
+    return Boolean(rect && rect.width > 0 && rect.height > 0 && style.visibility !== "hidden" && style.display !== "none");
+  }
+
+  async function resolveSendAction(input) {
+    for (let i = 0; i < 40; i++) {
+      const button = firstVisible(adapter.sendSelectors);
+      if (actionableSendControl(button)) return { kind: "button", node: button, form: null };
+      await sleep(100);
+    }
+
+    // Narrow structural fallback: only the exact form containing the verified
+    // composer can gain submit authority. Never synthesize Enter on the page.
+    const form = input?.closest?.("form") || null;
+    if (!form) return null;
+    const submitters = [...form.querySelectorAll("button[type='submit'],input[type='submit']")]
+      .filter(actionableSendControl);
+    if (submitters.length === 1) return { kind: "button", node: submitters[0], form };
+    if (submitters.length === 0 && typeof form.requestSubmit === "function") {
+      return { kind: "requestSubmit", node: null, form };
+    }
+    return null;
+  }
+
   async function sendPrompt(text, artifacts = []) {
-    lastReportedText = "";
-    lastReportedSignature = "";
     const input = firstVisible(adapter.inputSelectors);
     if (!input) throw new Error("Could not find the prompt box on this page.");
 
+    const baselineNode = latestResponseNode();
+    awaitingResponseBaselineNode = baselineNode;
+    awaitingResponseBaselineText = latestResponseText(baselineNode);
     pendingSend = true;
-    const uploadedCount = await uploadArtifacts(artifacts);
-    setNativeValue(input, text);
-    await sleep(uploadedCount ? 650 : 300);
 
-    const button = firstVisible(adapter.sendSelectors);
-    if (button && !button.disabled) {
-      button.click();
-    } else {
-      input.dispatchEvent(new KeyboardEvent("keydown", {
-        key: "Enter",
-        code: "Enter",
-        bubbles: true,
-        cancelable: true
-      }));
-      input.dispatchEvent(new KeyboardEvent("keyup", {
-        key: "Enter",
-        code: "Enter",
-        bubbles: true,
-        cancelable: true
-      }));
+    try {
+      const uploadedCount = await uploadArtifacts(artifacts);
+      setNativeValue(input, text);
+      await sleep(uploadedCount ? 650 : 300);
+
+      const sendAction = await resolveSendAction(input);
+      if (!sendAction) {
+        throw new Error("Could not prove an actionable Send control for this AI page.");
+      }
+
+      if (sendAction.kind === "button") sendAction.node.click();
+      else sendAction.form.requestSubmit();
+
+      // A fresh prompt may legitimately produce the same wording as the
+      // previous response. Clear report de-duplication only after a real send
+      // action was proven and invoked.
+      lastReportedText = "";
+      lastReportedSignature = "";
+      lastObservedText = "";
+      lastObservedNode = null;
+      lastChangeAt = Date.now();
+      setTimeout(() => {
+        if (!disposed) pendingSend = false;
+      }, uploadedCount ? 2200 : 1200);
+      return uploadedCount;
+    } catch (error) {
+      pendingSend = false;
+      throw error;
     }
-
-    lastObservedText = "";
-    lastChangeAt = Date.now();
-    setTimeout(() => { pendingSend = false; }, uploadedCount ? 2200 : 1200);
-    return uploadedCount;
   }
 
   function rawNodeText(node) {
@@ -520,7 +582,7 @@
     // Page-context fetch can be blocked by CORS even though the extension has
     // permission to retrieve the file. Retry HTTP(S) downloads in the service worker.
     if (/^https?:/i.test(url)) {
-      const remote = await chrome.runtime.sendMessage({
+      const remote = await runtimeSendMessage({
         type: "AI_BRIDGE_FETCH_ARTIFACT",
         url,
         name,
@@ -580,14 +642,54 @@
     return false;
   }
 
+  async function deliverPendingResponse() {
+    if (disposed || responseDeliveryInFlight || !pendingResponseDelivery) return;
+    const pending = pendingResponseDelivery;
+    responseDeliveryInFlight = true;
+    try {
+      await runtimeSendMessage(pending.envelope);
+      if (disposed || pendingResponseDelivery !== pending) return;
+      lastReportedText = pending.text;
+      lastReportedSignature = pending.signature;
+      pendingResponseDelivery = null;
+    } catch (_) {
+      // Keep the envelope pending. The regular monitor tick retries transient
+      // worker/message failures. An invalidated context disposes this runtime.
+    } finally {
+      responseDeliveryInFlight = false;
+    }
+  }
+
   async function monitor() {
+    if (disposed) return;
+    if (pendingResponseDelivery) {
+      await deliverPendingResponse();
+      return;
+    }
+
     const node = latestResponseNode();
     const text = latestResponseText(node);
     if (!text || isResponseStub(text)) return;
 
-    if (text !== lastObservedText) {
+    if (
+      awaitingResponseBaselineNode &&
+      node === awaitingResponseBaselineNode &&
+      text === awaitingResponseBaselineText
+    ) {
+      return;
+    }
+
+    if (text !== lastObservedText || node !== lastObservedNode) {
       lastObservedText = text;
+      lastObservedNode = node;
       lastChangeAt = Date.now();
+      if (
+        node !== awaitingResponseBaselineNode ||
+        text !== awaitingResponseBaselineText
+      ) {
+        awaitingResponseBaselineNode = null;
+        awaitingResponseBaselineText = "";
+      }
       return;
     }
 
@@ -602,29 +704,33 @@
 
     const completedAt = Number(lastChangeAt) || Date.now();
     const captured = await captureArtifacts(node);
-    lastReportedText = text;
-    lastReportedSignature = signature;
-    try {
-      await chrome.runtime.sendMessage({
+    pendingResponseDelivery = Object.freeze({
+      text,
+      signature,
+      envelope: Object.freeze({
         type: "AI_BRIDGE_RESPONSE",
         text,
         artifacts: captured.artifacts,
         artifactDiagnostics: { candidateCount: captured.candidateCount, errors: captured.errors },
         completedAt
-      });
-    } catch (_) {}
+      })
+    });
+    await deliverPendingResponse();
   }
 
-  const observer = new MutationObserver(() => {});
+  observer = new MutationObserver(() => {
+    if (!disposed) monitor().catch(() => {});
+  });
   observer.observe(document.documentElement, { childList: true, subtree: true, characterData: true });
-  setInterval(monitor, 650);
+  monitorInterval = setInterval(() => {
+    if (!disposed) monitor().catch(() => {});
+  }, 650);
 
-  chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
+  const onRuntimeMessage = (msg, _sender, sendResponse) => {
     if (msg.type === "AI_BRIDGE_PING") {
-      sendResponse({ ok: true, host: location.hostname, ready: true, version: "1.18.0" });
+      sendResponse({ ok: true, host: location.hostname, ready: true, version: "1.18.1" });
       return false;
     }
-
 
     if (msg.type === "AI_BRIDGE_READ_LAST_RESPONSE") {
       try {
@@ -655,5 +761,36 @@
         .catch(err => sendResponse({ ok: false, error: err.message }));
       return true;
     }
-  });
+    return false;
+  };
+
+  chrome.runtime.onMessage.addListener(onRuntimeMessage);
+
+  function disposeContentRuntime(reason = "disposed") {
+    if (disposed) return;
+    disposed = true;
+    try { observer?.disconnect(); } catch (_) {}
+    if (monitorInterval !== null) {
+      clearInterval(monitorInterval);
+      monitorInterval = null;
+    }
+    try { chrome.runtime.onMessage.removeListener(onRuntimeMessage); } catch (_) {}
+    pendingResponseDelivery = null;
+    responseDeliveryInFlight = false;
+    pendingSend = false;
+    awaitingResponseBaselineNode = null;
+    awaitingResponseBaselineText = "";
+    const current = globalThis[RUNTIME_KEY];
+    if (current && current.dispose === disposeContentRuntime) {
+      current.active = false;
+      current.disposedReason = String(reason || "disposed").slice(0, 80);
+    }
+  }
+
+  globalThis[RUNTIME_KEY] = {
+    build: "1.18.1",
+    active: true,
+    installedAt: Date.now(),
+    dispose: disposeContentRuntime
+  };
 })();
