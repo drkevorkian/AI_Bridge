@@ -1,8 +1,9 @@
 {
   "manifest_version": 3,
-  "name": "AI Bridge Review",
-  "version": "1.19.1",
-  "description": "AI Bridge review build 1.19.1.39-AI-A: repairs response relay after extension reload by replacing invalidated same-build content runtimes and hardens worker boot dependencies.",
+  "minimum_chrome_version": "106",
+  "name": "AI Bridge",
+  "version": "1.17.0",
+  "description": "Coordinate three AI agents with secure relay, direct-mesh routing, team-cycle timing, stuck recovery, provider-send acknowledgement, reliable completion detection, a Settings tab, GitHub update checks, optional Chrome Sync and Google Drive appDataFolder settings, persistent artifact vault storage, ZIP/file relay, human control, OAuth hardening, system-awake protection during active runs, structural untrusted-peer-data wrapping, and multiple workspace layouts.",
   "permissions": [
     "tabs",
     "storage",
@@ -12,8 +13,7 @@
     "scripting",
     "identity",
     "alarms",
-    "power",
-    "nativeMessaging"
+    "power"
   ],
   "host_permissions": [
     "https://chatgpt.com/*",
@@ -24,21 +24,19 @@
     "https://copilot.microsoft.com/*",
     "https://*.oaiusercontent.com/*",
     "https://assets.grok.com/*",
-    "https://*.x.ai/*",
+    "https://assets.grokusercontent.com/*",
     "https://*.googleusercontent.com/*",
     "https://*.anthropic.com/*",
-    "https://*.microsoft.com/*",
-    "https://x.ai/*",
-    "https://api.x.ai/*",
-    "https://accounts.google.com/*",
-    "https://oauth2.googleapis.com/*",
     "https://www.googleapis.com/*",
     "https://api.github.com/*",
     "https://raw.githubusercontent.com/*",
     "https://codeload.github.com/*"
   ],
+  "content_security_policy": {
+    "extension_pages": "script-src 'self'; object-src 'none'; base-uri 'none'; frame-ancestors 'none'"
+  },
   "background": {
-    "service_worker": "background.js"
+    "service_worker": "background-wrapper.js"
   },
   "action": {
     "default_popup": "popup.html",
@@ -58,6 +56,10 @@
         "https://copilot.microsoft.com/*"
       ],
       "js": [
+        "content-runtime-prelude.js",
+        "content-artifact-security-prelude.js",
+        "content-completion-guard.js",
+        "content-response-delivery-hardening.js",
         "content.js"
       ],
       "run_at": "document_idle"
@@ -65,9 +67,5 @@
   ],
   "icons": {
     "128": "icon128.png"
-  },
-  "content_security_policy": {
-    "extension_pages": "script-src 'self'; object-src 'none'; base-uri 'none'; frame-ancestors 'none'"
-  },
-  "version_name": "1.19.1.39-AI-A"
+  }
 }
