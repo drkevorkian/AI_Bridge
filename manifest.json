@@ -58,6 +58,7 @@
       ],
       "js": [
         "dom-resilience.js",
+        "provider-limit-signatures.js",
         "content.js"
       ],
       "run_at": "document_idle"
