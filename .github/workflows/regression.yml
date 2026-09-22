@@ -46,6 +46,7 @@ jobs:
           node --check tests/dom-resilience.mjs
           node --check tests/provider-send-authority.mjs
           node --check tests/provider-event-awareness.mjs
+          node --check tests/startup-guard.mjs
       - name: Repository integrity
         run: node tests/repository-integrity.mjs
       - name: Three-column relay hardening
@@ -58,3 +59,5 @@ jobs:
         run: node tests/provider-send-authority.mjs
       - name: Provider operational events
         run: node tests/provider-event-awareness.mjs
+      - name: Startup guard
+        run: node tests/startup-guard.mjs
