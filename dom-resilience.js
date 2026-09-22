@@ -119,7 +119,8 @@
         results.push(Object.freeze({ id: contract.id, rank: contract.rank, state: HEALTH.FAIL, matchCount: 0, usableCount: 0, reason: "selector-error" }));
         continue;
       }
-      const candidates = nodes.filter(node => usable(node, getStyle) && (!contract.enabled || enabled(node)));
+      const visible = nodes.filter(node => usable(node, getStyle));
+      const candidates = visible.filter(node => !contract.enabled || enabled(node));
       let state = HEALTH.FAIL;
       let reason = "no-usable-match";
       if (candidates.length === 1 && contract.rank <= RANK.ACCESSIBLE_EXACT) {
@@ -131,12 +132,16 @@
       } else if (candidates.length > 1) {
         state = HEALTH.DEGRADED;
         reason = "ambiguous-match";
+      } else if (visible.length === 1 && contract.enabled) {
+        state = HEALTH.DEGRADED;
+        reason = "visible-not-actionable";
       }
       results.push(Object.freeze({
         id: contract.id,
         rank: contract.rank,
         state,
         matchCount: nodes.length,
+        visibleCount: visible.length,
         usableCount: candidates.length,
         reason,
         node: candidates.length === 1 ? candidates[0] : null
