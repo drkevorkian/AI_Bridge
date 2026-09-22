@@ -212,8 +212,12 @@
     try { initialFocusTab = localStorage.getItem(FOCUS_TAB_KEY) || "run"; } catch (_) {}
     setFocusTab(initialFocusTab, { persist: false });
 
-    chrome.storage.local.get("aiBridgeLayout").then(stored => {
-      if (stored?.aiBridgeLayout === "focus" && typeof applyLayout === "function") {
+    chrome.storage.local.get(["aiBridgeLayout","aiBridgeThreeColumnDefaultV1"]).then(stored => {
+      if (
+        stored?.aiBridgeThreeColumnDefaultV1 === true &&
+        stored?.aiBridgeLayout === "focus" &&
+        typeof applyLayout === "function"
+      ) {
         applyLayout("focus");
       }
     }).catch(() => {});
