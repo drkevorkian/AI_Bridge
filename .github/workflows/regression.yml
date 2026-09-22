@@ -43,3 +43,5 @@ jobs:
           node --check tests/repository-integrity.mjs
       - name: Repository integrity
         run: node tests/repository-integrity.mjs
+      - name: Three-column relay hardening
+        run: node tests/v1.18.1-three-column-relay-hardening.mjs
