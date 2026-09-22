@@ -122,6 +122,22 @@
   const adapter = Object.values(adapters).find(a => a.matches());
   if (!adapter) return;
 
+  const domResilience = globalThis.AIBridgeDomResilience || null;
+  const providerKey = domResilience?.providerFromHost?.(host) || null;
+
+  function domHealthSnapshot() {
+    if (!domResilience || !providerKey) return null;
+    try {
+      return domResilience.healthSnapshot(
+        providerKey,
+        selector => document.querySelectorAll(selector),
+        getComputedStyle
+      );
+    } catch (_) {
+      return null;
+    }
+  }
+
   function firstVisible(selectors) {
     for (const selector of selectors) {
       const nodes = [...document.querySelectorAll(selector)];
@@ -747,7 +763,23 @@
 
   const onRuntimeMessage = (msg, _sender, sendResponse) => {
     if (msg.type === "AI_BRIDGE_PING") {
-      sendResponse({ ok: true, host: location.hostname, ready: true, version: "1.18.1" });
+      sendResponse({
+        ok: true,
+        host: location.hostname,
+        ready: true,
+        version: "1.18.1",
+        domHealth: domHealthSnapshot()
+      });
+      return false;
+    }
+
+    if (msg.type === "AI_BRIDGE_DOM_HEALTH") {
+      sendResponse({
+        ok: true,
+        host: location.hostname,
+        provider: providerKey,
+        domHealth: domHealthSnapshot()
+      });
       return false;
     }
 
