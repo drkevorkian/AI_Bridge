@@ -10,10 +10,10 @@
   <main>
     <div class="head">
       <div>
-        <div class="eyebrow">AI BRIDGE</div>
+        <div class="eyebrow">AI BRIDGE <span id="popupVersion" class="version-badge">v1.16.3</span></div>
         <h1>Bridge control</h1>
       </div>
-      <div><div id="pill" class="pill idle">Idle</div><div id="buildIdentity" class="hint" aria-label="Build identity"></div></div>
+      <div id="pill" class="pill idle">Idle</div>
     </div>
 
     <div id="status" class="status">Loading…</div>
@@ -28,15 +28,15 @@
       <option value="ocean">Ocean</option>
       <option value="terminal">Terminal</option>
     </select>
-    <button id="openDashboard" class="primary">Open Dashboard</button>
-    <button id="openSettings" class="secondary">Settings</button>
+    <button id="openDashboard" class="primary icon-btn" type="button"><svg class="btn-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="3" width="7" height="9" rx="1"/><rect x="14" y="3" width="7" height="5" rx="1"/><rect x="14" y="12" width="7" height="9" rx="1"/><rect x="3" y="16" width="7" height="5" rx="1"/></svg>Open Dashboard</button>
+    <button id="openSettings" class="secondary icon-btn" type="button"><svg class="btn-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>Settings</button>
 
     <div class="actions">
-      <button id="pause" class="secondary" disabled>Pause</button>
-      <button id="stop" class="danger" disabled>Stop</button>
+      <button id="pause" class="secondary icon-btn" disabled type="button"><svg class="btn-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="14" y="4" width="4" height="16" rx="1"/><rect x="6" y="4" width="4" height="16" rx="1"/></svg>Pause</button>
+      <button id="stop" class="danger icon-btn" disabled type="button"><svg class="btn-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="6" y="6" width="12" height="12" rx="2"/></svg>Stop</button>
     </div>
 
-    <p class="hint">The dashboard runs the bridge. Settings contains themes, pane sizing, sync, provider health, updates, and power controls.</p>
+    <p class="hint">Dashboard: tab bindings, jobs, objective, and live output. Settings: theme, Google Drive login, Chrome Sync, and GitHub updates.</p>
   </main>
   <script src="popup.js"></script>
 </body>
