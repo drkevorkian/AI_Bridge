@@ -559,6 +559,8 @@ function transcriptCard(entry) {
   title.className = "transcript-title";
   if (entry.type === "human") {
     title.textContent = entry.interjection ? "Human controller · interjection" : "Human controller";
+  } else if (entry.type === "provider-event") {
+    title.textContent = `Provider event · AI ${entry.side || "?"} · ${entry.providerCode || "NOTICE"}`;
   } else {
     title.textContent = `AI ${entry.side || "?"} · ${entry.label || "AI"}`;
   }
@@ -601,7 +603,7 @@ function renderTranscript(s) {
     clearTranscript();
   }
 
-  const fresh = entries.filter(e => Number(e.seq) > renderedSeq && (e.type === "response" || e.type === "human"));
+  const fresh = entries.filter(e => Number(e.seq) > renderedSeq && (e.type === "response" || e.type === "human" || e.type === "provider-event"));
   if (!fresh.length) return;
 
   $("emptyTranscript").classList.add("hidden");
