@@ -802,13 +802,26 @@ function updateStatus(s) {
   }
 }
 
+const DASHBOARD_MESSAGE_TIMEOUT_MS = 5000;
+const START_REQUEST_TIMEOUT_MS = 75000;
+
+function dashboardTimeout(promise, label, timeoutMs = DASHBOARD_MESSAGE_TIMEOUT_MS) {
+  let timer = null;
+  const timeout = new Promise((_, reject) => {
+    timer = setTimeout(() => reject(new Error(`${label} timed out after ${timeoutMs} ms.`)), timeoutMs);
+  });
+  return Promise.race([Promise.resolve(promise), timeout]).finally(() => {
+    if (timer !== null) clearTimeout(timer);
+  });
+}
+
 async function refreshState() {
   try {
-    const res = await chrome.runtime.sendMessage({
+    const res = await dashboardTimeout(chrome.runtime.sendMessage({
       type: "AI_BRIDGE_GET_STATE",
       includeSources: !hydrated,
       afterSeq: renderedSeq
-    });
+    }), "Bridge state request");
     const s = res?.state;
     if (!s) return;
     latestState = s;
@@ -980,7 +993,7 @@ $("start").addEventListener("click", async () => {
   try {
     const jobBindings = {};
     for (const side of SIDES) jobBindings[`job${side}`] = $(`job${side}`).value.trim();
-    const res = await chrome.runtime.sendMessage({
+    const res = await dashboardTimeout(chrome.runtime.sendMessage({
       type: "AI_BRIDGE_START",
       ...selectedBindings(),
       ...jobBindings,
@@ -993,12 +1006,38 @@ $("start").addEventListener("click", async () => {
       freshChats: $("freshOnStart").checked,
       maxTurns: Number($("maxTurns").value),
       delayMs: Number($("delayMs").value)
-    });
+    }), "Bridge startup", START_REQUEST_TIMEOUT_MS);
     if (!res?.ok) throw new Error(res?.error || "Could not start");
     clearTranscript();
     await refreshState();
   } catch (err) {
-    $("status").textContent = `Start failed: ${err.message}`;
+    const timedOut = /Bridge startup timed out/i.test(String(err?.message || ""));
+    if (!timedOut) {
+      $("status").textContent = `Start failed: ${err.message}`;
+      return;
+    }
+
+    $("status").textContent = "Startup response timed out — checking saved Bridge state…";
+    try {
+      const stateRes = await dashboardTimeout(chrome.runtime.sendMessage({
+        type: "AI_BRIDGE_GET_STATE",
+        includeSources: false,
+        afterSeq: renderedSeq
+      }), "Startup reconciliation");
+      const current = stateRes?.state;
+      if (current?.sessionActive && current?.running) {
+        $("status").textContent = "Startup response timed out, but the Bridge is RUNNING. State was recovered.";
+      } else if (current?.sessionActive && current?.paused) {
+        $("status").textContent = `Startup reached a PAUSED state — ${current.pauseReason || "recovery is required."}`;
+      } else if (current?.sessionActive) {
+        $("status").textContent = "Startup reached a DEGRADED saved state. Review the current session before resuming.";
+      } else {
+        $("status").textContent = "Startup FAILED — no active session was committed. You can safely try Start again.";
+      }
+      await refreshState();
+    } catch (reconcileError) {
+      $("status").textContent = `Startup FAILED — Bridge state could not be confirmed: ${reconcileError.message}`;
+    }
   }
 });
 
