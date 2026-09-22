@@ -140,7 +140,8 @@
 
   function firstVisible(selectors) {
     for (const selector of selectors) {
-      const nodes = [...document.querySelectorAll(selector)];
+      let nodes = [];
+      try { nodes = [...document.querySelectorAll(selector)]; } catch (_) { continue; }
       const node = nodes.find(el => {
         const r = el.getBoundingClientRect();
         const s = getComputedStyle(el);
@@ -148,6 +149,28 @@
       });
       if (node) return node;
     }
+    return null;
+  }
+
+  function trustedAuthority(kind, { allowStructural = false } = {}) {
+    if (!domResilience || !providerKey) return null;
+    try {
+      return domResilience.authority(
+        providerKey,
+        kind,
+        selector => document.querySelectorAll(selector),
+        getComputedStyle,
+        { allowStructural }
+      );
+    } catch (_) {
+      return null;
+    }
+  }
+
+  function trustedComposer() {
+    const authority = trustedAuthority("composer", { allowStructural: true });
+    if (!authority?.node) return null;
+    if (authority.state === "PASS" || authority.state === "DEGRADED") return authority.node;
     return null;
   }
 
@@ -313,27 +336,30 @@
 
   async function resolveSendAction(input) {
     for (let i = 0; i < 40; i++) {
-      const button = firstActionableSendControl(adapter.sendSelectors);
-      if (button) return { kind: "button", node: button, form: null };
+      const authority = trustedAuthority("send");
+      if (authority?.state === "PASS" && actionableSendControl(authority.node)) {
+        return { kind: "button", node: authority.node, form: authority.node.closest?.("form") || null, selectorId: authority.selectorId };
+      }
       await sleep(100);
     }
 
-    // Narrow structural fallback: only the exact form containing the verified
-    // composer can gain submit authority. Never synthesize Enter on the page.
+    // Fail-closed fallback: only the form containing the already-verified
+    // composer can gain submit authority. Never search the entire page and
+    // never synthesize Enter.
     const form = input?.closest?.("form") || null;
     if (!form) return null;
     const submitters = [...form.querySelectorAll("button[type='submit'],input[type='submit']")]
       .filter(actionableSendControl);
-    if (submitters.length === 1) return { kind: "button", node: submitters[0], form };
+    if (submitters.length === 1) return { kind: "button", node: submitters[0], form, selectorId: "composer-form-submit" };
     if (submitters.length === 0 && typeof form.requestSubmit === "function") {
-      return { kind: "requestSubmit", node: null, form };
+      return { kind: "requestSubmit", node: null, form, selectorId: "composer-form-requestSubmit" };
     }
     return null;
   }
 
   async function sendPrompt(text, artifacts = []) {
-    const input = firstVisible(adapter.inputSelectors);
-    if (!input) throw new Error("Could not find the prompt box on this page.");
+    const input = trustedComposer();
+    if (!input) throw new Error("Could not prove trusted composer authority for this AI page.");
 
     const baselineNode = latestResponseNode();
     awaitingResponseBaselineNode = baselineNode;
@@ -345,13 +371,31 @@
       setNativeValue(input, text);
       await sleep(uploadedCount ? 650 : 300);
 
+      const composerAgain = trustedComposer();
+      if (composerAgain !== input || input.isConnected === false) {
+        throw new Error("Trusted composer authority changed before send.");
+      }
+
       const sendAction = await resolveSendAction(input);
       if (!sendAction) {
         throw new Error("Could not prove an actionable Send control for this AI page.");
       }
 
-      if (sendAction.kind === "button") sendAction.node.click();
-      else sendAction.form.requestSubmit();
+      if (sendAction.kind === "button") {
+        const sendAgain = sendAction.selectorId === "composer-form-submit"
+          ? sendAction.node
+          : trustedAuthority("send")?.node;
+        if (sendAgain !== sendAction.node || !actionableSendControl(sendAgain)) {
+          throw new Error("Trusted Send authority changed before action.");
+        }
+        sendAgain.click();
+      } else {
+        const composerAgainBeforeSubmit = trustedComposer();
+        if (composerAgainBeforeSubmit !== input || input.closest?.("form") !== sendAction.form) {
+          throw new Error("Composer form authority changed before submit.");
+        }
+        sendAction.form.requestSubmit();
+      }
 
       // A fresh prompt may legitimately produce the same wording as the
       // previous response. Clear report de-duplication only after a real send
