@@ -1,6 +1,14 @@
-# AI Bridge 1.18.0 — Rebuilt Settings + Dynamic Teams
+# AI Bridge 1.18.1 — Three-Column Studio + Relay Hardening
 
-Version 1.18.0 keeps the working v1.16 relay/state engine and rebuilds the missing user-facing additions as isolated services rather than restoring the broken v1.17 runtime stack.
+Version 1.18.1 keeps the working v1.18/state-v3 relay engine, restores a true three-column Studio dashboard, and hardens content-script response delivery/reload behavior without restoring the broken later runtime stack.
+
+## 1.18.1 release notes
+
+- **True three-column Studio:** Runtime/Team on the left, Shared Transcript in the center, and Objective/Tools/Interjection on the right. Existing dashboard controls are moved, not recreated, so their IDs and event listeners remain intact.
+- **Acknowledged response delivery:** completed LLM responses are not marked reported until the background service worker receives them; transient delivery failures retry instead of silently losing the turn.
+- **Reload-safe content runtime:** explicit reinjection replaces the current content runtime instead of trusting a stale page-global boolean after an unpacked-extension reload.
+- **Pre-send response baseline:** the monitor refuses to mistake the previous assistant response for the response to a newly sent prompt.
+- **Provable send action:** the extension waits for an actionable provider Send control, with a form-scoped submit fallback, and no longer pretends synthetic Enter key events prove delivery.
 
 ## 1.18.0 release notes
 
