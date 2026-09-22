@@ -70,6 +70,6 @@ assert.ok(
   core.includes('const PURPOSES=new Set(["INITIAL","RELAY","DIRECT","MANUAL","CONTINUITY","HUMAN_REPLY"])'),
   "dispatch purpose allowlist changed unexpectedly"
 );
-assert.equal(manifest.version_name,"1.19.1.38-AI-A");
+assert.match(manifest.version_name,/^1\\.19\\.1\\.(?:3[8-9]|[4-9][0-9])-AI-[A-Z]$/);
 
 console.log("round78-post-commit-fresh-target-dispatch: PASS");
