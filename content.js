@@ -18,6 +18,7 @@
   let pendingSend = false;
   let pendingResponseDelivery = null;
   let responseDeliveryInFlight = false;
+  let monitorInFlight = false;
   let awaitingResponseBaselineNode = null;
   let awaitingResponseBaselineText = "";
   let disposed = false;
@@ -283,10 +284,21 @@
     return Boolean(rect && rect.width > 0 && rect.height > 0 && style.visibility !== "hidden" && style.display !== "none");
   }
 
+  function firstActionableSendControl(selectors) {
+    for (const selector of selectors || []) {
+      let nodes = [];
+      try { nodes = [...document.querySelectorAll(selector)]; } catch (_) {}
+      for (const node of nodes) {
+        if (actionableSendControl(node)) return node;
+      }
+    }
+    return null;
+  }
+
   async function resolveSendAction(input) {
     for (let i = 0; i < 40; i++) {
-      const button = firstVisible(adapter.sendSelectors);
-      if (actionableSendControl(button)) return { kind: "button", node: button, form: null };
+      const button = firstActionableSendControl(adapter.sendSelectors);
+      if (button) return { kind: "button", node: button, form: null };
       await sleep(100);
     }
 
@@ -718,12 +730,19 @@
     await deliverPendingResponse();
   }
 
+  async function runMonitor() {
+    if (disposed || monitorInFlight) return;
+    monitorInFlight = true;
+    try { await monitor(); }
+    finally { monitorInFlight = false; }
+  }
+
   observer = new MutationObserver(() => {
-    if (!disposed) monitor().catch(() => {});
+    runMonitor().catch(() => {});
   });
   observer.observe(document.documentElement, { childList: true, subtree: true, characterData: true });
   monitorInterval = setInterval(() => {
-    if (!disposed) monitor().catch(() => {});
+    runMonitor().catch(() => {});
   }, 650);
 
   const onRuntimeMessage = (msg, _sender, sendResponse) => {
@@ -777,6 +796,7 @@
     try { chrome.runtime.onMessage.removeListener(onRuntimeMessage); } catch (_) {}
     pendingResponseDelivery = null;
     responseDeliveryInFlight = false;
+    monitorInFlight = false;
     pendingSend = false;
     awaitingResponseBaselineNode = null;
     awaitingResponseBaselineText = "";
