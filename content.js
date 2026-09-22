@@ -294,6 +294,28 @@
     return uploaded;
   }
 
+  function conversationIdentity() {
+    const path = String(location.pathname || "");
+    const patterns = providerKey === "chatgpt" ? [/^\/c\/([^/?#]+)/]
+      : providerKey === "grok" ? [/^\/(?:c|chat)\/([^/?#]+)/]
+      : providerKey === "claude" ? [/^\/chat\/([^/?#]+)/]
+      : providerKey === "gemini" ? [/^\/app\/([^/?#]+)/]
+      : providerKey === "copilot" ? [/^\/(?:chats?|conversation)\/([^/?#]+)/]
+      : [];
+    for (const pattern of patterns) {
+      const match = path.match(pattern);
+      if (match) return Object.freeze({ provider: providerKey, kind: "conversation", threadKey: decodeURIComponent(match[1]) });
+    }
+    return Object.freeze({ provider: providerKey, kind: "surface", threadKey: null });
+  }
+
+  function sameConversationIdentity(a, b) {
+    return Boolean(a && b)
+      && String(a.provider || "") === String(b.provider || "")
+      && String(a.kind || "") === String(b.kind || "")
+      && String(a.threadKey || "") === String(b.threadKey || "");
+  }
+
   function visibleNewChatControl() {
     const candidates = [...document.querySelectorAll("button, a")];
     return candidates.find(el => {
@@ -311,10 +333,34 @@
 
   async function openNewConversation() {
     const control = visibleNewChatControl();
-    if (!control) return { clicked: false };
+    if (!control) return { clicked: false, verifiedFresh: false, reason: "new-chat-control-not-found" };
+    const before = conversationIdentity();
     control.click();
-    await sleep(700);
-    return { clicked: true };
+
+    const started = Date.now();
+    while (Date.now() - started < 8000) {
+      await sleep(200);
+      const after = conversationIdentity();
+      const composer = trustedComposer();
+      const changed = !sameConversationIdentity(before, after);
+      const movedToFreshSurface = before.kind === "conversation" && after.kind === "surface";
+      if (composer && (changed || movedToFreshSurface)) {
+        return {
+          clicked: true,
+          verifiedFresh: true,
+          beforeIdentity: before,
+          afterIdentity: after
+        };
+      }
+    }
+
+    return {
+      clicked: true,
+      verifiedFresh: false,
+      reason: "fresh-chat-identity-not-verified",
+      beforeIdentity: before,
+      afterIdentity: conversationIdentity()
+    };
   }
 
   function actionableSendControl(node) {
