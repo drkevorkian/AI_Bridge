@@ -2501,6 +2501,36 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
       return;
     }
 
+    if (msg.type === "AI_BRIDGE_THREAD_LIMIT") {
+      if (!sender.tab) {
+        sendResponse({ ok: false, ignored: true });
+        return;
+      }
+      const side = sideForTab(sender.tab.id);
+      if (!SIDES.includes(side) || String(msg.state || "") !== "HARD_THREAD_LIMIT") {
+        sendResponse({ ok: false, ignored: true });
+        return;
+      }
+      const text = String(msg.text || "").replace(/\s+/g, " ").trim().slice(0, 500);
+      recordTranscript("provider-event", {
+        side,
+        text: text || "Provider reported the hard conversation-length limit.",
+        provider: String(msg.provider || ""),
+        providerCode: "HARD_THREAD_LIMIT",
+        severity: "WARN",
+        threadLimit: true,
+        confidence: String(msg.confidence || ""),
+        observedAt: Number.isFinite(Number(msg.observedAt)) ? Number(msg.observedAt) : Date.now()
+      });
+      if (state.sessionActive) {
+        await pauseBridge(`AI ${side} reached a verified hard conversation-length limit. Automatic rollover is not enabled yet; the session is paused safely.`);
+      } else {
+        await saveState();
+      }
+      sendResponse({ ok: true, recorded: true, paused: Boolean(state.sessionActive && state.paused) });
+      return;
+    }
+
     if (msg.type === "AI_BRIDGE_PROVIDER_EVENT") {
       if (!sender.tab) {
         sendResponse({ ok: false, ignored: true });
