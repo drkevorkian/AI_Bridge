@@ -89,6 +89,7 @@ const DEFAULT_STATE = {
   totalWorkMsBySide: { A: 0, B: 0, C: 0, D: 0, E: 0 },
   rolloverBySide: { A: null, B: null, C: null, D: null, E: null },
   pendingHandoff: null,
+  nextTurnPending: null,
 
   awaitingHuman: false,
   pendingHuman: null,
@@ -122,6 +123,7 @@ function cloneDefaultState() {
     totalWorkMsBySide: { A: 0, B: 0, C: 0, D: 0, E: 0 },
     rolloverBySide: { A: null, B: null, C: null, D: null, E: null },
     pendingHandoff: null,
+    nextTurnPending: null,
     phasePendingSides: [],
     phaseSentSides: [],
     phaseCompletedSides: [],
@@ -886,6 +888,7 @@ async function loadState() {
       totalWorkMsBySide: { A: 0, B: 0, C: 0, D: 0, E: 0, ...(bridgeState.totalWorkMsBySide || {}) },
       rolloverBySide: { A: null, B: null, C: null, D: null, E: null, ...(bridgeState.rolloverBySide || {}) },
       pendingHandoff: bridgeState.pendingHandoff && typeof bridgeState.pendingHandoff === "object" ? bridgeState.pendingHandoff : null,
+      nextTurnPending: bridgeState.nextTurnPending && typeof bridgeState.nextTurnPending === "object" ? bridgeState.nextTurnPending : null,
       phasePendingSides: Array.isArray(bridgeState.phasePendingSides) ? bridgeState.phasePendingSides.filter(side => SIDES.includes(side)) : [],
       phaseSentSides: Array.isArray(bridgeState.phaseSentSides) ? bridgeState.phaseSentSides.filter(side => SIDES.includes(side)) : [],
       phaseCompletedSides: Array.isArray(bridgeState.phaseCompletedSides) ? bridgeState.phaseCompletedSides.filter(side => SIDES.includes(side)) : [],
@@ -902,6 +905,13 @@ async function loadState() {
     state.mainSide = SIDES.includes(state.mainSide) ? state.mainSide : state.startSide;
     if (state.currentSide && !SIDES.includes(state.currentSide)) state.currentSide = state.startSide;
     state.workMode = normalizeWorkMode(state.workMode);
+    const durableNextTurn = state.nextTurnPending;
+    if (durableNextTurn && state.sessionActive) {
+      state.running = false;
+      state.paused = true;
+      state.pauseReason = `Durable next turn to AI ${durableNextTurn.targetSide || "?"} is pending recovery. Resume will reconcile before any resend.`;
+    }
+
     const durableHandoff = state.pendingHandoff;
     if (durableHandoff && String(durableHandoff.status || "") === "PREPARED") {
       state.running = false;
@@ -1859,6 +1869,78 @@ async function replayPreparedHandoffIfSafe() {
   return { replayed: true, side };
 }
 
+async function nextTurnAlreadyDelivered(pending) {
+  if (!pending) return false;
+  const side = String(pending.targetSide || "").toUpperCase();
+  if (!SIDES.includes(side)) return false;
+  const deliveredSeq = Number(pending.deliveredSeq);
+  if (Number.isFinite(deliveredSeq) && Number(state.lastDeliveredSeqBySide?.[side] || 0) < deliveredSeq) return false;
+  const sent = String(state.lastSentBySide?.[side] || "");
+  if (!sent) return false;
+  return await sha256Text(sent) === String(pending.payloadHash || "");
+}
+
+async function dispatchNextTurnPendingIfSafe() {
+  const pending = state.nextTurnPending;
+  if (!pending) return { handled: false };
+
+  const side = String(pending.targetSide || "").toUpperCase();
+  if (!SIDES.includes(side)) throw new Error("Durable next turn targets an inactive AI.");
+
+  if (await nextTurnAlreadyDelivered(pending)) {
+    state.nextTurnPending = null;
+    await saveState();
+    return { handled: true, delivered: true, side };
+  }
+
+  const handoffStatus = String(state.pendingHandoff?.status || "");
+  if (["ACTION_ATTEMPTED", "FALLBACK_ACTION_ATTEMPTED", "AMBIGUOUS", "ACK_RECEIVED"].includes(handoffStatus)) {
+    state.running = false;
+    state.paused = true;
+    state.pauseReason = `Next-turn dispatch to AI ${side} has an unresolved handoff state (${handoffStatus}); AI Bridge will not resend automatically.`;
+    await saveState();
+    return { handled: true, ambiguous: true, side };
+  }
+
+  if (handoffStatus === "PREPARED") {
+    const replay = await replayPreparedHandoffIfSafe();
+    if (replay.replayed && await nextTurnAlreadyDelivered(pending)) {
+      state.nextTurnPending = null;
+      await saveState();
+      return { handled: true, delivered: true, replayed: true, side };
+    }
+    return { handled: true, replayed: Boolean(replay.replayed), side };
+  }
+
+  const text = String(pending.payloadText || "");
+  if (!text) throw new Error("Durable next-turn payload is unavailable.");
+  if (await sha256Text(text) !== String(pending.payloadHash || "")) {
+    state.running = false;
+    state.paused = true;
+    state.pauseReason = `Durable next-turn payload for AI ${side} failed integrity verification.`;
+    await saveState();
+    throw new Error("Durable next-turn payload hash mismatch.");
+  }
+
+  state.nextTurnPending.status = "DISPATCHING";
+  state.nextTurnPending.dispatchStartedAt = Date.now();
+  await saveState();
+
+  const artifactIds = Array.isArray(pending.artifactIds) ? pending.artifactIds.filter(id => Boolean(artifactStore[id])) : [];
+  const artifacts = artifactRecordsForIds(artifactIds);
+  await sendToSide(side, text, {
+    deliveredSeq: pending.deliveredSeq,
+    deliveredSources: Boolean(pending.deliveredSources),
+    artifactIds,
+    artifacts,
+    mainInterjectionIds: Array.isArray(pending.mainInterjectionIds) ? pending.mainInterjectionIds : []
+  });
+
+  state.nextTurnPending = null;
+  await saveState();
+  return { handled: true, delivered: true, side };
+}
+
 async function openDashboard() {
   const url = chrome.runtime.getURL("dashboard.html");
   const tabs = await chrome.tabs.query({});
@@ -2311,15 +2393,32 @@ async function handleCompletedResponse(side, text, { relay = true, artifacts = [
     return { ok: true, paused: true };
   }
 
-  await new Promise(resolve => setTimeout(resolve, state.delayMs));
-  if (!state.sessionActive || !state.running || state.awaitingHuman) return { ok: false, stopped: true };
-
   const outgoing = command?.targetSide
     ? directTurnMessage(side, targetSide, entry)
     : normalTurnMessage(targetSide);
+
+  state.nextTurnPending = {
+    sourceSide: side,
+    targetSide,
+    responseSeq: entry.seq,
+    direct: Boolean(command?.targetSide),
+    payloadText: outgoing.text,
+    payloadHash: await sha256Text(outgoing.text),
+    deliveredSeq: outgoing.deliveredSeq,
+    deliveredSources: Boolean(outgoing.deliveredSources),
+    artifactIds: Array.isArray(outgoing.artifactIds) ? [...outgoing.artifactIds] : [],
+    mainInterjectionIds: Array.isArray(outgoing.mainInterjectionIds) ? [...outgoing.mainInterjectionIds] : [],
+    status: "PENDING",
+    createdAt: Date.now()
+  };
+  await saveState();
+
+  await new Promise(resolve => setTimeout(resolve, state.delayMs));
+  if (!state.sessionActive || !state.running || state.awaitingHuman) return { ok: false, stopped: true };
+
   try {
-    await sendToSide(targetSide, outgoing.text, { deliveredSeq: outgoing.deliveredSeq, deliveredSources: outgoing.deliveredSources, artifactIds: outgoing.artifactIds, artifacts: outgoing.artifacts, mainInterjectionIds: outgoing.mainInterjectionIds || [] });
-    return { ok: true, direct: Boolean(command?.targetSide), targetSide };
+    const dispatched = await dispatchNextTurnPendingIfSafe();
+    return { ok: true, direct: Boolean(command?.targetSide), targetSide, durableNextTurn: Boolean(dispatched.handled) };
   } catch (err) {
     await pauseBridge(`Could not send to AI ${targetSide}: ${err.message}`);
     return { ok: false, error: err.message };
@@ -2571,6 +2670,21 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
       }
 
       await bindTabsFromMessage(msg);
+
+      if (state.nextTurnPending) {
+        state.running = true;
+        state.paused = false;
+        state.pauseReason = "";
+        await clearAttention();
+        await saveState();
+        const nextTurn = await dispatchNextTurnPendingIfSafe();
+        if (nextTurn.ambiguous) {
+          sendResponse({ ok: false, ambiguousHandoff: true, error: state.pauseReason });
+          return;
+        }
+        sendResponse({ ok: true, durableNextTurnRecovered: Boolean(nextTurn.handled), side: nextTurn.side || null });
+        return;
+      }
 
       if (state.pendingHandoff && String(state.pendingHandoff.status || "") === "PREPARED") {
         state.running = true;
