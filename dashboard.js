@@ -64,6 +64,11 @@ function setAgentCountUI(raw, { persist = false } = {}) {
       option.hidden = !active;
       option.disabled = !active;
     }
+    const recoveryOption = [...($("readResponseStartSide")?.options || [])].find(item => item.value === side);
+    if (recoveryOption) {
+      recoveryOption.hidden = !active;
+      recoveryOption.disabled = !active;
+    }
   }
   if ($("startSide") && !SIDES.includes($("startSide").value)) $("startSide").value = SIDES[0];
   const relayOption = [...($("workMode")?.options || [])].find(item => item.value === "relay");
@@ -72,6 +77,7 @@ function setAgentCountUI(raw, { persist = false } = {}) {
   refreshStartLabels();
   if (latestState) renderHistory(latestState.history);
   updateManualRelayUI();
+  updateRecoveryStartLabel();
   if (persist) chrome.storage.local.set({ [AGENT_COUNT_KEY]: count }).catch(() => {});
   return count;
 }
@@ -83,6 +89,11 @@ async function loadAgentCountPreference() {
   } catch (_) {
     setAgentCountUI(DEFAULT_AGENT_COUNT);
   }
+}
+
+function updateRecoveryStartLabel() {
+  const side = $("readResponseStartSide")?.value || SIDES[0] || "A";
+  if ($("readResponseStart")) $("readResponseStart").textContent = `Read ${side} response to start`;
 }
 
 function selectedWorkMode() {
@@ -757,6 +768,11 @@ function updateControls(s) {
   $("stop").disabled = !s.sessionActive;
   $("newAllChats").disabled = Boolean(s.sessionActive);
   $("freshOnStart").disabled = Boolean(s.sessionActive);
+  const stoppedRecoveryAvailable = !s.sessionActive
+    && !["compete", "parallel", "review"].includes(s.workMode)
+    && (Boolean(String(s.initialPrompt || "").trim()) || (Array.isArray(s.transcript) && s.transcript.length > 0));
+  if ($("readResponseStart")) $("readResponseStart").disabled = !stoppedRecoveryAvailable;
+  if ($("readResponseStartSide")) $("readResponseStartSide").disabled = !stoppedRecoveryAvailable;
   $("agentCount").disabled = Boolean(s.sessionActive);
   $("workMode").disabled = Boolean(s.sessionActive);
   $("teamRules").disabled = false;
@@ -1038,6 +1054,31 @@ $("start").addEventListener("click", async () => {
     } catch (reconcileError) {
       $("status").textContent = `Startup FAILED — Bridge state could not be confirmed: ${reconcileError.message}`;
     }
+  }
+});
+
+$("readResponseStartSide").addEventListener("change", updateRecoveryStartLabel);
+
+$("readResponseStart").addEventListener("click", async () => {
+  const tabError = validateActiveTabs();
+  if (tabError) return $("readResponseStartStatus").textContent = tabError;
+  const sourceSide = $("readResponseStartSide").value;
+  $("readResponseStartStatus").textContent = `Reading AI ${sourceSide}'s last completed response and restarting from that boundary…`;
+  $("readResponseStart").disabled = true;
+  try {
+    const res = await chrome.runtime.sendMessage({
+      type: "AI_BRIDGE_READ_RESPONSE_TO_START",
+      sourceSide,
+      agentCount: SIDES.length,
+      ...selectedBindings()
+    });
+    if (!res?.ok) throw new Error(res?.error || "Recovery start failed");
+    const routed = res.targetSide ? ` Next AI: ${res.targetSide}.` : "";
+    $("readResponseStartStatus").textContent = `Recovered AI ${sourceSide}'s completed response.${routed} Automatic Bridge operation has restarted.`;
+    await refreshState();
+  } catch (err) {
+    $("readResponseStartStatus").textContent = `Recovery start failed: ${err.message}`;
+    await refreshState();
   }
 });
 
