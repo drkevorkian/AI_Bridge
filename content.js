@@ -993,7 +993,9 @@
           ok: Boolean(text),
           text,
           active: generationAppearsActive(node),
-          host: location.hostname
+          host: location.hostname,
+          provider: providerKey,
+          identity: conversationIdentity()
         });
       } catch (err) {
         sendResponse({ ok: false, error: err.message || String(err) });
