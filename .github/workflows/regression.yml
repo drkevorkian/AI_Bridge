@@ -52,6 +52,7 @@ jobs:
           node --check tests/provider-limit-signatures.mjs
           node --check tests/thread-limit-detection.mjs
           node --check tests/thread-rollover.mjs
+          node --check tests/handoff-durability.mjs
       - name: Repository integrity
         run: node tests/repository-integrity.mjs
       - name: Three-column relay hardening
@@ -74,3 +75,5 @@ jobs:
         run: node tests/thread-limit-detection.mjs
       - name: Thread rollover
         run: node tests/thread-rollover.mjs
+      - name: Handoff durability
+        run: node tests/handoff-durability.mjs
