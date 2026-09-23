@@ -903,7 +903,11 @@ async function loadState() {
     if (state.currentSide && !SIDES.includes(state.currentSide)) state.currentSide = state.startSide;
     state.workMode = normalizeWorkMode(state.workMode);
     const durableHandoff = state.pendingHandoff;
-    if (durableHandoff && ["ACTION_ATTEMPTED", "AMBIGUOUS"].includes(String(durableHandoff.status || ""))) {
+    if (durableHandoff && String(durableHandoff.status || "") === "PREPARED") {
+      state.running = false;
+      state.paused = true;
+      state.pauseReason = `Prepared handoff to AI ${durableHandoff.targetSide || "?"} was never attempted and can be safely replayed on Resume.`;
+    } else if (durableHandoff && ["ACTION_ATTEMPTED", "FALLBACK_ACTION_ATTEMPTED", "AMBIGUOUS"].includes(String(durableHandoff.status || ""))) {
       state.running = false;
       state.paused = true;
       state.pauseReason = `Ambiguous handoff to AI ${durableHandoff.targetSide || "?"} requires recovery; AI Bridge will not automatically resend a possibly delivered prompt.`;
@@ -1714,6 +1718,13 @@ async function sendToSide(side, text, { record = true, deliveredSeq = null, deli
     targetSide: side,
     tabId: Number(tabId),
     payloadHash,
+    payloadText: String(text || ""),
+    artifactIds: Array.isArray(artifactIds) ? [...artifactIds] : [],
+    record: Boolean(record),
+    deliveredSeq: Number.isFinite(Number(deliveredSeq)) ? Number(deliveredSeq) : null,
+    deliveredSources: Boolean(deliveredSources),
+    mainInterjectionIds: Array.isArray(mainInterjectionIds) ? [...mainInterjectionIds] : [],
+    saveRecord: Boolean(saveRecord),
     status: "PREPARED",
     createdAt: Date.now(),
     attemptedAt: null,
@@ -1812,6 +1823,40 @@ async function sendToSide(side, text, { record = true, deliveredSeq = null, deli
     state.pendingHandoff = null;
     await saveState();
   }
+}
+
+async function replayPreparedHandoffIfSafe() {
+  const pending = state.pendingHandoff;
+  if (!pending || String(pending.status || "") !== "PREPARED") return { replayed: false };
+  const side = String(pending.targetSide || "").toUpperCase();
+  if (!SIDES.includes(side)) throw new Error("Prepared handoff targets an inactive AI.");
+  const text = String(pending.payloadText || "");
+  if (!text) throw new Error("Prepared handoff payload is unavailable.");
+  const hash = await sha256Text(text);
+  if (hash !== String(pending.payloadHash || "")) {
+    state.running = false;
+    state.paused = true;
+    state.pauseReason = `Prepared handoff to AI ${side} failed payload verification and was not replayed.`;
+    await saveState();
+    throw new Error("Prepared handoff payload hash mismatch.");
+  }
+  const artifactIds = Array.isArray(pending.artifactIds) ? pending.artifactIds.filter(id => Boolean(artifactStore[id])) : [];
+  const artifacts = artifactRecordsForIds(artifactIds);
+  const options = {
+    record: pending.record !== false,
+    deliveredSeq: pending.deliveredSeq,
+    deliveredSources: Boolean(pending.deliveredSources),
+    artifactIds,
+    artifacts,
+    mainInterjectionIds: Array.isArray(pending.mainInterjectionIds) ? pending.mainInterjectionIds : [],
+    saveRecord: pending.saveRecord !== false
+  };
+  state.pendingHandoff = null;
+  await saveState();
+  await sendToSide(side, text, options);
+  appendLog({ time: Date.now(), type: "handoff-replay", side, text: `Safely replayed never-attempted handoff to AI ${side}` });
+  await saveState();
+  return { replayed: true, side };
 }
 
 async function openDashboard() {
@@ -2526,6 +2571,27 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
       }
 
       await bindTabsFromMessage(msg);
+
+      if (state.pendingHandoff && String(state.pendingHandoff.status || "") === "PREPARED") {
+        state.running = true;
+        state.paused = false;
+        state.pauseReason = "";
+        await clearAttention();
+        await saveState();
+        const replay = await replayPreparedHandoffIfSafe();
+        sendResponse({ ok: true, safeHandoffReplay: Boolean(replay.replayed), side: replay.side || null });
+        return;
+      }
+
+      if (state.pendingHandoff && ["ACTION_ATTEMPTED", "FALLBACK_ACTION_ATTEMPTED", "AMBIGUOUS"].includes(String(state.pendingHandoff.status || ""))) {
+        state.running = false;
+        state.paused = true;
+        state.pauseReason = `Handoff to AI ${state.pendingHandoff.targetSide || "?"} has an ambiguous send outcome. Use recovery controls; Resume will not resend it.`;
+        await saveState();
+        sendResponse({ ok: false, ambiguousHandoff: true, error: state.pauseReason });
+        return;
+      }
+
       state.running = true;
       state.paused = false;
       state.pauseReason = "";
