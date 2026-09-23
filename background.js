@@ -88,6 +88,7 @@ const DEFAULT_STATE = {
   lastRoundCompletedAtBySide: { A: null, B: null, C: null, D: null, E: null },
   totalWorkMsBySide: { A: 0, B: 0, C: 0, D: 0, E: 0 },
   rolloverBySide: { A: null, B: null, C: null, D: null, E: null },
+  pendingHandoff: null,
 
   awaitingHuman: false,
   pendingHuman: null,
@@ -120,6 +121,7 @@ function cloneDefaultState() {
     lastRoundCompletedAtBySide: { A: null, B: null, C: null, D: null, E: null },
     totalWorkMsBySide: { A: 0, B: 0, C: 0, D: 0, E: 0 },
     rolloverBySide: { A: null, B: null, C: null, D: null, E: null },
+    pendingHandoff: null,
     phasePendingSides: [],
     phaseSentSides: [],
     phaseCompletedSides: [],
@@ -883,6 +885,7 @@ async function loadState() {
       lastRoundCompletedAtBySide: { A: null, B: null, C: null, D: null, E: null, ...(bridgeState.lastRoundCompletedAtBySide || {}) },
       totalWorkMsBySide: { A: 0, B: 0, C: 0, D: 0, E: 0, ...(bridgeState.totalWorkMsBySide || {}) },
       rolloverBySide: { A: null, B: null, C: null, D: null, E: null, ...(bridgeState.rolloverBySide || {}) },
+      pendingHandoff: bridgeState.pendingHandoff && typeof bridgeState.pendingHandoff === "object" ? bridgeState.pendingHandoff : null,
       phasePendingSides: Array.isArray(bridgeState.phasePendingSides) ? bridgeState.phasePendingSides.filter(side => SIDES.includes(side)) : [],
       phaseSentSides: Array.isArray(bridgeState.phaseSentSides) ? bridgeState.phaseSentSides.filter(side => SIDES.includes(side)) : [],
       phaseCompletedSides: Array.isArray(bridgeState.phaseCompletedSides) ? bridgeState.phaseCompletedSides.filter(side => SIDES.includes(side)) : [],
@@ -899,6 +902,13 @@ async function loadState() {
     state.mainSide = SIDES.includes(state.mainSide) ? state.mainSide : state.startSide;
     if (state.currentSide && !SIDES.includes(state.currentSide)) state.currentSide = state.startSide;
     state.workMode = normalizeWorkMode(state.workMode);
+    const durableHandoff = state.pendingHandoff;
+    if (durableHandoff && ["ACTION_ATTEMPTED", "AMBIGUOUS"].includes(String(durableHandoff.status || ""))) {
+      state.running = false;
+      state.paused = true;
+      state.pauseReason = `Ambiguous handoff to AI ${durableHandoff.targetSide || "?"} requires recovery; AI Bridge will not automatically resend a possibly delivered prompt.`;
+    }
+
     for (const side of SIDES) {
       const tx = state.rolloverBySide?.[side];
       if (tx && ["PREPARING", "FRESH_CHAT_READY", "SENDING_CONTINUITY"].includes(String(tx.phase || ""))) {
@@ -1687,17 +1697,51 @@ async function ensureTabListener(tabId) {
   throw new Error("The page listener could not be established after reinjection.");
 }
 
+async function sha256Text(value) {
+  const bytes = new TextEncoder().encode(String(value || ""));
+  const digest = await crypto.subtle.digest("SHA-256", bytes);
+  return Array.from(new Uint8Array(digest), byte => byte.toString(16).padStart(2, "0")).join("");
+}
+
 async function sendToSide(side, text, { record = true, deliveredSeq = null, deliveredSources = false, artifactIds = [], artifacts = [], mainInterjectionIds = [], saveRecord = true } = {}) {
   const tabId = tabForSide(side);
   await ensureTabListener(tabId);
 
+  const handoffId = crypto.randomUUID();
+  const payloadHash = await sha256Text(text);
+  state.pendingHandoff = {
+    id: handoffId,
+    targetSide: side,
+    tabId: Number(tabId),
+    payloadHash,
+    status: "PREPARED",
+    createdAt: Date.now(),
+    attemptedAt: null,
+    ackAt: null
+  };
+  await saveState();
+
   const expectedArtifacts = Array.isArray(artifacts) ? artifacts.length : 0;
   let result;
+  state.pendingHandoff.status = "ACTION_ATTEMPTED";
+  state.pendingHandoff.attemptedAt = Date.now();
+  await saveState();
   try {
-    result = await chrome.tabs.sendMessage(Number(tabId), { type: "AI_BRIDGE_SEND", text, artifacts });
-  } catch (_) {
-    await ensureTabListener(tabId);
-    result = await chrome.tabs.sendMessage(Number(tabId), { type: "AI_BRIDGE_SEND", text, artifacts });
+    result = await chrome.tabs.sendMessage(Number(tabId), { type: "AI_BRIDGE_SEND", text, artifacts, handoffId });
+  } catch (error) {
+    if (state.pendingHandoff?.id === handoffId) {
+      state.pendingHandoff.status = "AMBIGUOUS";
+      state.pendingHandoff.error = String(error?.message || error || "send acknowledgement lost").slice(0, 300);
+      await saveState();
+    }
+    throw new Error("Prompt send outcome is ambiguous; AI Bridge will not automatically retry this handoff.");
+  }
+
+  if (state.pendingHandoff?.id === handoffId) {
+    state.pendingHandoff.status = result?.ok ? "ACK_RECEIVED" : "REJECTED";
+    state.pendingHandoff.ackAt = result?.ok ? Date.now() : null;
+    state.pendingHandoff.error = result?.ok ? "" : String(result?.error || "provider rejected send").slice(0, 300);
+    await saveState();
   }
 
   const attachmentFailed = !result?.ok || (expectedArtifacts && Number(result.uploadedCount) !== expectedArtifacts);
@@ -1737,6 +1781,11 @@ async function sendToSide(side, text, { record = true, deliveredSeq = null, deli
     }
     appendLog({ time: Date.now(), type: "sent", side, text: `Sent prompt to AI ${side}`, chars: String(text || "").length });
     if (saveRecord) await saveState();
+  }
+
+  if (state.pendingHandoff?.id === handoffId && state.pendingHandoff.status === "ACK_RECEIVED") {
+    state.pendingHandoff = null;
+    await saveState();
   }
 }
 
