@@ -2591,6 +2591,94 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
       return;
     }
 
+    if (msg.type === "AI_BRIDGE_READ_RESPONSE_TO_START") {
+      if (state.sessionActive) throw new Error("Stop the active Bridge session before using Read Response to Start.");
+      if (!String(state.initialPrompt || "").trim() && !(Array.isArray(state.transcript) && state.transcript.length)) {
+        throw new Error("There is no stopped Bridge session to recover.");
+      }
+
+      const previousState = structuredClone(state);
+      const previousAgentCount = normalizeAgentCount(previousState.agentCount, DEFAULT_AGENT_COUNT);
+      const sourceSide = String(msg.sourceSide || "").toUpperCase();
+      if (!SIDES.includes(sourceSide)) throw new Error("Choose an AI from the stopped session.");
+      if (["compete", "parallel", "review"].includes(state.workMode)) {
+        throw new Error("Read Response to Start supports Relay, Collaborate, and Direct Mesh. Batch modes require the full phase state.");
+      }
+
+      const requestedAgentCount = normalizeAgentCount(msg.agentCount, previousAgentCount);
+      if (requestedAgentCount !== previousAgentCount) {
+        throw new Error(`Stopped session used ${previousAgentCount} AI tab${previousAgentCount === 1 ? "" : "s"}. Restore that roster before recovery.`);
+      }
+
+      let recoveryCommitted = false;
+      try {
+        await bindTabsFromMessage(msg);
+        const sourceTab = tabForSide(sourceSide);
+        if (!sourceTab) throw new Error(`AI ${sourceSide} has no bound tab.`);
+
+        const recovered = await chrome.tabs.sendMessage(sourceTab, { type: "AI_BRIDGE_READ_LAST_RESPONSE" });
+        const recoveredText = String(recovered?.text || "").trim();
+        if (!recovered?.ok || !recoveredText) {
+          throw new Error(recovered?.error || `Could not read AI ${sourceSide}'s last visible response.`);
+        }
+        if (recovered.active) throw new Error(`AI ${sourceSide} still appears to be generating.`);
+        if (recoveredText.length > 400000) throw new Error("Recovered response is too large.");
+        if (String(state.lastResponseBySide?.[sourceSide] || "") === recoveredText) {
+          throw new Error("That visible response was already committed by AI Bridge.");
+        }
+
+        state.pendingHandoff = null;
+        state.nextTurnPending = null;
+        state.sessionActive = true;
+        state.running = true;
+        state.paused = false;
+        state.pauseReason = "";
+        state.currentSide = sourceSide;
+        state.awaitingHuman = false;
+        state.pendingHuman = null;
+        state.pendingHumanQueue = [];
+        state.pendingMainInterjections = [];
+        state.suppressedHumanRequests = [];
+        appendLog({
+          time: Date.now(),
+          type: "recovery-start",
+          side: sourceSide,
+          text: `Read AI ${sourceSide}'s completed response and restarted routing from that recovery boundary`
+        });
+        await clearAttention();
+        await saveState();
+        recoveryCommitted = true;
+
+        const result = await handleCompletedResponse(sourceSide, recoveredText, {
+          relay: true,
+          artifacts: [],
+          completedAt: Date.now()
+        });
+
+        sendResponse({
+          ok: Boolean(result?.ok),
+          sourceSide,
+          recovered: true,
+          direct: Boolean(result?.direct),
+          targetSide: result?.targetSide || state.currentSide || null,
+          awaitingHuman: Boolean(result?.awaitingHuman),
+          paused: Boolean(result?.paused),
+          finished: Boolean(result?.finished),
+          error: result?.error || result?.commandError || null
+        });
+        return;
+      } catch (error) {
+        if (!recoveryCommitted) {
+          state = previousState;
+          setActiveAgentCount(previousAgentCount);
+          await saveState();
+        } else if (state.sessionActive && state.running) {
+          await pauseBridge("Read Response to Start failed after recovery began: " + (error?.message || error));
+        }
+        throw error;
+      }
+    }
+
     if (msg.type === "AI_BRIDGE_UPDATE_RULES") {
       const rules = String(msg.rules || "").trim();
       if (rules.length > 12000) throw new Error("Team rules are limited to 12,000 characters.");
