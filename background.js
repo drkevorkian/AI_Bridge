@@ -1744,18 +1744,43 @@ async function sendToSide(side, text, { record = true, deliveredSeq = null, deli
     await saveState();
   }
 
-  const attachmentFailed = !result?.ok || (expectedArtifacts && Number(result.uploadedCount) !== expectedArtifacts);
-  if (attachmentFailed && expectedArtifacts && canFallbackToText(artifacts)) {
-    // ZIP/text artifacts already have bounded previews embedded in `text`.
-    // Send the same handoff without raw files so a provider DOM change cannot
-    // block code review indefinitely. Binary-only artifacts still fail closed.
-    result = await chrome.tabs.sendMessage(Number(tabId), { type: "AI_BRIDGE_SEND", text, artifacts: [] });
-    if (!result?.ok) throw new Error(result?.error || "The page did not accept the text fallback handoff.");
+  if (!result?.ok && expectedArtifacts && canFallbackToText(artifacts)) {
+    // Only a provider-declared rejection may use text fallback. If the prompt
+    // was ACKed, never resend merely because attachment counts differ.
+    if (state.pendingHandoff?.id === handoffId) {
+      state.pendingHandoff.status = "FALLBACK_ACTION_ATTEMPTED";
+      state.pendingHandoff.fallbackAttemptedAt = Date.now();
+      await saveState();
+    }
+    try {
+      result = await chrome.tabs.sendMessage(Number(tabId), { type: "AI_BRIDGE_SEND", text, artifacts: [], handoffId });
+    } catch (error) {
+      if (state.pendingHandoff?.id === handoffId) {
+        state.pendingHandoff.status = "AMBIGUOUS";
+        state.pendingHandoff.error = String(error?.message || error || "fallback acknowledgement lost").slice(0, 300);
+        await saveState();
+      }
+      throw new Error("Text-fallback send outcome is ambiguous; AI Bridge will not automatically retry this handoff.");
+    }
+    if (!result?.ok) {
+      if (state.pendingHandoff?.id === handoffId) {
+        state.pendingHandoff.status = "REJECTED";
+        state.pendingHandoff.error = String(result?.error || "text fallback rejected").slice(0, 300);
+        await saveState();
+      }
+      throw new Error(result?.error || "The page did not accept the text fallback handoff.");
+    }
+    if (state.pendingHandoff?.id === handoffId) {
+      state.pendingHandoff.status = "ACK_RECEIVED";
+      state.pendingHandoff.ackAt = Date.now();
+      state.pendingHandoff.error = "";
+      await saveState();
+    }
     appendLog({ time: Date.now(), type: "artifact-fallback", side, text: `AI ${side} received vault text fallback after raw attachment failed`, artifacts: expectedArtifacts });
   } else if (!result?.ok) {
     throw new Error(result?.error || "The page did not accept the message.");
   } else if (expectedArtifacts && Number(result.uploadedCount) !== expectedArtifacts) {
-    throw new Error(`The page accepted ${Number(result.uploadedCount) || 0} of ${expectedArtifacts} relay files and no complete text fallback was available.`);
+    throw new Error(`The prompt was accepted, but only ${Number(result.uploadedCount) || 0} of ${expectedArtifacts} relay files were confirmed. AI Bridge will not resend an ACKed prompt automatically.`);
   }
 
   const round = beginRoundTimer(side);
