@@ -54,6 +54,7 @@ jobs:
           node --check tests/thread-rollover.mjs
           node --check tests/handoff-durability.mjs
           node --check tests/safe-handoff-replay.mjs
+          node --check tests/next-turn-durability.mjs
       - name: Repository integrity
         run: node tests/repository-integrity.mjs
       - name: Three-column relay hardening
@@ -80,3 +81,5 @@ jobs:
         run: node tests/handoff-durability.mjs
       - name: Safe handoff replay
         run: node tests/safe-handoff-replay.mjs
+      - name: Next-turn durability
+        run: node tests/next-turn-durability.mjs
