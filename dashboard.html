@@ -48,6 +48,18 @@
           </label>
           <button id="newAllChats" class="tiny ghost" type="button">New AI chats</button>
         </div>
+        <div class="field-row recovery-start-row">
+          <label for="readResponseStartSide">Stopped-session recovery</label>
+          <select id="readResponseStartSide" aria-label="AI response to read for recovery">
+            <option value="A">AI A</option>
+            <option value="B">AI B</option>
+            <option value="C">AI C</option>
+            <option value="D" hidden>AI D</option>
+            <option value="E" hidden>AI E</option>
+          </select>
+          <button id="readResponseStart" class="secondary" type="button" disabled>Read A response to start</button>
+          <div id="readResponseStartStatus" class="field-help">After stopping AI Bridge for an update or repair, choose the AI whose completed reply was stranded. Direct Mesh honors its final SEND TO command and continues automatically.</div>
+        </div>
         <div class="field-help">Uses the selected, already-open AI tabs. Each logical AI must use its own browser tab; multiple tabs may use the same LLM provider.</div>
       </section>
 
