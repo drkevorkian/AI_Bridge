@@ -22,7 +22,7 @@ assert.match(background,/Text-fallback send outcome is ambiguous; AI Bridge will
 assert.match(background,/AI Bridge will not resend an ACKed prompt automatically/);
 assert.doesNotMatch(background,/catch \(_\) \{\s*await ensureTabListener\(tabId\);\s*result = await chrome\.tabs\.sendMessage/s,
   "lost send ACK must not trigger a blind retry");
-assert.match(background,/\["ACTION_ATTEMPTED", "AMBIGUOUS"\]/);
+assert.match(background,/\["ACTION_ATTEMPTED", "FALLBACK_ACTION_ATTEMPTED", "AMBIGUOUS"\]/);
 assert.match(background,/requires recovery; AI Bridge will not automatically resend/);
 assert.match(background,/crypto\.subtle\.digest\("SHA-256"/);
 
